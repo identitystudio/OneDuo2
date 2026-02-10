@@ -43,6 +43,23 @@ serve(async (req) => {
       );
     }
 
+    // Check file size limit (5MB) to prevent OOM
+    // 5MB is a safer limit for Edge Functions (150MB RAM) when doing heavy string/regex ops
+    const MAX_SIZE_BYTES = 5 * 1024 * 1024; // 5MB
+    
+    console.log(`Downloaded file size: ${(fileData.size / 1024 / 1024).toFixed(2)}MB`);
+
+    if (fileData.size > MAX_SIZE_BYTES) {
+      console.error(`File too large: ${fileData.size} bytes (Limit: ${MAX_SIZE_BYTES} bytes)`);
+      return new Response(
+        JSON.stringify({ 
+          error: 'File too large for text extraction', 
+          details: `File size ${(fileData.size / 1024 / 1024).toFixed(2)}MB exceeds limit of 5MB. Please upload a smaller file or a text version.` 
+        }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
     let extractedText = '';
 
     // Plain text formats - read directly
