@@ -3649,8 +3649,32 @@ async function stepTranscribeModule(supabase: any, courseId: string, moduleNumbe
     return;
   }
 
-  // Use same transcription logic as single video
-  await transcribeVideo(supabase, module.id, module.video_url, 'course_modules');
+  // Use webhook-based transcription (non-blocking)
+  const result = await transcribeVideoWithWebhook(
+    supabase, 
+    module.id, 
+    module.video_url, 
+    'course_modules', 
+    courseId, 
+    moduleNumber,
+    'transcribe_module'
+  );
+
+  if (result.webhookSubmitted) {
+    // Mark current queue job as awaiting webhook callbacks
+    await supabase.from("processing_queue")
+      .update({ status: "awaiting_webhook" })
+      .eq("course_id", courseId)
+      .eq("status", "processing")
+      .eq("step", "transcribe_module");
+
+    console.log(`[stepTranscribeModule] Job submitted, awaiting webhook for module ${moduleNumber}`);
+    
+    // Throw a special "await webhook" signal that the caller should catch
+    throw new AwaitWebhookSignal("Awaiting external webhook callbacks");
+  }
+  // If webhook not submitted (e.g. no audio), proceed to normal completion
+
 }
 
 async function stepExtractFramesModule(supabase: any, courseId: string, moduleNumber: number, fixMetadata?: any) {
@@ -4937,7 +4961,32 @@ async function stepTranscribe(supabase: any, courseId: string, fixMetadata?: any
     return;
   }
 
-  await transcribeVideo(supabase, courseId, course.video_url, 'courses');
+  // Use webhook-based transcription (non-blocking)
+  const result = await transcribeVideoWithWebhook(
+    supabase, 
+    courseId, 
+    course.video_url, 
+    'courses', 
+    courseId, 
+    undefined, 
+    'transcribe'
+  );
+
+  if (result.webhookSubmitted) {
+    // Mark current queue job as awaiting webhook callbacks
+    await supabase.from("processing_queue")
+      .update({ status: "awaiting_webhook" })
+      .eq("course_id", courseId)
+      .eq("status", "processing")
+      .eq("step", "transcribe");
+
+    console.log(`[stepTranscribe] Job submitted, awaiting webhook for course ${courseId}`);
+    
+    // Throw a special "await webhook" signal that the caller should catch
+    throw new AwaitWebhookSignal("Awaiting external webhook callbacks");
+  }
+  // If webhook not submitted (e.g. no audio), proceed to normal completion
+
 }
 
 async function stepExtractFrames(supabase: any, courseId: string, fixMetadata?: any) {

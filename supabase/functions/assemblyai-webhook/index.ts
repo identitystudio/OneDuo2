@@ -180,19 +180,21 @@ serve(async (req: Request) => {
 
       // Check if frames are already extracted (if applicable)
       let hasFrames = false;
-      if (tableName !== 'transformation_artifacts') {
+      const isAudioOnlyStep = step === 'transcribe' || step === 'transcribe_module';
+
+      if (!isAudioOnlyStep && tableName !== 'transformation_artifacts') {
         const { data: record } = await supabase.from(tableName)
           .select("frame_urls")
           .eq("id", recordId)
           .single();
         hasFrames = Array.isArray(record?.frame_urls) && record.frame_urls.length > 0;
       } else {
-        // For transformation artifacts, transcription is independent of frame extraction
+        // For transformation artifacts or audio-only steps, we don't need to wait for frames
         hasFrames = true; // Optimization: allow completion even without frames check
       }
 
 
-      if (hasFrames) {
+      if (hasFrames || isAudioOnlyStep) {
         // Both transcription and frames are ready - queue next step
         console.log(`[assemblyai-webhook] Both transcription and frames ready, queueing next step`);
 
