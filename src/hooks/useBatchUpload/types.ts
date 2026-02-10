@@ -8,7 +8,7 @@ export interface BatchModuleAttachment {
   file: File;
   name: string;
   size: number;
-  type?: 'document' | 'video';
+  type?: 'document' | 'video' | 'audio';
 }
 
 export interface BatchModule {
@@ -21,6 +21,7 @@ export interface BatchModule {
   error?: string;
   attachments?: BatchModuleAttachment[];
   subVideos?: BatchModuleAttachment[];
+  isAudio?: boolean;
 }
 
 export interface ModuleUploadProgress {
@@ -73,6 +74,7 @@ export interface UploadedModule {
     storage_path?: string; 
   }[];
   requiresStitching?: boolean;
+  isAudio?: boolean;
 }
 
 export interface PreflightResult {

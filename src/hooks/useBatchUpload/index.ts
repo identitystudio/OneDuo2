@@ -287,8 +287,8 @@ export function useBatchUpload() {
             }
           }
           
-          // Verify video integrity
-          if (!options?.skipIntegrityCheck) {
+          // Verify video integrity (skip for audio files)
+          if (!options?.skipIntegrityCheck && !module.isAudio) {
             setProgress(prev => ({
               ...prev,
               message: `Verifying video ${i + 1}/${modules.length}...`
@@ -311,6 +311,7 @@ export function useBatchUpload() {
               videoUrl,
               moduleNumber: i + 1,
               durationSeconds: verification.duration,
+              ...(module.isAudio && { isAudio: true }),
               ...(moduleFileUrls.length > 0 && { moduleFiles: moduleFileUrls }),
               ...(requiresStitching && { sourceVideos, requiresStitching: true })
             });
@@ -321,6 +322,7 @@ export function useBatchUpload() {
               title: module.title || module.file.name.replace(/\.[^/.]+$/, ''),
               videoUrl,
               moduleNumber: i + 1,
+              ...(module.isAudio && { isAudio: true }),
               ...(moduleFileUrls.length > 0 && { moduleFiles: moduleFileUrls }),
               ...(requiresStitching && { sourceVideos, requiresStitching: true })
             });
@@ -402,7 +404,8 @@ export function useBatchUpload() {
             modules: uploadedModules.map(m => ({
               ...m,
               useServerExtraction: true,
-              videoDurationSeconds: m.durationSeconds
+              videoDurationSeconds: m.durationSeconds,
+              isAudio: m.isAudio || false,
             })),
             extractionFps: options?.extractionFps ?? DEFAULT_EXTRACTION_FPS,
             batchId,

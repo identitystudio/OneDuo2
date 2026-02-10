@@ -11,7 +11,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Upload as UploadIcon, X, FileVideo, CheckCircle2, Loader2, GripVertical, ArrowRight, ArrowLeft, Paperclip, FileText, AlertTriangle, Cloud } from 'lucide-react';
+import { Upload as UploadIcon, X, FileVideo, CheckCircle2, Loader2, GripVertical, ArrowRight, ArrowLeft, Paperclip, FileText, AlertTriangle, Cloud, Music } from 'lucide-react';
 import { RotatingWord } from '@/components/RotatingWord';
 import { UploadCelebration } from '@/components/UploadCelebration';
 import { Button } from '@/components/ui/button';
@@ -37,7 +37,7 @@ interface AttachmentFile {
   file: File;
   name: string;
   size: number;
-  type: 'document' | 'video';
+  type: 'document' | 'video' | 'audio';
 }
 
 interface FileEntry {
@@ -47,6 +47,7 @@ interface FileEntry {
   size: number;
   status: 'pending' | 'uploading' | 'uploaded' | 'error';
   attachments: AttachmentFile[];
+  isAudio?: boolean;
 }
 
 export default function Upload() {
@@ -127,6 +128,8 @@ export default function Upload() {
     for (const file of fileArray) {
       const isVideo = file.type.startsWith('video/') ||
         /\.(mp4|mov|webm|avi|mkv|m4v)$/i.test(file.name);
+      const isAudio = file.type.startsWith('audio/') ||
+        /\.(mp3|wav|m4a|aac|ogg|flac|wma|opus|webm)$/i.test(file.name);
       const isDocument = docExtensions.test(file.name);
 
       if (isVideo) {
@@ -144,6 +147,17 @@ export default function Upload() {
           size: file.size,
           status: 'pending',
           attachments: [],
+        });
+      } else if (isAudio) {
+        // Audio files are treated like video modules but will skip frame extraction
+        newVideoEntries.push({
+          id: crypto.randomUUID(),
+          file,
+          name: file.name.replace(/\.[^/.]+$/, ''),
+          size: file.size,
+          status: 'pending',
+          attachments: [],
+          isAudio: true,
         });
       } else if (isDocument) {
         newDocEntries.push({
@@ -444,7 +458,8 @@ export default function Upload() {
       file: f.file,
       status: 'pending' as const,
       progress: 0,
-      attachments: f.attachments // Include all attachments - hook will filter by type
+      attachments: f.attachments, // Include all attachments - hook will filter by type
+      isAudio: f.isAudio, // Pass audio flag to skip frame extraction
     }));
 
     // Upload course-level files first
@@ -619,7 +634,7 @@ export default function Upload() {
                     <input
                       ref={fileInputRef}
                       type="file"
-                      accept="video/*,.pdf,.doc,.docx,.txt,.md,.ppt,.pptx,.xls,.xlsx,.csv,.json,.js,.ts,.jsx,.tsx,.html,.css,.xml,.yaml,.yml,.py,.sh,.env,.rtf"
+                      accept="video/*,audio/*,.mp3,.wav,.m4a,.aac,.ogg,.flac,.wma,.opus,.pdf,.doc,.docx,.txt,.md,.ppt,.pptx,.xls,.xlsx,.csv,.json,.js,.ts,.jsx,.tsx,.html,.css,.xml,.yaml,.yml,.py,.sh,.env,.rtf"
                       multiple
                       className="hidden"
                       onChange={(e) => e.target.files && handleFilesSelected(e.target.files)}
@@ -643,7 +658,7 @@ export default function Upload() {
                         </div>
                         <div>
                           <p className="text-lg font-medium text-foreground">Drop files here</p>
-                          <p className="text-sm text-muted-foreground mt-1">Up to 10GB per file</p>
+                          <p className="text-sm text-muted-foreground mt-1">Video, audio, or documents — up to 10GB per file</p>
                         </div>
 
                         <Button
@@ -678,7 +693,7 @@ export default function Upload() {
                               <span className="w-6 h-6 rounded-full bg-primary/10 text-primary text-xs font-bold flex items-center justify-center flex-shrink-0">
                                 {index + 1}
                               </span>
-                              <FileVideo className="w-5 h-5 text-primary flex-shrink-0" />
+                              {file.isAudio ? <Music className="w-5 h-5 text-purple-500 flex-shrink-0" /> : <FileVideo className="w-5 h-5 text-primary flex-shrink-0" />}
                               <input
                                 type="text"
                                 value={file.name}
