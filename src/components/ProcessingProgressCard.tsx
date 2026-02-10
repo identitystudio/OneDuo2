@@ -214,7 +214,7 @@ export function ProcessingProgressCard({
               {Math.floor(displayProgress)}
             </span>
             <span className="text-2xl text-white/60">%</span>
-            <span className="text-sm text-white/40 ml-2">complete</span>
+          <span className="text-sm text-white/40 ml-2">progress</span>
           </div>
           {/* Frame count for long videos */}
           {processedFrames && estimatedFrames && estimatedFrames > 1000 && (
