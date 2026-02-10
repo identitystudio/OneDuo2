@@ -1137,6 +1137,9 @@ serve(async (req) => {
         // Default to 1 FPS for Fast Mode (~3x faster processing)
         const validatedFps = extractionFps === 3 ? 3 : 1;
 
+        // Check if this is an audio-only upload (no video frames needed)
+        const isAudioOnly = body.isAudioOnly || (modules?.length === 1 && modules[0].isAudio) || (!isMultiModule && body.isAudio);
+
         if (!email || !title || (!videoUrl && !modules?.length)) {
           return new Response(JSON.stringify({ error: "Missing required fields" }), {
             status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -1281,7 +1284,8 @@ serve(async (req) => {
             let step: string;
             if (requiresStitching) {
               step = "stitch_videos";
-            } else if (hasModuleFrames) {
+            } else if (hasModuleFrames || mod.isAudio) {
+              // Audio-only modules skip frame extraction, go straight to transcribe
               step = "transcribe_module";
             } else {
               step = "transcribe_and_extract_module";
@@ -1293,6 +1297,7 @@ serve(async (req) => {
             const queueResult = await insertQueueEntry(supabase, course.id, step, {
               moduleNumber: mod.moduleNumber,
               hasPreExtractedFrames: hasModuleFrames,
+              ...(mod.isAudio && { skipFrameExtraction: true, isAudioOnly: true }),
               ...(requiresStitching && {
                 moduleId,
                 sourceVideos: mod.sourceVideos,
@@ -1303,6 +1308,10 @@ serve(async (req) => {
               console.error(`[create-course] CRITICAL: Failed to queue ${step} for module ${mod.moduleNumber}`);
             } else {
               console.log(`[create-course] PARALLEL: Queued module ${mod.moduleNumber} (${step})${requiresStitching ? ' [MULTI-VIDEO]' : ''}`);
+              // For audio modules, set progress_step to 'transcribing' so Dashboard shows correct label
+              if (mod.isAudio && moduleId) {
+                await updateProgressStep(supabase, 'course_modules', moduleId, 'transcribing');
+              }
             }
           }
         } else if (hasPreExtractedFrames) {
@@ -1317,10 +1326,26 @@ serve(async (req) => {
             console.error(`[create-course] CRITICAL: Failed to queue transcribe for course ${course.id}`);
           }
         } else {
-          // Single video without pre-extracted frames - use PARALLEL processing
-          const queueResult = await insertQueueEntry(supabase, course.id, "transcribe_and_extract");
-          if (!queueResult.success) {
-            console.error(`[create-course] CRITICAL: Failed to queue transcribe_and_extract for course ${course.id}`);
+          // Single video/audio without pre-extracted frames
+          if (isAudioOnly) {
+            // Audio-only: skip frame extraction, just transcribe
+            console.log(`[create-course] Audio-only upload detected for course ${course.id} - skipping frame extraction`);
+            const queueResult = await insertQueueEntry(supabase, course.id, "transcribe", {
+              skipFrameExtraction: true,
+              isAudioOnly: true,
+            });
+            if (!queueResult.success) {
+              console.error(`[create-course] CRITICAL: Failed to queue transcribe for audio-only course ${course.id}`);
+            } else {
+              // Set progress_step to 'transcribing' so the Dashboard doesn't fall back to 'Extracting frames'
+              await updateProgressStep(supabase, 'courses', course.id, 'transcribing');
+            }
+          } else {
+            // Regular video - use PARALLEL processing
+            const queueResult = await insertQueueEntry(supabase, course.id, "transcribe_and_extract");
+            if (!queueResult.success) {
+              console.error(`[create-course] CRITICAL: Failed to queue transcribe_and_extract for course ${course.id}`);
+            }
           }
         }
 
@@ -1511,6 +1536,74 @@ serve(async (req) => {
           ...c,
           modules: moduleMap[c.id] || []
         }));
+
+        // LAZY PROGRESS UPDATE: Check Replicate status for active extractions
+        // This ensures "real-time" progress without keeping background functions alive
+        try {
+          const REPLICATE_API_KEY = Deno.env.get("REPLICATE_API_KEY");
+          if (REPLICATE_API_KEY && enrichedCourses) {
+            const updates = [];
+            
+            for (const course of enrichedCourses) {
+              // Check course-level extraction
+              if (course.status === 'processing' && 
+                  course.progress_step === 'extracting_frames' && 
+                  course.prediction_id && 
+                  // Only check if heartbeat is older than 10s or missing
+                  (!course.last_heartbeat_at || (Date.now() - new Date(course.last_heartbeat_at).getTime() > 10000))) {
+                
+                updates.push(checkReplicateProgress(supabase, course.id, 'courses', course.prediction_id, REPLICATE_API_KEY, course));
+              }
+
+              // Check module-level extractions
+              for (const mod of course.modules) {
+                if (mod.status === 'processing' && 
+                    mod.progress_step === 'extracting_frames_module' && // Note: step name might differ for modules
+                    mod.prediction_id &&
+                    (!mod.heartbeat_at || (Date.now() - new Date(mod.heartbeat_at).getTime() > 10000))) {
+                   
+                   updates.push(checkReplicateProgress(supabase, mod.id, 'course_modules', mod.prediction_id, REPLICATE_API_KEY, mod));
+                }
+              }
+            }
+
+            if (updates.length > 0) {
+              // Wait for updates but don't block too long (max 2s)
+              const results = await Promise.race([
+                Promise.all(updates),
+                new Promise(resolve => setTimeout(() => resolve([]), 2000))
+              ]) as any[];
+
+              // Merge updates back into response (in-memory only, DB is updated by helpers)
+              if (Array.isArray(results)) {
+                results.forEach(u => {
+                  if (!u) return;
+                  // Update course in list
+                  if (u.table === 'courses') {
+                    const c = enrichedCourses.find((x: any) => x.id === u.id);
+                    if (c) {
+                      c.progress = u.progress;
+                      c.last_heartbeat_at = new Date().toISOString();
+                    }
+                  } 
+                  // Update module in list
+                  else if (u.table === 'course_modules') {
+                    for (const c of enrichedCourses) {
+                      const m = c.modules?.find((x: any) => x.id === u.id);
+                      if (m) {
+                        m.progress = u.progress;
+                        m.heartbeat_at = new Date().toISOString();
+                      }
+                    }
+                  }
+                });
+              }
+            }
+          }
+        } catch (e) {
+          console.warn('[get-dashboard] Lazy progress check failed:', e);
+          // Continue returning stale data rather than failing
+        }
 
         return new Response(JSON.stringify({ courses: enrichedCourses }), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -4225,6 +4318,8 @@ async function extractFramesWithWebhook(
   await supabase.from(tableName).update({
     progress: 25,
     progress_step: 'extracting_frames',
+    // Store prediction ID for lazy progress updates in get-dashboard
+    prediction_id: prediction.id,
   }).eq("id", recordId);
 
   // Best-effort heartbeat bump for the waiting period (no polling loop to update heartbeats).
@@ -5857,5 +5952,69 @@ async function sendFailureEmail(email: string, courseTitle: string, courseId: st
     console.log("[sendFailureEmail] Failure notification sent");
   } catch (err) {
     console.error("[sendFailureEmail] Failed:", err);
+  }
+}
+// Helper for Lazy Progress Updates
+async function checkReplicateProgress(
+  supabase: any, 
+  id: string, 
+  table: string, 
+  predictionId: string, 
+  apiKey: string,
+  currentRecord: any
+) {
+  try {
+    const response = await fetch(`https://api.replicate.com/v1/predictions/${predictionId}`, {
+      headers: { "Authorization": `Bearer ${apiKey}` },
+    });
+
+    if (!response.ok) return null;
+
+    const prediction = await response.json();
+    
+    // Calculate progress
+    let progress = currentRecord.progress;
+    
+    if (prediction.status === 'succeeded') {
+      progress = 90; // Almost done, waiting for webhook to finalize
+    } else if (prediction.status === 'processing') {
+      // Estimate based on logs or generic time? 
+      // Replicate logs often have "x%|...| n/m [time]"
+      // For now, simple time-based increment or parsing logs if available
+      if (prediction.logs) {
+        // Try to find percentage in logs
+        const match = prediction.logs.match(/(\d+)%/g);
+        if (match && match.length > 0) {
+          const lastPct = parseInt(match[match.length - 1].replace('%', ''));
+          // Map 0-100 extraction to 25-90 overall progress
+          progress = 25 + Math.floor((lastPct / 100) * 65);
+        } else {
+           // Fallback: Increment by 1-5% per check up to 85%
+           progress = Math.min(85, (currentRecord.progress || 25) + 2);
+        }
+      } else {
+        progress = Math.min(85, (currentRecord.progress || 25) + 1);
+      }
+    } else if (prediction.status === 'starting') {
+      progress = 25;
+    }
+
+    // Update DB
+    const updatePayload: any = { 
+      progress,
+    };
+    
+    if (table === 'courses') {
+      updatePayload.last_heartbeat_at = new Date().toISOString();
+    } else {
+      updatePayload.heartbeat_at = new Date().toISOString();
+    }
+
+    await supabase.from(table).update(updatePayload).eq("id", id);
+    
+    return { id, table, progress };
+  } catch (e) {
+    console.warn(`[checkReplicateProgress] Failed for ${id}:`, e);
+    return null;
   }
 }
