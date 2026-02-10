@@ -19,10 +19,10 @@ export function Logo({ className = '', linkTo = '/', size = 'md' }: LogoProps) {
   const lastPathRef = useRef(location.pathname);
 
   const sizeConfig = {
-    sm: { width: 80, height: 40 },
-    md: { width: 120, height: 60 },
-    lg: { width: 160, height: 80 },
-    xl: { width: 200, height: 100 },
+    sm: { width: 120, height: 40 },
+    md: { width: 180, height: 60 },
+    lg: { width: 240, height: 80 },
+    xl: { width: 300, height: 100 },
   };
 
   const { width, height } = sizeConfig[size];
@@ -67,15 +67,15 @@ export function Logo({ className = '', linkTo = '/', size = 'md' }: LogoProps) {
       <svg
         width={width}
         height={height}
-        viewBox="0 0 120 60"
+        viewBox="0 0 180 60"
         fill="none"
         xmlns="http://www.w3.org/2000/svg"
         className={`flex-shrink-0 transition-all duration-500 ${shouldAnimate ? 'animate-logo-glow' : ''}`}
       >
         <defs>
-          <linearGradient id="oneduo_grad" x1="0" y1="0" x2="120" y2="60" gradientUnits="userSpaceOnUse">
-            <stop stopColor="#6366f1" />
-            <stop offset="1" stopColor="#a855f7" />
+          <linearGradient id="oneduo_grad" x1="0" y1="0" x2="180" y2="60" gradientUnits="userSpaceOnUse">
+            <stop stopColor="#10b981" />
+            <stop offset="1" stopColor="#84cc16" />
           </linearGradient>
           <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
             <feGaussianBlur stdDeviation="2" result="blur" />
@@ -84,24 +84,24 @@ export function Logo({ className = '', linkTo = '/', size = 'md' }: LogoProps) {
         </defs>
         {/* Abstract Duo/1-2 Mark */}
         <path
-          d="M20 15C20 12.2386 22.2386 10 25 10H35C37.7614 10 40 12.2386 40 15V45C40 47.7614 37.7614 50 35 50H25C22.2386 50 20 47.7614 20 45V15Z"
+          d="M10 15C10 12.2386 12.2386 10 15 10H25C27.7614 10 30 12.2386 30 15V45C30 47.7614 27.7614 50 25 50H15C12.2386 50 10 47.7614 10 45V15Z"
           fill="url(#oneduo_grad)"
           className="opacity-90"
         />
         <path
-          d="M45 25C45 22.2386 47.2386 20 50 20H60C62.7614 20 65 22.2386 65 25V45C65 47.7614 62.7614 50 60 50H50C47.2386 50 45 47.7614 45 45V25Z"
+          d="M35 25C35 22.2386 37.2386 20 40 20H50C52.7614 20 55 22.2386 55 25V45C55 47.7614 52.7614 50 50 50H40C37.2386 50 35 47.7614 35 45V25Z"
           fill="url(#oneduo_grad)"
           className="opacity-70"
         />
         {/* Text */}
         <text
-          x="75"
+          x="65"
           y="42"
           fill="currentColor"
           style={{
             fontFamily: 'Inter, sans-serif',
             fontWeight: 800,
-            fontSize: '22px',
+            fontSize: '26px',
             letterSpacing: '-0.02em'
           }}
           className="text-white dark:text-white"
@@ -123,32 +123,32 @@ export function LogoText({ className = '' }: { className?: string; variant?: 'sm
   return (
     <div className={`flex items-center ${className}`}>
       <svg
-        width="120"
+        width="180"
         height="60"
-        viewBox="0 0 120 60"
+        viewBox="0 0 180 60"
         fill="none"
         xmlns="http://www.w3.org/2000/svg"
         className="flex-shrink-0"
       >
         <defs>
-          <linearGradient id="oneduo_grad_text" x1="0" y1="0" x2="120" y2="60" gradientUnits="userSpaceOnUse">
-            <stop stopColor="#6366f1" />
-            <stop offset="1" stopColor="#a855f7" />
+          <linearGradient id="oneduo_grad_text" x1="0" y1="0" x2="180" y2="60" gradientUnits="userSpaceOnUse">
+            <stop stopColor="#10b981" />
+            <stop offset="1" stopColor="#84cc16" />
           </linearGradient>
         </defs>
         <path
-          d="M20 15C20 12.2386 22.2386 10 25 10H35C37.7614 10 40 12.2386 40 15V45C40 47.7614 37.7614 50 35 50H25C22.2386 50 20 47.7614 20 45V15Z"
+          d="M10 15C10 12.2386 12.2386 10 15 10H25C27.7614 10 30 12.2386 30 15V45C30 47.7614 27.7614 50 25 50H15C12.2386 50 10 47.7614 10 45V15Z"
           fill="url(#oneduo_grad_text)"
           className="opacity-90"
         />
         <text
-          x="45"
+          x="40"
           y="42"
           fill="currentColor"
           style={{
             fontFamily: 'Inter, sans-serif',
             fontWeight: 800,
-            fontSize: '22px',
+            fontSize: '26px',
             letterSpacing: '-0.02em'
           }}
           className="text-white dark:text-white"
@@ -173,12 +173,12 @@ export function LogoIcon({ size = 32 }: { size?: number; variant?: 'smiley' | 'a
     >
       <defs>
         <linearGradient id="oneduo_grad_icon" x1="0" y1="0" x2="40" y2="40" gradientUnits="userSpaceOnUse">
-          <stop stopColor="#6366f1" />
-          <stop offset="1" stopColor="#a855f7" />
+          <stop stopColor="#10b981" />
+          <stop offset="1" stopColor="#84cc16" />
         </linearGradient>
       </defs>
       <path
-        d="M5 5C5 2.23858 7.23858 0 10 0H30C32.7614 0 35 2.23858 35 5V35C35 37.7614 32.7614 40 30 40H10C7.23858 40 5 37.7614 5 35V5Z"
+        d="M5 5C5 2.23858 7.23858 0 10 0H20C22.7614 0 25 2.23858 25 5V35C25 37.7614 22.7614 40 20 40H10C7.23858 40 5 37.7614 5 35V5Z"
         fill="url(#oneduo_grad_icon)"
       />
     </svg>
