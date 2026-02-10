@@ -16,6 +16,34 @@ function formatTimestamp(ms: number): string {
   return `${minutes}:${secs.toString().padStart(2, "0")}`;
 }
 
+// Sample OCR texts for simulation
+const sampleOcrTexts = [
+  "Dashboard Overview - Q3 Performance Metrics",
+  "User Settings - Profile configuration",
+  "API Integration - Key management",
+  "Data Export - CSV and JSON formats",
+  "Critical Alert: Server Load High",
+  "Review pending approval items",
+  "Project Roadmap - Q4 Objectives",
+  "Team collaboration - Invite members",
+  "Billing settings - Invoice history",
+  "System Status - All systems operational"
+];
+
+// Critical keywords for emphasis detection
+const criticalKeywords = [
+  "critical",
+  "alert",
+  "error",
+  "warning",
+  "failed",
+  "urgent",
+  "review",
+  "approve",
+  "security",
+  "api key"
+];
+
 // ============================================
 // ONEDUO™ PASSIVE EMPHASIS RECONSTRUCTOR
 // Patent-Defensible Visual Intent Detection

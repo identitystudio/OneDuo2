@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Custom Ignores
+aaa-exampleproject/oneduo/supabase/functions/analyze-audio-events

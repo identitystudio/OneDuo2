@@ -60,6 +60,7 @@ export default function TransformReview() {
   const [verificationOpen, setVerificationOpen] = useState(false);
   const [filter, setFilter] = useState<string>("all");
   const [generatingPDF, setGeneratingPDF] = useState(false);
+  const [approvingAll, setApprovingAll] = useState(false);
   const [activeTab, setActiveTab] = useState<string>("frames");
   const [hasPendingDecisions, setHasPendingDecisions] = useState(false);
   const [autoOpenedGate, setAutoOpenedGate] = useState(false);
@@ -164,6 +165,44 @@ export default function TransformReview() {
       toast.error("Failed to generate PDF");
     } finally {
       setGeneratingPDF(false);
+    }
+  };
+
+  const handleApproveAll = async () => {
+    // Get all frames that need verification
+    const pendingFrames = frames?.filter(needsVerification) || [];
+    
+    if (pendingFrames.length === 0) {
+      toast.info("No frames need verification");
+      return;
+    }
+
+    setApprovingAll(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error("Not authenticated");
+
+      // Create bulk approvals
+      const approvals = pendingFrames.map(frame => ({
+        artifact_id: artifactId,
+        frame_id: frame.id,
+        user_id: user.id,
+        action: "APPROVED"
+      }));
+
+      const { error } = await supabase
+        .from("verification_approvals")
+        .insert(approvals);
+
+      if (error) throw error;
+
+      await queryClient.invalidateQueries({ queryKey: ["artifact-frames", artifactId] });
+      toast.success(`Approving and blessing ${pendingFrames.length} steps`);
+    } catch (error) {
+      console.error("Approve all error:", error);
+      toast.error("Failed to approve all steps");
+    } finally {
+      setApprovingAll(false);
     }
   };
 
@@ -299,6 +338,20 @@ export default function TransformReview() {
           </TabsList>
 
           <TabsContent value="frames" className="mt-6">
+            {/* Batch Actions */}
+            {stats.needsVerification > 0 && (
+              <div className="flex justify-end mb-4">
+                <Button 
+                  onClick={handleApproveAll} 
+                  disabled={approvingAll}
+                  className="bg-green-600 hover:bg-green-700 text-white"
+                >
+                  <CheckCircle className="mr-2 h-4 w-4" />
+                  {approvingAll ? "Blessing..." : `Approve All (${stats.needsVerification})`}
+                </Button>
+              </div>
+            )}
+
             {/* Stats Cards */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
               <Card>
