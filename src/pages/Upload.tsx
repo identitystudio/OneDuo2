@@ -1115,10 +1115,10 @@ export default function Upload() {
                     >
                       <CheckCircle2 className="w-8 h-8 text-green-500 mx-auto" />
                       <p className="text-foreground font-medium">
-                        Your course is processing safely in the cloud.
+                        Upload complete — processing has started.
                       </p>
                       <p className="text-muted-foreground text-sm">
-                        You can close this tab — we'll email you as each module is ready.
+                        You can close this tab — we'll email you when your course is ready.
                       </p>
                     </motion.div>
                   )}
@@ -1168,21 +1168,21 @@ export default function Upload() {
 
                   {/* Success Message */}
                   <div className="space-y-3">
-                    <h1 className="text-headline text-foreground">You're All Set!</h1>
+                    <h1 className="text-headline text-foreground">Upload Complete!</h1>
                     <p className="text-muted-foreground max-w-md mx-auto">
-                      <span className="font-medium text-foreground">{files.length} {files.length === 1 ? 'video' : 'videos'}</span> submitted for processing.
+                      <span className="font-medium text-foreground">{files.length} {files.length === 1 ? 'file' : 'files'}</span> uploaded and now processing in the cloud.
                       <br />
-                      We'll email you at <span className="font-medium text-foreground">{email}</span> as each module is ready.
+                      We'll email you at <span className="font-medium text-foreground">{email}</span> when your course is ready.
                     </p>
                   </div>
 
                   {/* Reassurance */}
                   <div className="bg-card border border-border rounded-xl p-6 space-y-2">
                     <p className="text-foreground font-medium">
-                      Your course is processing safely in the cloud.
+                      ⏳ Your course is processing in the cloud
                     </p>
                     <p className="text-sm text-muted-foreground">
-                      Processing typically takes 5-15 minutes per video depending on length.
+                      Processing typically takes 5-15 minutes per video. You can check progress on the Dashboard.
                     </p>
                   </div>
 
