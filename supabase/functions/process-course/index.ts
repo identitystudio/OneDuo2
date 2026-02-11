@@ -2548,14 +2548,22 @@ serve(async (req) => {
             const maxAttempts = job.max_attempts || 3;
 
             if (attempts < maxAttempts) {
-              // CRITICAL FIX: Check if course is already completed before resetting
+              // CRITICAL FIX: Check if course is ACTUALLY completed (all modules done)
+              // This handles race conditions and prevents resetting completely finished courses
+              const { count: activeModulesCount } = await supabase
+                .from("course_modules")
+                .select("id", { count: 'exact', head: true })
+                .eq("course_id", job.course_id)
+                .neq("status", "completed")
+                .eq("purged", false); // Only care about non-purged modules
+
               const { data: courseData } = await supabase
                 .from("courses")
                 .select("status")
                 .eq("id", job.course_id)
                 .single();
 
-              if (courseData?.status === 'completed') {
+              if (courseData?.status === 'completed' || activeModulesCount === 0) {
                 // Course is completed - just purge the stale queue job, don't reset course
                 await supabase.from("processing_queue").update({
                   purged: true,
@@ -3821,24 +3829,25 @@ async function stepTrainAiModule(supabase: any, courseId: string, moduleNumber: 
   // We retain only derivatives (frames), not the original content
   await purgeSourceVideo(supabase, module.video_url, courseId, module.id);
 
-  // Update course completed_modules count
+  // ATOMIC UPDATE: Use RPC to prevent race conditions during parallel module completion
+  const { data: completionStatus, error: rpcError } = await supabase
+    .rpc('increment_completed_modules', { p_course_id: courseId });
+
+  if (rpcError) throw new Error(`Failed to increment course completion: ${rpcError.message}`);
+
+  // RPC returns array of objects with single row
+  const statusRow = Array.isArray(completionStatus) ? completionStatus[0] : completionStatus;
+  const { is_finished } = statusRow;
+
+  // Re-fetch course details needed for email/events
   const { data: course } = await supabase
     .from("courses")
-    .select("completed_modules, module_count, email, title")
+    .select("email, title, module_count")
     .eq("id", courseId)
     .single();
 
-  const newCompleted = (course.completed_modules || 0) + 1;
-
-  if (newCompleted >= course.module_count) {
+  if (is_finished) {
     // All modules complete
-    await supabase.from("courses").update({
-      status: "completed",
-      completed_modules: newCompleted,
-      progress: 100,
-      completed_at: new Date().toISOString(),
-    }).eq("id", courseId);
-
     // EVENT OUTBOX: Emit course_completed event for reliable email delivery
     await emitProcessingEvent(supabase, 'course_completed', 'course', courseId, {
       email: course.email,
@@ -3850,11 +3859,6 @@ async function stepTrainAiModule(supabase: any, courseId: string, moduleNumber: 
     processOutboxEvents(supabase).catch(e => console.warn('[outbox] Background processing failed:', e));
   } else {
     // More modules to process
-    await supabase.from("courses").update({
-      completed_modules: newCompleted,
-      progress: Math.round((newCompleted / course.module_count) * 100),
-    }).eq("id", courseId);
-
     // PARALLEL PROCESSING: Queue additional modules to maintain parallelism
     // Check how many module jobs are currently active
     const { data: activeCount } = await supabase.rpc('count_active_module_jobs', { p_course_id: courseId });

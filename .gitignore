@@ -24,4 +24,4 @@ dist-ssr
 *.sw?
 
 # Custom Ignores
-aaa-exampleproject/oneduo/supabase/functions/analyze-audio-events
+aaa-exampleproject/oneduo

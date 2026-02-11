@@ -107,14 +107,29 @@ export function useBatchUpload() {
    * Upload a single video file using TUS resumable upload protocol
    * For files >4.5GB, automatically uses chunked upload instead
    */
-  const isTusSizeLimitError = (err: unknown): boolean => {
+  /*
+   * Determine if we should fallback to chunked upload
+   * Handles 413 Payload Too Large (TUS limit) AND network errors (ERR_FILE_NOT_FOUND, ProgressEvent)
+   * which can happen with some browser/TUS interactions.
+   */
+  const shouldFallbackToChunkedUpload = (err: unknown): boolean => {
     const message = err instanceof Error ? err.message : String(err);
-    return (
+    const isSizeError = (
       message.includes('response code: 413') ||
       message.includes('Maximum size exceeded') ||
       message.includes('Payload Too Large') ||
       (message.includes('/storage/v1/upload/resumable') && message.includes('413'))
     );
+    
+    // TUS specific network errors often manifest as "failed to upload chunk" with "ProgressEvent"
+    // This catches ERR_FILE_NOT_FOUND and other opaque network failures
+    const isNetworkError = (
+      message.includes('tus: failed to upload chunk') || 
+      message.includes('ProgressEvent') ||
+      message.includes('ERR_FILE_NOT_FOUND')
+    );
+
+    return isSizeError || isNetworkError;
   };
 
   const uploadSingleFile = async (file: File): Promise<string> => {
@@ -126,11 +141,9 @@ export function useBatchUpload() {
     try {
       return await resumableUpload(file);
     } catch (err) {
-      // If TUS rejects with 413, transparently fall back to the large-file path.
-      if (isTusSizeLimitError(err)) {
-        console.warn('[BatchUpload] TUS size limit hit; falling back to chunked upload.', {
+      if (shouldFallbackToChunkedUpload(err)) {
+        console.warn('[BatchUpload] Upload error detected; falling back to chunked upload strategy.', {
           fileName: file.name,
-          fileSize: file.size,
           error: err instanceof Error ? err.message : String(err),
         });
         return await chunkedUpload(file);
