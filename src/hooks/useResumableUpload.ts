@@ -8,7 +8,7 @@ import { useState, useCallback, useRef } from 'react';
 import * as tus from 'tus-js-client';
 import { supabase } from '@/integrations/supabase/client';
 
-const CHUNK_SIZE = 5 * 1024 * 1024; // 5MB chunks for optimal performance
+const CHUNK_SIZE = 6 * 1024 * 1024; // 6MB chunks – MUST be 6MB for Supabase TUS
 const STORAGE_KEY = 'tus_upload_state';
 
 export interface UploadProgress {
@@ -47,6 +47,7 @@ export function useResumableUpload() {
 
   const [isUploading, setIsUploading] = useState(false);
   const uploadRef = useRef<tus.Upload | null>(null);
+  const fileRef = useRef<File | null>(null); // Prevents garbage collection of File object
   const speedSamplesRef = useRef<number[]>([]);
   const lastBytesRef = useRef(0);
   const lastTimeRef = useRef(Date.now());
@@ -138,6 +139,7 @@ export function useResumableUpload() {
 
   // Main upload function using TUS protocol
   const uploadFile = useCallback(async (file: File): Promise<string> => {
+    fileRef.current = file; // Hold reference for duration of upload process
     const fileId = generateFileId(file);
     const sessionId = localStorage.getItem('courseagent_session') || crypto.randomUUID();
     localStorage.setItem('courseagent_session', sessionId);

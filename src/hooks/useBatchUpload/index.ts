@@ -17,20 +17,20 @@ import { useChunkedUpload, needsChunkedUpload } from '../useChunkedUpload';
 import { useSubmissionRetry } from '../useSubmissionRetry';
 import { runPreflightCheck } from './preflightCheck';
 import { verifyVideoIntegrity } from './verifyIntegrity';
-import { 
-  MAX_CONCURRENT_JOBS, 
-  DEFAULT_EXTRACTION_FPS, 
-  SESSION_STORAGE_KEY, 
-  EMAIL_STORAGE_KEY, 
-  JUST_UPLOADED_KEY 
+import {
+  MAX_CONCURRENT_JOBS,
+  DEFAULT_EXTRACTION_FPS,
+  SESSION_STORAGE_KEY,
+  EMAIL_STORAGE_KEY,
+  JUST_UPLOADED_KEY
 } from './constants';
-import type { 
-  BatchModule, 
-  BatchProgress, 
-  BatchSubmitResult, 
+import type {
+  BatchModule,
+  BatchProgress,
+  BatchSubmitResult,
   BatchSubmitOptions,
   ModuleUploadProgress,
-  UploadedModule 
+  UploadedModule
 } from './types';
 
 // Re-export types for external consumers
@@ -49,9 +49,10 @@ export function useBatchUpload() {
     message: 'Ready',
     canClose: false
   });
-  
+
   const abortRef = useRef(false);
   const isUploadingRef = useRef(false);
+  const modulesRef = useRef<BatchModule[]>([]); // Prevents garbage collection of File objects during batch processing
   const { uploadFile: resumableUpload, progress: uploadProgress } = useResumableUpload();
   const { uploadFile: chunkedUpload, progress: chunkedProgress } = useChunkedUpload();
   const { savePendingSubmission, clearPendingSubmission, getPendingSubmission, retrySubmission, isRetrying } = useSubmissionRetry();
@@ -64,13 +65,13 @@ export function useBatchUpload() {
   // Sync upload progress from useResumableUpload or useChunkedUpload to batch progress
   useEffect(() => {
     if (!isUploadingRef.current) return;
-    
+
     // Check chunked upload progress first (for large files)
     const activeProgress = chunkedProgress.phase !== 'preparing' ? chunkedProgress : uploadProgress;
-    
+
     const hasProgress = activeProgress.percentage > 0 || activeProgress.bytesUploaded > 0;
     const isActive = activeProgress.phase === 'uploading' || activeProgress.phase === 'preparing' || activeProgress.phase === 'merging';
-    
+
     if (hasProgress || isActive) {
       console.log('[BatchUpload] Syncing progress:', activeProgress.percentage, '% phase:', activeProgress.phase);
       setProgress(prev => {
@@ -120,11 +121,11 @@ export function useBatchUpload() {
       message.includes('Payload Too Large') ||
       (message.includes('/storage/v1/upload/resumable') && message.includes('413'))
     );
-    
+
     // TUS specific network errors often manifest as "failed to upload chunk" with "ProgressEvent"
     // This catches ERR_FILE_NOT_FOUND and other opaque network failures
     const isNetworkError = (
-      message.includes('tus: failed to upload chunk') || 
+      message.includes('tus: failed to upload chunk') ||
       message.includes('ProgressEvent') ||
       message.includes('ERR_FILE_NOT_FOUND')
     );
@@ -184,6 +185,7 @@ export function useBatchUpload() {
 
     setIsUploading(true);
     abortRef.current = false;
+    modulesRef.current = modules; // Anchor references in a ref to prevent browser GC
 
     const sessionId = localStorage.getItem(SESSION_STORAGE_KEY) || crypto.randomUUID();
     localStorage.setItem(SESSION_STORAGE_KEY, sessionId);
@@ -226,7 +228,7 @@ export function useBatchUpload() {
         }
 
         const module = modules[i];
-        
+
         setProgress(prev => ({
           ...prev,
           currentModuleIndex: i,
@@ -235,27 +237,27 @@ export function useBatchUpload() {
         }));
 
         console.log(`[BatchUpload] Uploading module ${i + 1}/${modules.length}: ${module.file.name}`);
-        
+
         try {
           const videoUrl = await uploadSingleFile(module.file);
-          
+
           // Handle sub-videos and attachments
           const subVideoAttachments = module.attachments?.filter(a => a.type === 'video') || [];
           const documentAttachments = module.attachments?.filter(a => a.type !== 'video') || [];
-          
+
           let sourceVideos: UploadedModule['sourceVideos'] = [{
             url: videoUrl,
             filename: module.file.name,
             order: 0,
           }];
-          
+
           // Upload sub-videos
           if (subVideoAttachments.length > 0) {
             setProgress(prev => ({
               ...prev,
               message: `Uploading sub-videos for module ${i + 1}...`
             }));
-            
+
             for (let subIdx = 0; subIdx < subVideoAttachments.length; subIdx++) {
               const subVideo = subVideoAttachments[subIdx];
               try {
@@ -271,7 +273,7 @@ export function useBatchUpload() {
               }
             }
           }
-          
+
           // Upload module-level document files
           let moduleFileUrls: { name: string; storagePath: string; size: number }[] = [];
           if (documentAttachments.length > 0) {
@@ -279,14 +281,15 @@ export function useBatchUpload() {
               ...prev,
               message: `Uploading files for module ${i + 1}...`
             }));
-            
+
             for (const attachment of documentAttachments) {
               try {
                 const storagePath = `module-files/${crypto.randomUUID()}/${attachment.file.name}`;
+                // Using standard upload for small files, but still sequential
                 const { error } = await supabase.storage
                   .from('course-files')
                   .upload(storagePath, attachment.file);
-                
+
                 if (!error) {
                   moduleFileUrls.push({
                     name: attachment.name,
@@ -299,7 +302,7 @@ export function useBatchUpload() {
               }
             }
           }
-          
+
           // Verify video integrity (skip for audio files)
           if (!options?.skipIntegrityCheck && !module.isAudio) {
             setProgress(prev => ({
@@ -308,7 +311,7 @@ export function useBatchUpload() {
             }));
 
             const verification = await verifyVideoIntegrity(videoUrl);
-            
+
             if (!verification.valid) {
               throw new Error(`Video \"${module.title || module.file.name}\" failed integrity check: ${verification.error || 'Unknown error'}`);
             }
@@ -318,7 +321,7 @@ export function useBatchUpload() {
             }
 
             const requiresStitching = sourceVideos.length > 1;
-            
+
             uploadedModules.push({
               title: module.title || module.file.name.replace(/\.[^/.]+$/, ''),
               videoUrl,
@@ -330,7 +333,7 @@ export function useBatchUpload() {
             });
           } else {
             const requiresStitching = sourceVideos.length > 1;
-            
+
             uploadedModules.push({
               title: module.title || module.file.name.replace(/\.[^/.]+$/, ''),
               videoUrl,
@@ -388,7 +391,7 @@ export function useBatchUpload() {
 
       if (options?.existingCourseId) {
         console.log(`[BatchUpload] Adding ${modules.length} modules to existing course ${options.existingCourseId}...`);
-        
+
         const result = await supabase.functions.invoke('process-course', {
           body: {
             action: 'add-modules',
@@ -406,7 +409,7 @@ export function useBatchUpload() {
         error = result.error;
       } else {
         console.log(`[BatchUpload] All ${modules.length} videos uploaded. Creating course...`);
-        
+
         const result = await supabase.functions.invoke('process-course', {
           body: {
             action: 'create-course',
@@ -477,7 +480,7 @@ export function useBatchUpload() {
       const toastMessage = isAddingToExisting
         ? `${modules.length} module${modules.length > 1 ? 's' : ''} added! We'll email you as each is ready.`
         : `${modules.length} modules submitted! You can close this tab now. We'll email you as each module is ready.`;
-      
+
       toast.success(toastMessage);
 
       return {
@@ -489,7 +492,7 @@ export function useBatchUpload() {
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
       console.error('[BatchUpload] Failed:', error);
-      
+
       setProgress(prev => ({
         ...prev,
         stage: 'error',

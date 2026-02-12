@@ -65,6 +65,7 @@ export function useChunkedUpload() {
 
   const [isUploading, setIsUploading] = useState(false);
   const abortRef = useRef(false);
+  const fileRef = useRef<File | null>(null); // Prevents garbage collection of File object during multi-hour uploads
   const speedSamplesRef = useRef<number[]>([]);
   const lastBytesRef = useRef(0);
   const lastTimeRef = useRef(Date.now());
@@ -214,6 +215,7 @@ export function useChunkedUpload() {
    * Main upload function for large files
    */
   const uploadFile = useCallback(async (file: File): Promise<string> => {
+    fileRef.current = file; // Hold reference to prevent GC during chunking
     const fileId = generateFileId(file);
     const savedState = loadState(fileId);
 
