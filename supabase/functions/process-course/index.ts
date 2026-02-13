@@ -1269,11 +1269,14 @@ serve(async (req) => {
             console.error("[create-course] Failed to create modules:", moduleError);
           }
 
-          // PARALLEL PROCESSING: Queue up to 3 modules simultaneously for faster processing
-          const MAX_PARALLEL_MODULES = 3;
-          const modulesToQueue = Math.min(modules.length, MAX_PARALLEL_MODULES);
+          // PARALLEL PROCESSING: Queue ALL modules immediately
+          // The atomic job claiming (claim_processing_job) handles concurrency naturally
+          // This is more reliable than queueing only 3 and relying on completion triggers
+          // Previously: only queued 3 modules, relied on stepTrainAiModule to queue more
+          // Problem: If any completion trigger failed, remaining modules stuck forever
+          const modulesToQueue = modules.length; // Queue ALL modules
 
-          console.log(`[create-course] PARALLEL: Queueing ${modulesToQueue} modules simultaneously for course ${course.id}`);
+          console.log(`[create-course] PARALLEL: Queueing ALL ${modulesToQueue} modules for course ${course.id} (atomic claiming handles concurrency)`);
 
           for (let i = 0; i < modulesToQueue; i++) {
             const mod = modules[i];
@@ -1438,11 +1441,11 @@ serve(async (req) => {
           status: existingCourse.status === 'completed' ? 'processing' : existingCourse.status,
         }).eq("id", courseId);
 
-        // PARALLEL PROCESSING: Queue up to 3 new modules simultaneously
-        const MAX_PARALLEL_MODULES = 3;
-        const modulesToQueue = Math.min(modules.length, MAX_PARALLEL_MODULES);
+        // PARALLEL PROCESSING: Queue ALL new modules immediately
+        // Consistent with create-course logic - atomic claiming handles concurrency
+        const modulesToQueue = modules.length;
 
-        console.log(`[add-modules] PARALLEL: Queueing ${modulesToQueue} modules for course ${courseId}`);
+        console.log(`[add-modules] PARALLEL: Queueing ALL ${modulesToQueue} modules for course ${courseId} (atomic claiming handles concurrency)`);
 
         for (let i = 0; i < modulesToQueue; i++) {
           const mod = modules[i];
