@@ -328,9 +328,11 @@ export default function Dashboard() {
       if (isComplete) {
         // Completed or failed - always use actual progress (typically 100)
         initialProgress[item.id] = actualProgress;
-      } else if (isQueued && actualProgress < 5) {
-        // For queued items with 0 or very low backend progress, start at 1%
-        initialProgress[item.id] = currentDisplay ?? 1;
+      } else if (isQueued) {
+        // SEQUENTIAL FIX: For queued items, don't show simulated progress (e.g. 12%)
+        // Cap at 1% or actual backend progress (usually 0) to show "pending" state
+        // If we previously simulated high, force it back down to 1
+        initialProgress[item.id] = Math.max(1, actualProgress);
       } else if (actualProgress > (currentDisplay ?? 0)) {
         // Backend progress increased - use it
         initialProgress[item.id] = actualProgress;
@@ -361,7 +363,14 @@ export default function Dashboard() {
 
           // Calculate a reasonable target based on step - allow more headroom for visible increments
           let targetMax = 99;
-          if (isQueued) targetMax = 12; // Allow more room for queued items
+
+          // SEQUENTIAL FIX: Don't simulate progress for queued items!
+          // They are waiting their turn and should likely stay at 0% or 1%
+          if (isQueued) {
+            // If queued, don't increment beyond current actual progress (usually 0)
+            // Or max 1% to show "pending" state without fake progress
+            targetMax = Math.max(1, actualProgress);
+          }
           else if (actualProgress < 40) targetMax = Math.min(actualProgress + 4, 42);
           else if (actualProgress < 60) targetMax = Math.min(actualProgress + 3, 63);
           else if (actualProgress < 80) targetMax = Math.min(actualProgress + 2, 82);
@@ -372,6 +381,9 @@ export default function Dashboard() {
             const distanceToTarget = targetMax - current;
             const microIncrement = Math.min(0.4, distanceToTarget * 0.08);
             updated[item.id] = Math.min(current + Math.max(0.1, microIncrement), targetMax);
+          } else if (isQueued && current > targetMax) {
+            // If we previously simulated too high (e.g. 12%), pull it back down to reality
+            updated[item.id] = targetMax;
           }
         });
         return updated;
