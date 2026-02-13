@@ -321,8 +321,15 @@ export default function Dashboard() {
       const currentDisplay = displayProgress[item.id];
       const actualProgress = item.progress;
 
-      // For queued items with 0 or very low backend progress, start at 1%
-      if (isQueued && actualProgress < 5) {
+      // CRITICAL FIX: For completed/failed statuses, always use the actual database progress
+      // This prevents the UI "rewind" when refreshing - completed items stay at 100%
+      const isComplete = item.status === 'completed' || item.status === 'failed';
+
+      if (isComplete) {
+        // Completed or failed - always use actual progress (typically 100)
+        initialProgress[item.id] = actualProgress;
+      } else if (isQueued && actualProgress < 5) {
+        // For queued items with 0 or very low backend progress, start at 1%
         initialProgress[item.id] = currentDisplay ?? 1;
       } else if (actualProgress > (currentDisplay ?? 0)) {
         // Backend progress increased - use it
@@ -343,6 +350,14 @@ export default function Dashboard() {
           const current = updated[item.id] ?? 1;
           const actualProgress = item.progress;
           const isQueued = item.status === 'queued' || item.progress_step === 'queued';
+
+          // CRITICAL FIX: Don't simulate progress for completed/failed items
+          // They should always show exact database progress
+          const isComplete = item.status === 'completed' || item.status === 'failed';
+          if (isComplete) {
+            updated[item.id] = actualProgress; // Force to actual progress
+            return;
+          }
 
           // Calculate a reasonable target based on step - allow more headroom for visible increments
           let targetMax = 99;
@@ -394,6 +409,27 @@ export default function Dashboard() {
       }));
 
       setCourses(newCourses);
+
+      // CRITICAL FIX: Clear display progress for completed/failed items
+      // This ensures the UI always reflects the true database state for finished modules
+      setDisplayProgress(prev => {
+        const updated = { ...prev };
+        newCourses.forEach((course: Course) => {
+          // Reset progress for completed/failed standalone courses
+          if (course.status === 'completed' || course.status === 'failed') {
+            updated[course.id] = course.progress;
+          }
+          // Reset progress for completed/failed modules
+          if (course.modules && course.modules.length > 0) {
+            course.modules.forEach(m => {
+              if (m.status === 'completed' || m.status === 'failed') {
+                updated[m.id] = m.progress;
+              }
+            });
+          }
+        });
+        return updated;
+      });
 
       // Self-recovery: if we see a course in an intermediate status but its queue is missing,
       // trigger the backend watchdog to repair it (throttled).
