@@ -72,9 +72,9 @@ async function persistFrameToStorage(
     const imageBuffer = await response.arrayBuffer();
     const contentType = response.headers.get('content-type') || 'image/png';
     const ext = contentType.includes('jpeg') || contentType.includes('jpg') ? 'jpg' : 'png';
-    
+
     const storagePath = `frames/${courseId}/frame-${String(frameIndex).padStart(5, '0')}.${ext}`;
-    
+
     const { error: uploadError } = await supabase.storage
       .from('course-videos')
       .upload(storagePath, imageBuffer, {
@@ -121,10 +121,10 @@ function calculateOptimalFrameCount(durationSeconds: number | null): number {
   if (!durationSeconds || durationSeconds <= 0) {
     return 600; // Default fallback
   }
-  
+
   const durationMinutes = durationSeconds / 60;
   const targetFrames = Math.ceil(durationMinutes * FRAMES_PER_MINUTE);
-  
+
   // Clamp between min and max
   return Math.max(MIN_FRAMES, Math.min(MAX_FRAMES, targetFrames));
 }
@@ -139,12 +139,12 @@ async function persistAllFramesToStorage(
   const persistedUrls: string[] = [];
   let failedCount = 0;
   let skippedCount = 0;
-  
+
   // Calculate dynamic frame limit based on video duration
   const maxFramesForVideo = calculateOptimalFrameCount(videoDurationSeconds || null);
-  
-  console.log(`[replicate-webhook] Video duration: ${videoDurationSeconds ? Math.round(videoDurationSeconds/60) : 'unknown'} min, target frames: ${maxFramesForVideo}`);
-  
+
+  console.log(`[replicate-webhook] Video duration: ${videoDurationSeconds ? Math.round(videoDurationSeconds / 60) : 'unknown'} min, target frames: ${maxFramesForVideo}`);
+
   // Sample evenly if we have more frames than our target
   let urlsToPersist = replicateUrls;
   if (replicateUrls.length > maxFramesForVideo) {
@@ -156,15 +156,15 @@ async function persistAllFramesToStorage(
       urlsToPersist.push(replicateUrls[idx]);
     }
     skippedCount = replicateUrls.length - maxFramesForVideo;
-    console.log(`[replicate-webhook] Sampled ${maxFramesForVideo} of ${replicateUrls.length} frames (proportional to ${Math.round((videoDurationSeconds || 0)/60)} min video)`);
+    console.log(`[replicate-webhook] Sampled ${maxFramesForVideo} of ${replicateUrls.length} frames (proportional to ${Math.round((videoDurationSeconds || 0) / 60)} min video)`);
   }
-  
+
   console.log(`[replicate-webhook] Persisting ${urlsToPersist.length} frames to permanent storage...`);
-  
+
   for (let i = 0; i < urlsToPersist.length; i += BATCH_SIZE) {
     const batch = urlsToPersist.slice(i, i + BATCH_SIZE);
     const batchResults = await Promise.allSettled(
-      batch.map((url, batchIdx) => 
+      batch.map((url, batchIdx) =>
         persistFrameToStorage(supabase, courseId, url, i + batchIdx)
       )
     );
@@ -182,9 +182,9 @@ async function persistAllFramesToStorage(
       console.log(`[replicate-webhook] Persist progress: ${Math.min(i + BATCH_SIZE, urlsToPersist.length)}/${urlsToPersist.length}`);
     }
   }
-  
+
   console.log(`[replicate-webhook] Frame persistence complete: ${persistedUrls.length}/${urlsToPersist.length} succeeded, ${failedCount} failed`);
-  
+
   // Log the persistence result
   await logJobEvent(supabase, logJobId, {
     step: 'frame_persistence_complete',
@@ -201,7 +201,7 @@ async function persistAllFramesToStorage(
       success_rate: `${Math.round((persistedUrls.length / urlsToPersist.length) * 100)}%`
     }
   });
-  
+
   return { persistedUrls, failedCount, skippedCount };
 }
 
@@ -219,12 +219,12 @@ async function queueNextStep(
       status: "pending",
       metadata,
     });
-    
+
     if (error) {
       console.error(`[queueNextStep] Failed to queue ${nextStep}:`, error);
       return false;
     }
-    
+
     console.log(`[queueNextStep] Queued ${nextStep} for course ${courseId}`);
     return true;
   } catch (e) {
@@ -241,7 +241,7 @@ serve(async (req: Request) => {
 
   try {
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
-    
+
     // Parse the webhook payload
     const body = await req.json();
     console.log(`[replicate-webhook] Received webhook:`, JSON.stringify(body).substring(0, 500));
@@ -251,25 +251,25 @@ serve(async (req: Request) => {
     const status = body.status; // "starting", "processing", "succeeded", "failed", "canceled"
     const output = body.output; // Array of frame URLs when succeeded
     const error = body.error;
-    
+
     // Get our custom metadata that we passed when creating the prediction
     // This contains courseId, moduleId, recordId, tableName, etc.
     const webhookMeta = body.input?.webhook_metadata || {};
     const { courseId, moduleId: _moduleId, recordId, tableName, fps: _fps, step } = webhookMeta;
-    
+
     if (!courseId || !recordId || !tableName) {
       console.error(`[replicate-webhook] Missing required metadata in webhook`);
       // Still return 200 to acknowledge receipt (prevent Replicate retries for malformed request)
-      return new Response(JSON.stringify({ 
-        received: true, 
-        error: "Missing metadata - webhook ignored" 
+      return new Response(JSON.stringify({
+        received: true,
+        error: "Missing metadata - webhook ignored"
       }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    const logJobId = tableName === 'courses' 
-      ? `course-${courseId.slice(0, 8)}` 
+    const logJobId = tableName === 'courses'
+      ? `course-${courseId.slice(0, 8)}`
       : `module-${recordId.slice(0, 8)}`;
 
     // Log webhook receipt
@@ -300,17 +300,17 @@ serve(async (req: Request) => {
         .select("status, frame_urls, progress")
         .eq("id", recordId)
         .single();
-      
+
       const existingFrameCount = Array.isArray(currentRecord?.frame_urls) ? currentRecord.frame_urls.length : 0;
       const isAlreadyCompleted = currentRecord?.status === 'completed';
-      
+
       // IDEMPOTENT: Skip only if completed AND has adequate frames
       // If completed but missing frames, proceed with recovery
       if (isAlreadyCompleted && existingFrameCount >= replicateFrameUrls.length) {
         console.log(`[replicate-webhook] IDEMPOTENT SKIP: Course already completed with ${existingFrameCount} frames (webhook has ${replicateFrameUrls.length}). Skipping.`);
-        return new Response(JSON.stringify({ 
-          received: true, 
-          skipped: true, 
+        return new Response(JSON.stringify({
+          received: true,
+          skipped: true,
           reason: 'course_already_completed_with_adequate_frames',
           existing_frames: existingFrameCount,
           webhook_frames: replicateFrameUrls.length
@@ -318,7 +318,7 @@ serve(async (req: Request) => {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
-      
+
       // If completed but MISSING frames - this is recovery mode
       if (isAlreadyCompleted && existingFrameCount < replicateFrameUrls.length) {
         console.log(`[replicate-webhook] RECOVERY MODE: Course completed but only has ${existingFrameCount} frames, webhook has ${replicateFrameUrls.length}. Persisting frames now.`);
@@ -334,7 +334,7 @@ serve(async (req: Request) => {
       // Replicate CDN URLs expire within ~24 hours.
       // We MUST persist all frames to Supabase Storage NOW before the URLs expire.
       // This prevents the "7 page PDF" bug where most frames return 404 during PDF generation.
-      
+
       // Fetch video duration to calculate optimal frame count
       let videoDurationSeconds: number | undefined;
       if (tableName === 'courses') {
@@ -350,9 +350,9 @@ serve(async (req: Request) => {
           .single();
         videoDurationSeconds = moduleData?.video_duration_seconds;
       }
-      
-      console.log(`[replicate-webhook] Video duration for frame calculation: ${videoDurationSeconds ? Math.round(videoDurationSeconds/60) + ' min' : 'unknown'}`);
-      
+
+      console.log(`[replicate-webhook] Video duration for frame calculation: ${videoDurationSeconds ? Math.round(videoDurationSeconds / 60) + ' min' : 'unknown'}`);
+
       // Update progress (DO NOT use 'persisting_frames' - not in valid_progress_step constraint)
       // GUARD: Don't regress progress if already higher (e.g. course already at 100%)
       // CRITICAL: Always update last_heartbeat_at to prevent false "stalled" detection
@@ -363,7 +363,7 @@ serve(async (req: Request) => {
           // Keep progress_step as 'extracting_frames' - the UI shows "Saving frames" at 40%+
         }).eq("id", recordId);
       }
-      
+
       // Persist all frames to permanent storage - DYNAMIC COUNT based on video duration
       const { persistedUrls, failedCount } = await persistAllFramesToStorage(
         supabase,
@@ -372,19 +372,19 @@ serve(async (req: Request) => {
         logJobId,
         videoDurationSeconds
       );
-      
+
       // Use the PERMANENT Supabase Storage URLs, not the temporary Replicate URLs
       const frameUrls = persistedUrls;
-      
+
       // ========== SAFEGUARD #4: LOG + ALERT ON DB UPDATE FAILURES ==========
       // Track whether DB update succeeds after frame persistence
       let _dbUpdateSucceeded = false;
       let _dbUpdateError: string | null = null;
-      
+
       if (frameUrls.length === 0) {
         // All frames failed to persist - this is a critical failure
         console.error(`[replicate-webhook] CRITICAL: All ${replicateFrameUrls.length} frames failed to persist!`);
-        
+
         await logJobEvent(supabase, logJobId, {
           step: 'frame_persistence_failed',
           level: 'error',
@@ -394,7 +394,7 @@ serve(async (req: Request) => {
             replicate_frame_count: replicateFrameUrls.length,
           }
         });
-        
+
         // FALLBACK: Use Replicate URLs anyway (better than nothing, may work if downloaded soon)
         const { error: fallbackError } = await supabase.from(tableName).update({
           frame_urls: replicateFrameUrls,
@@ -402,11 +402,11 @@ serve(async (req: Request) => {
           progress: isAlreadyCompleted ? currentRecord.progress : 50,
           constraint_status: 'pending_check', // Needs re-persistence
         }).eq("id", recordId);
-        
+
         if (fallbackError) {
           _dbUpdateError = fallbackError.message;
           console.error(`[replicate-webhook] CRITICAL ALERT: Frames available but DB update FAILED:`, fallbackError.message);
-          
+
           // ========== SAFEGUARD #4: HIGH-SEVERITY LOGGING ==========
           await logJobEvent(supabase, logJobId, {
             step: 'db_update_failed_after_persistence',
@@ -419,7 +419,7 @@ serve(async (req: Request) => {
               course_id: courseId
             }
           });
-          
+
           // Insert critical constraint violation for ops visibility
           try {
             await supabase.from("constraint_violations").insert({
@@ -438,18 +438,18 @@ serve(async (req: Request) => {
       } else {
         // SUCCESS: Store the permanent URLs
         console.log(`[replicate-webhook] Stored ${frameUrls.length} permanent frame URLs (${failedCount} failed)`);
-        
+
         const { error: updateError } = await supabase.from(tableName).update({
           frame_urls: frameUrls,
           total_frames: frameUrls.length,
           progress: isAlreadyCompleted ? currentRecord.progress : 50,
           constraint_status: 'valid', // Frames persisted successfully
         }).eq("id", recordId);
-        
+
         if (updateError) {
           const _dbUpdateError = updateError.message;
           console.error(`[replicate-webhook] CRITICAL ALERT: ${frameUrls.length} frames persisted but DB update FAILED:`, updateError.message);
-          
+
           // ========== SAFEGUARD #4: HIGH-SEVERITY LOGGING ==========
           await logJobEvent(supabase, logJobId, {
             step: 'db_update_failed_after_persistence',
@@ -463,7 +463,7 @@ serve(async (req: Request) => {
               first_frame_url: frameUrls[0]?.substring(0, 100)
             }
           });
-          
+
           // Insert critical constraint violation
           try {
             await supabase.from("constraint_violations").insert({
@@ -476,13 +476,13 @@ serve(async (req: Request) => {
               severity: 'critical'
             });
           } catch { /* ignore */ }
-          
+
           // RETRY: Try without constraint_status in case that's the issue
           const { error: retryError } = await supabase.from(tableName).update({
             frame_urls: frameUrls,
             total_frames: frameUrls.length,
           }).eq("id", recordId);
-          
+
           if (!retryError) {
             _dbUpdateSucceeded = true;
             console.log(`[replicate-webhook] Retry succeeded: frame_urls updated without constraint_status`);
@@ -516,15 +516,15 @@ serve(async (req: Request) => {
       // Mark the current queue job as completed
       // FIX: Accept both 'awaiting_webhook' and 'processing' status to handle race conditions
       const { data: updatedRows, error: _queueUpdateError } = await supabase.from("processing_queue")
-        .update({ 
-          status: "completed", 
-          completed_at: new Date().toISOString() 
+        .update({
+          status: "completed",
+          completed_at: new Date().toISOString()
         })
         .eq("course_id", courseId)
         .in("status", ["awaiting_webhook", "processing"])
         .in("step", ["extract_frames", "extract_frames_module", "transcribe_and_extract", "transcribe_and_extract_module"])
         .select("id");
-      
+
       // Log if no rows were updated (indicates potential issue)
       if (!updatedRows || updatedRows.length === 0) {
         console.warn(`[replicate-webhook] WARNING: Queue job update affected 0 rows for course ${courseId}`);
@@ -558,24 +558,24 @@ serve(async (req: Request) => {
         .select("transcript, video_duration_seconds")
         .eq("id", recordId)
         .single();
-      
+
       // CRITICAL FIX: Check actual data presence, not step_completed flags
       // step_completed only exists on course_modules, not courses table
       const hasTranscript = Array.isArray(record?.transcript) && record.transcript.length > 0;
-      
+
       // For single videos (courses table), we can proceed if:
       // 1. We have transcript data, OR
       // 2. This is a frames-only extraction step (extract_frames)
       // For transcribe_and_extract, we NEED transcript OR timeout/failure signal
       // Since we can't track step_completed on courses, check if transcript exists
-      const canProceed = hasTranscript || 
-                         step === "extract_frames" || 
-                         step === "extract_frames_module";
+      const canProceed = hasTranscript ||
+        step === "extract_frames" ||
+        step === "extract_frames_module";
       if (canProceed) {
         // Ready to proceed to next step
         const moduleNumber = webhookMeta.moduleNumber;
         const framesOnlyMode = !hasTranscript;
-        
+
         // CRITICAL FIX: Check if analyze_audio already completed - prevent duplicate queue jobs
         const { data: existingJob } = await supabase
           .from("processing_queue")
@@ -585,7 +585,7 @@ serve(async (req: Request) => {
           .in("status", ["completed", "processing", "pending"])
           .eq("purged", false)
           .maybeSingle();
-        
+
         if (existingJob) {
           console.log(`[replicate-webhook] ${nextStep} already exists (status: ${existingJob.status}), skipping queue`);
           return new Response(JSON.stringify({ received: true, skipped: true, reason: 'step_already_exists' }), {
@@ -593,65 +593,65 @@ serve(async (req: Request) => {
             headers: { ...corsHeaders, "Content-Type": "application/json" },
           });
         }
-        
+
         // FIX: Update progress_step to 'analyzing' before queuing next step
         await supabase.from(tableName).update({
           progress_step: "analyzing",
         }).eq("id", recordId);
-        
+
         console.log(`[replicate-webhook] Proceeding to ${nextStep}. Frames-only mode: ${framesOnlyMode}`);
-        
+
         await queueNextStep(supabase, courseId, nextStep, {
           moduleNumber,
           completedViaWebhook: true,
           framesOnlyMode,
           transcriptionSkipped: framesOnlyMode
         });
-        
+
         // Trigger the worker to pick up the new job
         await supabase.functions.invoke('process-course', {
           body: { action: 'poll' }
-        }).catch(() => {}); // Fire-and-forget
+        }).catch(() => { }); // Fire-and-forget
       } else {
         // Transcript not ready yet - check again after a brief delay
         // For short videos, transcription usually finishes quickly
         console.log(`[replicate-webhook] Frames ready but transcript not yet available. Will poll for transcript...`);
-        
+
         // Poll for transcript up to 30 seconds (transcription for short videos is fast)
         let transcriptReady = false;
         for (let i = 0; i < 6; i++) {
           await new Promise(r => setTimeout(r, 5000)); // Wait 5 seconds
-          
+
           const { data: recheckRecord } = await supabase.from(tableName)
             .select("transcript")
             .eq("id", recordId)
             .single();
-          
+
           if (Array.isArray(recheckRecord?.transcript) && recheckRecord.transcript.length > 0) {
             transcriptReady = true;
-            console.log(`[replicate-webhook] Transcript now available after ${(i+1)*5}s delay`);
+            console.log(`[replicate-webhook] Transcript now available after ${(i + 1) * 5}s delay`);
             break;
           }
         }
-        
+
         if (transcriptReady) {
           console.log(`[replicate-webhook] Proceeding to ${nextStep} after transcript became available`);
-          await queueNextStep(supabase, courseId, nextStep, { 
+          await queueNextStep(supabase, courseId, nextStep, {
             moduleNumber: webhookMeta.moduleNumber,
             completedViaWebhook: true,
           });
-          await supabase.functions.invoke('process-course', { body: { action: 'poll' } }).catch(() => {});
+          await supabase.functions.invoke('process-course', { body: { action: 'poll' } }).catch(() => { });
         } else {
           // Still no transcript after 30s - proceed in frames-only mode
           console.log(`[replicate-webhook] Transcript timeout - proceeding in frames-only mode`);
-          await queueNextStep(supabase, courseId, nextStep, { 
+          await queueNextStep(supabase, courseId, nextStep, {
             moduleNumber: webhookMeta.moduleNumber,
             completedViaWebhook: true,
             framesOnlyMode: true,
             transcriptionSkipped: true
           });
-          await supabase.functions.invoke('process-course', { body: { action: 'poll' } }).catch(() => {});
-          
+          await supabase.functions.invoke('process-course', { body: { action: 'poll' } }).catch(() => { });
+
           await logJobEvent(supabase, logJobId, {
             step: 'frames_proceeding_without_transcript',
             level: 'warn',
@@ -660,8 +660,8 @@ serve(async (req: Request) => {
           });
         }
       }
-      return new Response(JSON.stringify({ 
-        received: true, 
+      return new Response(JSON.stringify({
+        received: true,
         status: "processed",
         frames_stored: frameUrls.length
       }), {
@@ -686,14 +686,14 @@ serve(async (req: Request) => {
       // Update queue job as failed
       // FIX: Accept both 'awaiting_webhook' and 'processing' status
       const { data: failedRows } = await supabase.from("processing_queue")
-        .update({ 
-          status: "failed", 
+        .update({
+          status: "failed",
           error_message: error || `Replicate ${status}`
         })
         .eq("course_id", courseId)
         .in("status", ["awaiting_webhook", "processing"])
         .select("id");
-      
+
       if (!failedRows || failedRows.length === 0) {
         console.warn(`[replicate-webhook] WARNING: Failed job update affected 0 rows for course ${courseId}`);
       }
@@ -720,16 +720,16 @@ serve(async (req: Request) => {
         }).eq("id", recordId);
       }
 
-      return new Response(JSON.stringify({ 
-        received: true, 
+      return new Response(JSON.stringify({
+        received: true,
         status: "failed",
         error: error || status
       }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
 
-    // ============ GOVERNANCE: Race condition detection ============
-    // After any status update, check if course was incorrectly marked failed while we have data
+      // ============ GOVERNANCE: Race condition detection ============
+      // After any status update, check if course was incorrectly marked failed while we have data
     } else if (status === "succeeded") {
       // Already handled above, but double-check for race condition recovery
       const { data: currentCourse } = await supabase
@@ -738,11 +738,11 @@ serve(async (req: Request) => {
         .eq("id", courseId)
         .single();
 
-      if (currentCourse?.status === 'failed' && 
-          Array.isArray(currentCourse.frame_urls) && 
-          currentCourse.frame_urls.length > 0) {
+      if (currentCourse?.status === 'failed' &&
+        Array.isArray(currentCourse.frame_urls) &&
+        currentCourse.frame_urls.length > 0) {
         console.log(`[replicate-webhook] GOVERNANCE: Race condition detected - frames extracted but course marked failed`);
-        
+
         // Log constraint violation
         await supabase.from("constraint_violations").insert({
           entity_type: 'course',
@@ -753,7 +753,7 @@ serve(async (req: Request) => {
           actual_state: { status: 'failed', frames_exist: true, frame_count: currentCourse.frame_urls.length },
           severity: 'critical'
         });
-        
+
         // Create recovery frame via governance layer
         await supabase.functions.invoke('create-execution-frame', {
           body: {
@@ -763,21 +763,21 @@ serve(async (req: Request) => {
             initiated_by: 'replicate-webhook'
           }
         });
-        
+
         // Reset to processing and queue next step
-        await supabase.from("courses").update({ 
-          status: 'processing', 
+        await supabase.from("courses").update({
+          status: 'processing',
           error_message: null,
           constraint_status: 'valid'
         }).eq("id", courseId);
-        
+
         const nextStep = step?.includes("module") ? "analyze_audio_module" : "analyze_audio";
         await queueNextStep(supabase, courseId, nextStep, {
           recovery_from_race_condition: true,
           governance_recovery: true,
           frame_count: currentCourse.frame_urls.length
         });
-        
+
         // Log the recovery
         await logJobEvent(supabase, logJobId, {
           step: 'governance_race_condition_recovery',
@@ -785,13 +785,13 @@ serve(async (req: Request) => {
           message: `Governance layer recovered race condition: ${currentCourse.frame_urls.length} frames rescued`,
           metadata: { course_id: courseId, frame_count: currentCourse.frame_urls.length }
         });
-        
+
         // Trigger worker to pick up
-        await supabase.functions.invoke('process-course', { body: { action: 'poll' } }).catch(() => {});
+        await supabase.functions.invoke('process-course', { body: { action: 'poll' } }).catch(() => { });
       }
 
-      return new Response(JSON.stringify({ 
-        received: true, 
+      return new Response(JSON.stringify({
+        received: true,
         status: "processed",
         governance_check: true
       }), {
@@ -801,9 +801,9 @@ serve(async (req: Request) => {
     } else {
       // Status is "starting" or "processing" - just acknowledge
       console.log(`[replicate-webhook] Intermediate status: ${status}`);
-      
-      return new Response(JSON.stringify({ 
-        received: true, 
+
+      return new Response(JSON.stringify({
+        received: true,
         status: "acknowledged"
       }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -813,11 +813,11 @@ serve(async (req: Request) => {
   } catch (error) {
     console.error("[replicate-webhook] Error:", error);
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
-    
+
     // Still return 200 to acknowledge receipt (prevent infinite retries)
-    return new Response(JSON.stringify({ 
-      received: true, 
-      error: errorMessage 
+    return new Response(JSON.stringify({
+      received: true,
+      error: errorMessage
     }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });

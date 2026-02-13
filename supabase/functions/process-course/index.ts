@@ -998,8 +998,8 @@ async function resolveVideoUrlForExternalServices(
   if (!ref) return direct;
 
   const expiresInSeconds = opts?.expiresInSeconds ?? 60 * 60;
-  const maxAttempts = opts?.maxAttempts ?? 15;
-  const verifyAccessible = opts?.verifyAccessible ?? true;
+  const maxAttempts = opts?.maxAttempts ?? 5; // Reduced for faster feedback
+  const verifyAccessible = opts?.verifyAccessible ?? false; // Disabled HEAD check to prevent false stalls
   const allowChunked = opts?.allowChunked ?? false;
   let lastErr = 'unknown';
 
@@ -4859,6 +4859,10 @@ async function stepTranscribeAndExtract(supabase: any, courseId: string, fixMeta
       }
 
       console.error(`[stepTranscribeAndExtract] Frame extraction webhook submission error:`, error);
+      await supabase.from("courses").update({
+        status: "failed",
+        error_message: errorMessage || "Frame extraction submission failed"
+      }).eq("id", courseId);
       throw error; // Frame extraction is critical
     }
   }
@@ -4957,8 +4961,12 @@ async function stepTranscribeAndExtractModule(supabase: any, courseId: string, m
         supabase, module.id, module.video_url, module.courses.fps_target || 3,
         'course_modules', courseId, moduleNumber, 'transcribe_and_extract_module', fixMetadata
       );
-    } catch (error) {
+    } catch (error: any) {
       console.error(`[stepTranscribeAndExtractModule] Frame extraction error:`, error);
+      await supabase.from("course_modules").update({
+        status: "failed",
+        error_message: error.message || "Frame extraction submission failed"
+      }).eq("id", module.id);
       throw error;
     }
   }
