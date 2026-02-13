@@ -1269,52 +1269,44 @@ serve(async (req) => {
             console.error("[create-course] Failed to create modules:", moduleError);
           }
 
-          // PARALLEL PROCESSING: Queue ALL modules immediately
-          // The atomic job claiming (claim_processing_job) handles concurrency naturally
-          // This is more reliable than queueing only 3 and relying on completion triggers
-          // Previously: only queued 3 modules, relied on stepTrainAiModule to queue more
-          // Problem: If any completion trigger failed, remaining modules stuck forever
-          const modulesToQueue = modules.length; // Queue ALL modules
+          // SEQUENTIAL PROCESSING: Queue only the FIRST module
+          // Remaining modules stay in 'queued' status and are triggered one-by-one
+          // as each module completes in stepTrainAiModule. This avoids race conditions
+          // and is the simplest, most reliable approach.
+          const firstMod = modules[0];
+          const hasModuleFrames = firstMod.frameUrls && firstMod.frameUrls.length > 0;
+          const requiresStitching = firstMod.requiresStitching || (firstMod.sourceVideos?.length > 1);
 
-          console.log(`[create-course] PARALLEL: Queueing ALL ${modulesToQueue} modules for course ${course.id} (atomic claiming handles concurrency)`);
+          // Determine the step based on stitching requirement
+          let step: string;
+          if (requiresStitching) {
+            step = "stitch_videos";
+          } else if (hasModuleFrames || firstMod.isAudio) {
+            step = "transcribe_module";
+          } else {
+            step = "transcribe_and_extract_module";
+          }
 
-          for (let i = 0; i < modulesToQueue; i++) {
-            const mod = modules[i];
-            const hasModuleFrames = mod.frameUrls && mod.frameUrls.length > 0;
-            const requiresStitching = mod.requiresStitching || (mod.sourceVideos?.length > 1);
+          const moduleId = insertedModules?.find((im: any) => im.module_number === firstMod.moduleNumber)?.id;
 
-            // Determine the step based on stitching requirement
-            let step: string;
-            if (requiresStitching) {
-              step = "stitch_videos";
-            } else if (hasModuleFrames || mod.isAudio) {
-              // Audio-only modules skip frame extraction, go straight to transcribe
-              step = "transcribe_module";
-            } else {
-              step = "transcribe_and_extract_module";
-            }
+          console.log(`[create-course] SEQUENTIAL: Queueing first module ${firstMod.moduleNumber} of ${modules.length} for course ${course.id}`);
 
-            // Get the module ID for stitch step
-            const moduleId = insertedModules?.find((im: any) => im.module_number === mod.moduleNumber)?.id;
-
-            const queueResult = await insertQueueEntry(supabase, course.id, step, {
-              moduleNumber: mod.moduleNumber,
-              hasPreExtractedFrames: hasModuleFrames,
-              ...(mod.isAudio && { skipFrameExtraction: true, isAudioOnly: true }),
-              ...(requiresStitching && {
-                moduleId,
-                sourceVideos: mod.sourceVideos,
-                requiresStitching: true
-              })
-            });
-            if (!queueResult.success) {
-              console.error(`[create-course] CRITICAL: Failed to queue ${step} for module ${mod.moduleNumber}`);
-            } else {
-              console.log(`[create-course] PARALLEL: Queued module ${mod.moduleNumber} (${step})${requiresStitching ? ' [MULTI-VIDEO]' : ''}`);
-              // For audio modules, set progress_step to 'transcribing' so Dashboard shows correct label
-              if (mod.isAudio && moduleId) {
-                await updateProgressStep(supabase, 'course_modules', moduleId, 'transcribing');
-              }
+          const queueResult = await insertQueueEntry(supabase, course.id, step, {
+            moduleNumber: firstMod.moduleNumber,
+            hasPreExtractedFrames: hasModuleFrames,
+            ...(firstMod.isAudio && { skipFrameExtraction: true, isAudioOnly: true }),
+            ...(requiresStitching && {
+              moduleId,
+              sourceVideos: firstMod.sourceVideos,
+              requiresStitching: true
+            })
+          });
+          if (!queueResult.success) {
+            console.error(`[create-course] CRITICAL: Failed to queue ${step} for module ${firstMod.moduleNumber}`);
+          } else {
+            console.log(`[create-course] SEQUENTIAL: Queued module ${firstMod.moduleNumber} (${step})${requiresStitching ? ' [MULTI-VIDEO]' : ''} — remaining ${modules.length - 1} modules waiting`);
+            if (firstMod.isAudio && moduleId) {
+              await updateProgressStep(supabase, 'course_modules', moduleId, 'transcribing');
             }
           }
         } else if (hasPreExtractedFrames) {
@@ -1441,27 +1433,31 @@ serve(async (req) => {
           status: existingCourse.status === 'completed' ? 'processing' : existingCourse.status,
         }).eq("id", courseId);
 
-        // PARALLEL PROCESSING: Queue ALL new modules immediately
-        // Consistent with create-course logic - atomic claiming handles concurrency
-        const modulesToQueue = modules.length;
+        // SEQUENTIAL PROCESSING: Only queue the first new module if no active processing
+        // If another module is already processing, the new modules wait their turn
+        const { data: activeJobCount } = await supabase.rpc('count_active_module_jobs', { p_course_id: courseId });
+        const hasActiveJobs = (activeJobCount || 0) > 0;
 
-        console.log(`[add-modules] PARALLEL: Queueing ALL ${modulesToQueue} modules for course ${courseId} (atomic claiming handles concurrency)`);
-
-        for (let i = 0; i < modulesToQueue; i++) {
-          const mod = modules[i];
-          const modNumber = lastModuleNumber + i + 1;
-          const hasModuleFrames = mod.frameUrls && mod.frameUrls.length > 0;
+        if (!hasActiveJobs) {
+          // No active jobs - queue the first new module to start processing
+          const firstMod = modules[0];
+          const firstModNumber = lastModuleNumber + 1;
+          const hasModuleFrames = firstMod.frameUrls && firstMod.frameUrls.length > 0;
           const step = hasModuleFrames ? "transcribe_module" : "transcribe_and_extract_module";
 
+          console.log(`[add-modules] SEQUENTIAL: Queueing first new module ${firstModNumber} of ${modules.length} for course ${courseId}`);
+
           const queueResult = await insertQueueEntry(supabase, courseId, step, {
-            moduleNumber: modNumber,
+            moduleNumber: firstModNumber,
             hasPreExtractedFrames: hasModuleFrames
           });
           if (!queueResult.success) {
-            console.error(`[add-modules] CRITICAL: Failed to queue ${step} for module ${modNumber}`);
+            console.error(`[add-modules] CRITICAL: Failed to queue ${step} for module ${firstModNumber}`);
           } else {
-            console.log(`[add-modules] PARALLEL: Queued module ${modNumber}`);
+            console.log(`[add-modules] SEQUENTIAL: Queued module ${firstModNumber} — remaining ${modules.length - 1} modules waiting`);
           }
+        } else {
+          console.log(`[add-modules] SEQUENTIAL: ${activeJobCount} jobs active, new modules will be picked up when current module finishes`);
         }
 
         console.log(`[add-modules] Added ${modules.length} modules to course ${courseId}`);
@@ -2836,10 +2832,10 @@ serve(async (req) => {
               .eq("purged", false)
               .eq("status", "queued")
               .order("module_number", { ascending: true })
-              .limit(3);
+              .limit(1); // SEQUENTIAL: only need the next one
 
             if (queuedModules && queuedModules.length > 0) {
-              // Check if there are ANY active jobs for these modules
+              // Check if there are ANY active jobs for this course
               const { data: activeModuleJobs } = await supabase
                 .from("processing_queue")
                 .select("id")
@@ -2849,20 +2845,19 @@ serve(async (req) => {
                 .limit(1);
 
               if (!activeModuleJobs || activeModuleJobs.length === 0) {
-                // No active jobs, but modules are queued - create queue entries
-                console.log(`[watchdog] IDLE MULTI-MODULE: Course ${course.id} has ${queuedModules.length} queued modules but no active jobs`);
+                // No active jobs, but modules are queued - queue the NEXT one only
+                const nextMod = queuedModules[0];
+                console.log(`[watchdog] IDLE SEQUENTIAL: Course ${course.id} has queued modules but no active jobs — queueing module ${nextMod.module_number}`);
 
-                for (const mod of queuedModules.slice(0, 3)) { // Queue up to 3 modules for parallel processing
-                  const queueResult = await insertQueueEntry(supabase, course.id, "transcribe_and_extract_module", {
-                    moduleNumber: mod.module_number,
-                    autoRecovery: true,
-                    detectedBy: "watchdog.idle_multi_module"
-                  });
+                const queueResult = await insertQueueEntry(supabase, course.id, "transcribe_and_extract_module", {
+                  moduleNumber: nextMod.module_number,
+                  autoRecovery: true,
+                  detectedBy: "watchdog.idle_multi_module"
+                });
 
-                  if (queueResult.success) {
-                    console.log(`[watchdog] IDLE MULTI-MODULE: Queued module ${mod.module_number} for course ${course.id}`);
-                    idleMultiModuleRecovered++;
-                  }
+                if (queueResult.success) {
+                  console.log(`[watchdog] IDLE SEQUENTIAL: Queued module ${nextMod.module_number} for course ${course.id}`);
+                  idleMultiModuleRecovered++;
                 }
               }
             }
@@ -3915,65 +3910,43 @@ async function stepTrainAiModule(supabase: any, courseId: string, moduleNumber: 
 
     // Process outbox immediately (fire-and-forget, will retry on next poll if fails)
     processOutboxEvents(supabase).catch(e => console.warn('[outbox] Background processing failed:', e));
-  } else {
-    // More modules to process
-    // PARALLEL PROCESSING: Queue additional modules to maintain parallelism
-    // Check how many module jobs are currently active
-    const { data: activeCount } = await supabase.rpc('count_active_module_jobs', { p_course_id: courseId });
-    const currentActiveJobs = activeCount || 0;
-    const MAX_PARALLEL_MODULES = 3;
-    const slotsAvailable = MAX_PARALLEL_MODULES - currentActiveJobs;
+    // SEQUENTIAL PROCESSING: Queue the next module in order
+    // Only 1 module processes at a time — simple and reliable
+    const { data: nextModule } = await supabase
+      .from("course_modules")
+      .select("module_number")
+      .eq("course_id", courseId)
+      .eq("status", "queued")
+      .eq("purged", false)
+      .order("module_number", { ascending: true })
+      .limit(1)
+      .maybeSingle();
 
-    if (slotsAvailable > 0) {
-      // Find pending modules that aren't already queued
-      const { data: pendingModules } = await supabase
-        .from("course_modules")
-        .select("module_number")
+    if (nextModule) {
+      // Check it isn't already in the queue (safety check)
+      const { data: existingJob } = await supabase
+        .from("processing_queue")
+        .select("id")
         .eq("course_id", courseId)
-        .eq("status", "queued")
-        .order("module_number", { ascending: true })
-        .limit(slotsAvailable);
+        .eq("purged", false)
+        .in("status", ["pending", "processing", "awaiting_webhook"])
+        .filter("metadata->>moduleNumber", "eq", String(nextModule.module_number))
+        .maybeSingle();
 
-      // Queue the pending modules
-      if (pendingModules && pendingModules.length > 0) {
-        console.log(`[stepTrainAiModule] PARALLEL: Queueing ${pendingModules.length} more modules (${slotsAvailable} slots available)`);
-
-        let queuedCount = 0;
-        for (const mod of pendingModules) {
-          // FIXED: Use ->> operator instead of 'contains' for reliable metadata checking
-          // 'contains' has false negatives with JSONB, causes duplicate queue entries
-          const { data: existingJobs } = await supabase
-            .from("processing_queue")
-            .select("id, status")
-            .eq("course_id", courseId)
-            .eq("step", "transcribe_and_extract_module")
-            .eq("purged", false)
-            .in("status", ["pending", "processing", "awaiting_webhook"])
-            .filter("metadata->>moduleNumber", "eq", String(mod.module_number));
-
-          if (!existingJobs || existingJobs.length === 0) {
-            const queueResult = await insertQueueEntry(supabase, courseId, "transcribe_and_extract_module", {
-              moduleNumber: mod.module_number
-            });
-            if (queueResult.success) {
-              console.log(`[stepTrainAiModule] PARALLEL: Queued module ${mod.module_number}`);
-              queuedCount++;
-            }
-          } else {
-            console.log(`[stepTrainAiModule] Module ${mod.module_number} already queued (job ${existingJobs[0].id}, status: ${existingJobs[0].status})`);
-          }
-        }
-
-        // CRITICAL FIX: Explicitly trigger processing of the newly queued modules
-        // Don't rely solely on polling - kick processing immediately
-        if (queuedCount > 0) {
-          console.log(`[stepTrainAiModule] CRITICAL: Queued ${queuedCount} modules, triggering immediate processing`);
-          // Fire-and-forget trigger - don't wait for response
+      if (!existingJob) {
+        const queueResult = await insertQueueEntry(supabase, courseId, "transcribe_and_extract_module", {
+          moduleNumber: nextModule.module_number
+        });
+        if (queueResult.success) {
+          console.log(`[stepTrainAiModule] SEQUENTIAL: Queued next module ${nextModule.module_number}, triggering processing`);
           (globalThis as any).EdgeRuntime?.waitUntil?.(processNextStep(supabase, courseId));
         }
+      } else {
+        console.log(`[stepTrainAiModule] SEQUENTIAL: Next module ${nextModule.module_number} already has a queue entry (${existingJob.id})`);
+        (globalThis as any).EdgeRuntime?.waitUntil?.(processNextStep(supabase, courseId));
       }
     } else {
-      console.log(`[stepTrainAiModule] PARALLEL: ${currentActiveJobs} jobs active, no slots available`);
+      console.log(`[stepTrainAiModule] SEQUENTIAL: No more queued modules for course ${courseId}`);
     }
 
     // EVENT OUTBOX: Emit module_completed event for reliable email delivery
