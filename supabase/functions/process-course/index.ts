@@ -484,7 +484,7 @@ async function updateProgressStep(
     await supabase.from(entityType).update({
       progress_step: progressStep,
       ...additionalUpdates,
-    }).eq("id", entityId);
+    }).eq("id", entityId).neq("status", "completed");
     console.log(`[progress_step] Updated ${entityType} ${entityId} to ${progressStep}`);
   } catch (e) {
     console.warn(`[progress_step] Failed to update ${entityType} ${entityId}:`, e);
@@ -1543,26 +1543,26 @@ serve(async (req) => {
           const REPLICATE_API_KEY = Deno.env.get("REPLICATE_API_KEY");
           if (REPLICATE_API_KEY && enrichedCourses) {
             const updates = [];
-            
+
             for (const course of enrichedCourses) {
               // Check course-level extraction
-              if (course.status === 'processing' && 
-                  course.progress_step === 'extracting_frames' && 
-                  course.prediction_id && 
-                  // Only check if heartbeat is older than 10s or missing
-                  (!course.last_heartbeat_at || (Date.now() - new Date(course.last_heartbeat_at).getTime() > 10000))) {
-                
+              if (course.status === 'processing' &&
+                course.progress_step === 'extracting_frames' &&
+                course.prediction_id &&
+                // Only check if heartbeat is older than 10s or missing
+                (!course.last_heartbeat_at || (Date.now() - new Date(course.last_heartbeat_at).getTime() > 10000))) {
+
                 updates.push(checkReplicateProgress(supabase, course.id, 'courses', course.prediction_id, REPLICATE_API_KEY, course));
               }
 
               // Check module-level extractions
               for (const mod of course.modules) {
-                if (mod.status === 'processing' && 
-                    mod.progress_step === 'extracting_frames_module' && // Note: step name might differ for modules
-                    mod.prediction_id &&
-                    (!mod.heartbeat_at || (Date.now() - new Date(mod.heartbeat_at).getTime() > 10000))) {
-                   
-                   updates.push(checkReplicateProgress(supabase, mod.id, 'course_modules', mod.prediction_id, REPLICATE_API_KEY, mod));
+                if (mod.status === 'processing' &&
+                  mod.progress_step === 'extracting_frames_module' && // Note: step name might differ for modules
+                  mod.prediction_id &&
+                  (!mod.heartbeat_at || (Date.now() - new Date(mod.heartbeat_at).getTime() > 10000))) {
+
+                  updates.push(checkReplicateProgress(supabase, mod.id, 'course_modules', mod.prediction_id, REPLICATE_API_KEY, mod));
                 }
               }
             }
@@ -1585,7 +1585,7 @@ serve(async (req) => {
                       c.progress = u.progress;
                       c.last_heartbeat_at = new Date().toISOString();
                     }
-                  } 
+                  }
                   // Update module in list
                   else if (u.table === 'course_modules') {
                     for (const c of enrichedCourses) {
@@ -2678,6 +2678,13 @@ serve(async (req) => {
           for (const row of stuckIntermediate) {
             if (!row.next_step) continue;
 
+            // CRITICAL: Double check if course is actually completed now
+            const { data: courseCheck } = await supabase.from("courses").select("status").eq("id", row.course_id).single();
+            if (courseCheck?.status === 'completed') {
+              console.log(`[watchdog] Skipping intermediate recovery for course ${row.course_id} - already completed`);
+              continue;
+            }
+
             const queueResult = await insertQueueEntry(supabase, row.course_id, row.next_step, {
               autoRecovery: true,
               detectedBy: "process-course.watchdog"
@@ -3407,12 +3414,25 @@ async function processJobWithWorker(supabase: any, job: any, workerId: string) {
   console.log(`[processJobWithWorker] Worker ${workerId} processing job ${jobId}, step: ${step}`);
 
   // Get course email for concurrency tracking
-  const { data: course } = await supabase.from("courses").select("email").eq("id", courseId).single();
+  const { data: course } = await supabase.from("courses").select("email, status").eq("id", courseId).single();
   const userEmail = course?.email;
 
   // Track concurrency
   if (userEmail) {
     await incrementActiveJobs(supabase, userEmail);
+  }
+
+  // GUARD: If course is already completed, exit early and cleanup this job
+  if (course?.status === 'completed') {
+    console.log(`[processJobWithWorker] Job ${jobId} (${step}) SKIPPED: course already completed`);
+    // Cleanup concurrency tracking
+    if (userEmail) await decrementActiveJobs(supabase, userEmail);
+    // Mark job as completed atomically
+    await supabase.rpc('complete_processing_job', {
+      p_job_id: jobId,
+      p_worker_id: workerId
+    });
+    return;
   }
 
   // Start visibility extension interval (every 5 minutes)
@@ -3507,6 +3527,10 @@ async function processJobWithWorker(supabase: any, job: any, workerId: string) {
         break;
       case "train_ai_module":
         await stepTrainAiModule(supabase, courseId, fixMetadata.moduleNumber || 1);
+        break;
+      case "finalize_course":
+        console.log(`[processJobWithWorker] Finalizing course ${courseId}`);
+        await supabase.rpc('increment_completed_modules', { p_course_id: courseId });
         break;
     }
 
@@ -3618,7 +3642,10 @@ function getNextStep(current: string, metadata?: any): { step: string | null; me
     if (moduleIdx < moduleSteps.length - 1) {
       return { step: moduleSteps[moduleIdx + 1], metadata };
     }
-    // Last module step (train_ai_module) queues the next module/completion itself.
+    if (current === "train_ai" || current === "train_ai_module") {
+      return { step: "finalize_course", metadata };
+    }
+
     return { step: null };
   }
 
@@ -3637,15 +3664,21 @@ async function stepTranscribeModule(supabase: any, courseId: string, moduleNumbe
 
   if (!module) throw new Error(`Module ${moduleNumber} not found`);
 
+  // GUARD: If already completed, skip
+  if (module.status === 'completed') {
+    console.log(`[stepTranscribeModule] Module ${moduleNumber} already completed, skipping`);
+    return;
+  }
+
   await supabase.from("course_modules").update({
     status: "transcribing",
     progress: 5,
-  }).eq("id", module.id);
+  }).eq("id", module.id).neq("status", "completed");
 
   // Update parent course status
   await supabase.from("courses").update({
     status: `transcribing_module_${moduleNumber}`,
-  }).eq("id", courseId);
+  }).eq("id", courseId).neq("status", "completed");
 
   if (fixMetadata?.skipTranscription) {
     console.log(`[stepTranscribeModule] Skipping transcription for module ${moduleNumber}`);
@@ -3659,11 +3692,11 @@ async function stepTranscribeModule(supabase: any, courseId: string, moduleNumbe
 
   // Use webhook-based transcription (non-blocking)
   const result = await transcribeVideoWithWebhook(
-    supabase, 
-    module.id, 
-    module.video_url, 
-    'course_modules', 
-    courseId, 
+    supabase,
+    module.id,
+    module.video_url,
+    'course_modules',
+    courseId,
     moduleNumber,
     'transcribe_module'
   );
@@ -3677,7 +3710,7 @@ async function stepTranscribeModule(supabase: any, courseId: string, moduleNumbe
       .eq("step", "transcribe_module");
 
     console.log(`[stepTranscribeModule] Job submitted, awaiting webhook for module ${moduleNumber}`);
-    
+
     // Throw a special "await webhook" signal that the caller should catch
     throw new AwaitWebhookSignal("Awaiting external webhook callbacks");
   }
@@ -3695,14 +3728,20 @@ async function stepExtractFramesModule(supabase: any, courseId: string, moduleNu
 
   if (!module) throw new Error(`Module ${moduleNumber} not found`);
 
+  // GUARD: If already completed, skip
+  if (module.status === 'completed') {
+    console.log(`[stepExtractFramesModule] Module ${moduleNumber} already completed, skipping`);
+    return;
+  }
+
   await supabase.from("course_modules").update({
     status: "extracting_frames",
     progress: 25,
-  }).eq("id", module.id);
+  }).eq("id", module.id).neq("status", "completed");
 
   await supabase.from("courses").update({
     status: `extracting_frames_module_${moduleNumber}`,
-  }).eq("id", courseId);
+  }).eq("id", courseId).neq("status", "completed");
 
   await extractFrames(supabase, module.id, module.video_url, module.courses.fps_target, 'course_modules', fixMetadata);
 }
@@ -3787,6 +3826,13 @@ async function stepTrainAiModule(supabase: any, courseId: string, moduleNumber: 
 
   if (!module) throw new Error(`Module ${moduleNumber} not found`);
 
+  // GUARD: If already completed, skip processing but ensure course count is correct
+  if (module.status === 'completed') {
+    console.log(`[stepTrainAiModule] Module ${moduleNumber} already completed, syncing course...`);
+    await supabase.rpc('increment_completed_modules', { p_course_id: courseId });
+    return;
+  }
+
   await supabase.from("course_modules").update({
     status: "training_ai",
     progress: 90,
@@ -3799,7 +3845,7 @@ async function stepTrainAiModule(supabase: any, courseId: string, moduleNumber: 
     status: "completed",
     progress: 100,
     completed_at: new Date().toISOString(),
-  }).eq("id", module.id);
+  }).eq("id", module.id).neq("status", "completed");
 
   // Generate PDF data for this module (fire-and-forget, non-blocking)
   try {
@@ -4118,7 +4164,7 @@ async function transcribeVideo(supabase: any, recordId: string, videoUrl: string
           transcript: segments,
           video_duration_seconds: statusData.audio_duration,
           progress: 20,
-        }).eq("id", recordId);
+        }).eq("id", recordId).neq("status", "completed");
 
         console.log(`[transcribeVideo] Completed with ${segments.length} segments, duration: ${statusData.audio_duration}s`);
 
@@ -4148,7 +4194,7 @@ async function transcribeVideo(supabase: any, recordId: string, videoUrl: string
       // Heartbeat update every 30 seconds to prevent appearing stuck
       const now = Date.now();
       if (now - lastHeartbeat > HEARTBEAT_INTERVAL) {
-        await supabase.from(tableName).update({ progress: Math.floor(progress) }).eq("id", recordId);
+        await supabase.from(tableName).update({ progress: Math.floor(progress) }).eq("id", recordId).neq("status", "completed");
 
         // Update heartbeats + processing_queue.started_at to prevent watchdog from killing us
         if (tableName === 'courses') {
@@ -4481,7 +4527,7 @@ async function extractFrames(supabase: any, recordId: string, videoUrl: string, 
 
       await supabase.from(tableName).update({
         progress: Math.floor(estimatedProgress),
-      }).eq("id", recordId);
+      }).eq("id", recordId).neq("status", "completed");
 
       // Update heartbeats + processing_queue.started_at to prevent watchdog from killing us
       if (tableName === 'courses') {
@@ -4967,12 +5013,12 @@ async function stepTranscribe(supabase: any, courseId: string, fixMetadata?: any
 
   // Use webhook-based transcription (non-blocking)
   const result = await transcribeVideoWithWebhook(
-    supabase, 
-    courseId, 
-    course.video_url, 
-    'courses', 
-    courseId, 
-    undefined, 
+    supabase,
+    courseId,
+    course.video_url,
+    'courses',
+    courseId,
+    undefined,
     'transcribe'
   );
 
@@ -4985,7 +5031,7 @@ async function stepTranscribe(supabase: any, courseId: string, fixMetadata?: any
       .eq("step", "transcribe");
 
     console.log(`[stepTranscribe] Job submitted, awaiting webhook for course ${courseId}`);
-    
+
     // Throw a special "await webhook" signal that the caller should catch
     throw new AwaitWebhookSignal("Awaiting external webhook callbacks");
   }
@@ -5106,14 +5152,20 @@ async function stepAnalyzeAudioModule(supabase: any, courseId: string, moduleNum
 
   if (!module) throw new Error(`Module ${moduleNumber} not found`);
 
+  // GUARD: If already completed, skip
+  if (module.status === 'completed') {
+    console.log(`[stepAnalyzeAudioModule] Module ${moduleNumber} already completed, skipping`);
+    return;
+  }
+
   await supabase.from("course_modules").update({
     status: "analyzing_audio",
     progress: 87,
-  }).eq("id", module.id);
+  }).eq("id", module.id).neq("status", "completed");
 
   await supabase.from("courses").update({
     status: `analyzing_audio_module_${moduleNumber}`,
-  }).eq("id", courseId);
+  }).eq("id", courseId).neq("status", "completed");
 
   console.log(`[stepAnalyzeAudioModule] Starting audio analysis for module ${moduleNumber}`);
 
@@ -6009,13 +6061,17 @@ async function sendFailureEmail(email: string, courseTitle: string, courseId: st
 }
 // Helper for Lazy Progress Updates
 async function checkReplicateProgress(
-  supabase: any, 
-  id: string, 
-  table: string, 
-  predictionId: string, 
+  supabase: any,
+  id: string,
+  table: string,
+  predictionId: string,
   apiKey: string,
   currentRecord: any
 ) {
+  // GUARD: Don't regress progress if already completed
+  if (currentRecord?.status === 'completed') {
+    return { id, table, progress: 100 };
+  }
   try {
     const response = await fetch(`https://api.replicate.com/v1/predictions/${predictionId}`, {
       headers: { "Authorization": `Bearer ${apiKey}` },
@@ -6024,10 +6080,10 @@ async function checkReplicateProgress(
     if (!response.ok) return null;
 
     const prediction = await response.json();
-    
+
     // Calculate progress
     let progress = currentRecord.progress;
-    
+
     if (prediction.status === 'succeeded') {
       progress = 90; // Almost done, waiting for webhook to finalize
     } else if (prediction.status === 'processing') {
@@ -6042,8 +6098,8 @@ async function checkReplicateProgress(
           // Map 0-100 extraction to 25-90 overall progress
           progress = 25 + Math.floor((lastPct / 100) * 65);
         } else {
-           // Fallback: Increment by 1-5% per check up to 85%
-           progress = Math.min(85, (currentRecord.progress || 25) + 2);
+          // Fallback: Increment by 1-5% per check up to 85%
+          progress = Math.min(85, (currentRecord.progress || 25) + 2);
         }
       } else {
         progress = Math.min(85, (currentRecord.progress || 25) + 1);
@@ -6053,18 +6109,18 @@ async function checkReplicateProgress(
     }
 
     // Update DB
-    const updatePayload: any = { 
+    const updatePayload: any = {
       progress,
     };
-    
+
     if (table === 'courses') {
       updatePayload.last_heartbeat_at = new Date().toISOString();
     } else {
       updatePayload.heartbeat_at = new Date().toISOString();
     }
 
-    await supabase.from(table).update(updatePayload).eq("id", id);
-    
+    await supabase.from(table).update(updatePayload).eq("id", id).neq("status", "completed");
+
     return { id, table, progress };
   } catch (e) {
     console.warn(`[checkReplicateProgress] Failed for ${id}:`, e);
