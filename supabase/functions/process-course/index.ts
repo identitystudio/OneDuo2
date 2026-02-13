@@ -4784,13 +4784,17 @@ async function stepTranscribeAndExtract(supabase: any, courseId: string, fixMeta
   }
 
   // Initialize step tracking
+  // Resume from saved state to prevent infinite loops
+  const savedSteps = course.step_completed || {};
   const stepCompleted: Record<string, boolean> = {
-    transcription_completed: skipTranscription || false,
-    frames_extracted: skipFrameExtraction || false,
+    transcription_completed: savedSteps.transcription_completed || skipTranscription || false,
+    frames_extracted: savedSteps.frames_extracted || skipFrameExtraction || false,
   };
 
+  console.log(`[stepTranscribeAndExtract] Resuming with completed steps:`, stepCompleted);
+
   // Start transcription with webhook
-  if (!skipTranscription) {
+  if (!stepCompleted.transcription_completed) {
     try {
       const result = await transcribeVideoWithWebhook(
         supabase, courseId, course.video_url, 'courses', courseId, undefined, 'transcribe_and_extract'
@@ -4825,7 +4829,7 @@ async function stepTranscribeAndExtract(supabase: any, courseId: string, fixMeta
   }
 
   // Start frame extraction with webhook
-  if (!skipFrameExtraction) {
+  if (!stepCompleted.frames_extracted) {
     try {
       await extractFramesWithWebhook(
         supabase, courseId, course.video_url, course.fps_target || 3, 'courses',
@@ -4918,13 +4922,17 @@ async function stepTranscribeAndExtractModule(supabase: any, courseId: string, m
     return;
   }
 
+  // Resume from saved step_completed state to prevent infinite loops
+  const savedSteps = module.step_completed || {};
   const stepCompleted: Record<string, boolean> = {
-    transcription_completed: skipTranscription || false,
-    frames_extracted: skipFrameExtraction || false,
+    transcription_completed: savedSteps.transcription_completed || skipTranscription || false,
+    frames_extracted: savedSteps.frames_extracted || skipFrameExtraction || false,
   };
 
+  console.log(`[stepTranscribeAndExtractModule] Resuming module ${moduleNumber} with steps:`, stepCompleted);
+
   // Start transcription with webhook
-  if (!skipTranscription) {
+  if (!stepCompleted.transcription_completed) {
     try {
       const result = await transcribeVideoWithWebhook(
         supabase, module.id, module.video_url, 'course_modules',
@@ -4943,7 +4951,7 @@ async function stepTranscribeAndExtractModule(supabase: any, courseId: string, m
   }
 
   // Start frame extraction with webhook
-  if (!skipFrameExtraction) {
+  if (!stepCompleted.frames_extracted) {
     try {
       await extractFramesWithWebhook(
         supabase, module.id, module.video_url, module.courses.fps_target || 3,
