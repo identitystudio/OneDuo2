@@ -409,6 +409,18 @@ export default function Dashboard() {
 
       if (error) throw error;
 
+      // DEBUG: Log processing details to pinpoint stalls
+      if (data.courses) {
+        data.courses.forEach((c: Course) => {
+          if (c.status !== 'completed' && c.status !== 'failed') {
+            const modStatus = c.modules?.map((m: any) =>
+              `[M${m.module_number}] ${m.status} (P:${m.progress}, Step:${m.progress_step})`
+            ).join(', ');
+            console.log(`[%cDashboard%c] ${c.title || c.id}: ${c.status} (P:${c.progress}) Modules: ${modStatus}`, 'color: #00d4ff; font-weight: bold', 'color: inherit');
+          }
+        });
+      }
+
       // Force deep comparison by creating new course objects when progress changes
       const newCourses = (data.courses || []).map((course: Course) => ({
         ...course,
