@@ -532,35 +532,19 @@ BT
 /F1 14 Tf
 50 750 Td
 (Frame #${frame.frame_index} | ${formatTimestamp(frame.timestamp_ms)}) Tj
-0 -20 Td
-/F1 9 Tf
-0.1 0.4 0.7 rg
-(INTENT & NUANCE:) Tj
-0 0 0 rg
-0 -11 Td
-/F1 8 Tf
-(${(frame.visual_description || "No specific intent detected").replace(/[()\\]/g, '').slice(0, 180).match(/.{1,60}/g)?.join(') Tj\n0 -9 Td (') || ""}) Tj
-0 -18 Td
-/F1 9 Tf
-0.2 0.6 0.2 rg
+0 -25 Td
+/F1 10 Tf
 (OCR TEXT:) Tj
-0 0 0 rg
-0 -11 Td
-/F1 8 Tf
-(${(frame.ocr_text || "No text detected").replace(/[()\\]/g, '').slice(0, 120).match(/.{1,60}/g)?.join(') Tj\n0 -9 Td (') || ""}) Tj
-0 -18 Td
-/F1 9 Tf
-0.8 0.4 0 rg
+0 -12 Td
+(${(frame.ocr_text || "No text detected").slice(0, 60)}) Tj
+0 -20 Td
 (EMPHASIS DETECTED:) Tj
-0 0 0 rg
-0 -11 Td
-/F1 8 Tf
+0 -12 Td
 (${emphasisList.length > 0 ? emphasisList.join(", ") : "None"}) Tj
-0 -18 Td
-/F1 9 Tf
+0 -20 Td
 (CONFIDENCE: ${confidencePercent}% - ${frame.confidence_level}) Tj
-${frame.is_critical ? `0 -12 Td\n1 0 0 rg\n/F1 9 Tf\n([CRITICAL] - Strategic Landmark) Tj\n0 0 0 rg` : ""}
-${approval ? `0 -12 Td\n0 0.6 0 rg\n/F1 9 Tf\n(BLESSED at ${new Date(approval.created_at).toLocaleString()}) Tj\n0 0 0 rg` : ""}
+${frame.is_critical ? `0 -15 Td\n1 0 0 rg\n([CRITICAL] - Contains critical keyword) Tj\n0 0 0 rg` : ""}
+${approval ? `0 -15 Td\n0 0.6 0 rg\n(BLESSED at ${new Date(approval.created_at).toLocaleString()}) Tj\n0 0 0 rg` : ""}
 0 -40 Td
 0.4 0.4 0.4 rg
 /F1 7 Tf

@@ -1403,7 +1403,7 @@ export const generateChatGPTPDF = async (
           const imgHeight = 40;
           // Preserve quality (avoid extra internal compression)
           pdf.addImage(base64Image, 'JPEG', margin, y, imgWidth, imgHeight, undefined, 'NONE');
-          y += imgHeight + 3;
+          y += imgHeight + 5;
         } else {
           // Log which frame failed for debugging
           console.warn(`[pdfExporter] Frame ${i + 1} failed to load: ${frameUrl.substring(0, 60)}...`);
@@ -1640,7 +1640,7 @@ export const generateMergedCoursePDF = async (
   const safe = (v: unknown) => sanitizePdfText(v);
 
   // IMPORTANT: default imageQuality must be high; we cap it per-module based on frame count.
-  const { maxFrames = 1000, imageQuality = 1.0 } = options;
+  const { maxFrames = 1000, imageQuality = 1.0, includeOCR = false } = options;
 
   const watermarkEmail = safe(mergedCourse.userEmail || localStorage.getItem('courseagent_email') || '');
   const watermarkTimestamp = new Date().toISOString().replace('T', ' ').substring(0, 19) + ' UTC';
@@ -1686,6 +1686,12 @@ export const generateMergedCoursePDF = async (
       pdf.setFontSize(6);
       pdf.setTextColor(130, 130, 130);
       pdf.text('This artifact is for private authorized educational use only.', pageWidth / 2, footerY + 4, { align: 'center' });
+    }
+  };
+
+  const checkPageBreak = (neededHeight: number) => {
+    if (y + neededHeight > pageHeight - 35) {
+      addPageWithHeaders();
     }
   };
 
@@ -1940,10 +1946,21 @@ export const generateMergedCoursePDF = async (
       await batchLoadImages(
         sampledFrames,
         moduleEffectiveQuality,
-        (loaded, total) => {
-          // Optional: update progress (fine-grained)
-        }
       );
+
+      let frameAnalyses: (FrameAnalysis | null)[] = [];
+      if (includeOCR) {
+        onProgress?.(progressPercent + 5, `Analyzing frames with AI vision for Chapter ${i + 1}...`);
+        frameAnalyses = await extractFrameTextsWithProgress(
+          sampledFrames,
+          module.video_duration_seconds || 0,
+          module.transcript || [],
+          (p, s) => {
+            // Fine-grained progress not needed inside the loop
+          },
+          3 // Batch size
+        );
+      }
 
       for (let frameIdx = 0; frameIdx < sampledFrames.length; frameIdx++) {
         if (y > pageHeight - 60) {
@@ -1972,7 +1989,36 @@ export const generateMergedCoursePDF = async (
             }
 
             pdf.addImage(imgData.dataUrl, 'JPEG', margin, y, imgWidth, imgHeight, undefined, 'NONE');
-            y += imgHeight + 8;
+            y += imgHeight + 5;
+
+            // Render OCR text if available (transcribed visual text)
+            const frameAnalysis = frameAnalyses[frameIdx];
+            if (includeOCR && frameAnalysis && frameAnalysis.text.length > 0) {
+              const ocrText = frameAnalysis.text.substring(0, 600);
+              const splitOCR = pdf.splitTextToSize(ocrText, contentWidth - 10);
+              const ocrHeight = Math.min(splitOCR.length * 4, 40) + 12;
+
+              checkPageBreak(ocrHeight + 5);
+
+              pdf.setFillColor(240, 248, 255);
+              pdf.setDrawColor(100, 150, 200);
+              pdf.roundedRect(margin, y, contentWidth, ocrHeight, 2, 2, 'FD');
+
+              y += 6;
+              pdf.setFontSize(9);
+              pdf.setFont('helvetica', 'bold');
+              pdf.setTextColor(0, 80, 120);
+              pdf.text('OCR Extracted Text:', margin + 3, y);
+              y += 5;
+
+              pdf.setFont('helvetica', 'normal');
+              pdf.setTextColor(30, 30, 30);
+              const truncatedOCR = splitOCR.slice(0, 7);
+              pdf.text(truncatedOCR, margin + 3, y);
+              y += truncatedOCR.length * 4 + 6;
+            } else {
+              y += 3; // Extra gap if no OCR
+            }
           }
         } catch (e) {
           pdf.setFontSize(8);
