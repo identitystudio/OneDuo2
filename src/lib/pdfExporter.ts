@@ -1927,13 +1927,14 @@ export const generateMergedCoursePDF = async (
       pdf.text(safe('Visuals & Full Transcript'), margin, y);
       y += 10;
 
-      // Sample frames evenly
-      const sampledFrames = sampleFramesEvenly(module.frame_urls, Math.min(maxFrames, module.frame_urls.length));
+      // 1-SECOND SAMPLING LOGIC: 
+      // We want one frame per second of the video duration.
+      const duration = module.video_duration_seconds || 10;
+      const targetFrameCount = Math.max(1, Math.round(duration));
+      const sampledFrames = sampleFramesEvenly(module.frame_urls, Math.min(maxFrames, targetFrameCount));
 
-      // Calculate time per frame window to match transcript
-      const timePerFrame = module.video_duration_seconds && sampledFrames.length > 0
-        ? module.video_duration_seconds / sampledFrames.length
-        : 10;
+      // Calculate time per frame window (exactly 1 second if possible)
+      const timePerFrame = duration / Math.max(1, sampledFrames.length);
 
       // Cap quality for huge frame sets
       const moduleRecommendedQuality = getRecommendedImageQuality(module.frame_urls.length);
@@ -1949,14 +1950,15 @@ export const generateMergedCoursePDF = async (
       );
 
       for (let frameIdx = 0; frameIdx < sampledFrames.length; frameIdx++) {
-        if (y > pageHeight - 60) {
-          addPageWithHeaders();
-        }
-
         const frameUrl = sampledFrames[frameIdx];
-        // Timestamps for this frame's "window"
+        // Timestamps for this frame's 1-second "window"
         const frameStart = frameIdx * timePerFrame;
         const frameEnd = (frameIdx + 1) * timePerFrame;
+
+        // Check if we have space for Frame Header + Image + at least some text
+        if (y > pageHeight - 80) {
+          addPageWithHeaders();
+        }
 
         // Header: Frame number + timestamp
         pdf.setFontSize(9);
@@ -1972,8 +1974,15 @@ export const generateMergedCoursePDF = async (
             const imgWidth = Math.min(contentWidth, 160);
             const imgHeight = imgWidth * 0.56; // 16:9
 
-            if (y + imgHeight > pageHeight - 40) {
+            // If image doesn't fit, move to next page
+            if (y + imgHeight > pageHeight - 20) {
               addPageWithHeaders();
+              // Re-draw header on new page for better UX
+              pdf.setFontSize(9);
+              pdf.setFont('helvetica', 'bold');
+              pdf.setTextColor(80, 80, 80);
+              pdf.text(safe(`Frame ${frameIdx + 1} | ${formatTime(frameStart)} - ${formatTime(frameEnd)} (cont.)`), margin, y);
+              y += 5;
             }
 
             pdf.addImage(imgData.dataUrl, 'JPEG', margin, y, imgWidth, imgHeight, undefined, 'NONE');
@@ -1986,14 +1995,15 @@ export const generateMergedCoursePDF = async (
           y += 10;
         }
 
-        // Render Relevant Transcript Text Below Image
+        // Render Relevant Transcript Text (Full Verbatim for this Second)
         if (module.transcript && module.transcript.length > 0) {
-          // Find transcript segments that overlap with this frame's time window
+          // Find transcript segments that overlap with this frame's 1-second time window
           const frameTranscript = module.transcript.filter(seg => {
             const segStart = seg.start || 0;
-            // A segment belongs to this frame if it starts within the frame's window
-            // OR if it started before but overlaps significantly into this frame
-            return (segStart >= frameStart && segStart < frameEnd);
+            const segEnd = seg.end || (segStart + 5); // Fallback to 5s if end missing
+
+            // Overlap logic: segment starts before frame ends AND segment ends after frame starts
+            return (segStart < frameEnd && segEnd > frameStart);
           });
 
           if (frameTranscript.length > 0) {
@@ -2020,13 +2030,13 @@ export const generateMergedCoursePDF = async (
               pdf.text(line, margin, y);
               y += 5;
             }
-            y += 8; // Extra padding after text block
+            y += 8; // Extra padding after transcript block
           } else {
-            // No speech in this frame window
+            // No speech recorded in this specific second
             pdf.setFontSize(9);
             pdf.setFont('helvetica', 'italic');
             pdf.setTextColor(150, 150, 150);
-            pdf.text('(No speech in this segment)', margin, y);
+            pdf.text('(Silence / No Transcription)', margin, y);
             y += 10;
           }
         }
