@@ -1615,6 +1615,49 @@ export const generateChatGPTPDF = async (
   return pdf.output('blob');
 };
 
+/**
+ * Extracts specific words from transcript segments that fall within a time window.
+ * Uses linear interpolation to estimate word-level timings.
+ */
+const getWordsForTimeRange = (
+  transcript: TranscriptSegment[],
+  start: number,
+  end: number,
+  lookahead: number = 0.2
+): string => {
+  const wordsInRange: string[] = [];
+
+  // Buffering to avoid cutting off words spoken right at the boundary
+  const effectiveStart = Math.max(0, start - lookahead);
+  const effectiveEnd = end + lookahead;
+
+  transcript.forEach(segment => {
+    const segStart = segment.start || 0;
+    const segEnd = segment.end || (segStart + Math.max(5, segment.text.split(' ').length * 0.4));
+
+    // Quick check: if segment doesn't overlap with window at all, skip
+    if (segEnd <= effectiveStart || segStart >= effectiveEnd) return;
+
+    const words = segment.text.trim().split(/\s+/);
+    if (words.length === 0) return;
+
+    const duration = segEnd - segStart;
+    const timePerWord = duration / words.length;
+
+    words.forEach((word, idx) => {
+      const wordStart = segStart + (idx * timePerWord);
+      const wordEnd = wordStart + timePerWord;
+
+      // If word overlaps with our target 1-second window
+      if (wordStart < effectiveEnd && wordEnd > effectiveStart) {
+        wordsInRange.push(word);
+      }
+    });
+  });
+
+  return wordsInRange.join(' ');
+};
+
 export const downloadPDF = (blob: Blob, filename: string) => {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -1995,29 +2038,16 @@ export const generateMergedCoursePDF = async (
           y += 10;
         }
 
-        // Render Relevant Transcript Text (Full Verbatim for this Second)
+        // Render Relevant Transcript Text (Word-level accuracy for this Second)
         if (module.transcript && module.transcript.length > 0) {
-          // Find transcript segments that overlap with this frame's 1-second time window
-          const frameTranscript = module.transcript.filter(seg => {
-            const segStart = seg.start || 0;
-            const segEnd = seg.end || (segStart + 5); // Fallback to 5s if end missing
+          const verbatimText = getWordsForTimeRange(module.transcript, frameStart, frameEnd);
 
-            // Overlap logic: segment starts before frame ends AND segment ends after frame starts
-            return (segStart < frameEnd && segEnd > frameStart);
-          });
-
-          if (frameTranscript.length > 0) {
+          if (verbatimText.length > 0) {
             pdf.setFontSize(10);
             pdf.setFont('helvetica', 'normal');
             pdf.setTextColor(20, 20, 20);
 
-            // Combine text into a block
-            const combinedText = frameTranscript.map(t => {
-              const speaker = t.speaker ? `${t.speaker}: ` : '';
-              return `${speaker}${t.text}`;
-            }).join(' ');
-
-            const safeText = safe(combinedText);
+            const safeText = safe(verbatimText);
             const textLines = pdf.splitTextToSize(safeText, contentWidth);
 
             // Render text lines
@@ -2030,9 +2060,9 @@ export const generateMergedCoursePDF = async (
               pdf.text(line, margin, y);
               y += 5;
             }
-            y += 8; // Extra padding after transcript block
+            y += 8; // Extra padding
           } else {
-            // No speech recorded in this specific second
+            // No specific words in this specific second
             pdf.setFontSize(9);
             pdf.setFont('helvetica', 'italic');
             pdf.setTextColor(150, 150, 150);
