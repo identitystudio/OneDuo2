@@ -1915,7 +1915,8 @@ export const generateMergedCoursePDF = async (
       y += 10;
     }
 
-    // ========== VISUAL FRAMES SECTION ==========
+    // ========== VISUAL FRAMES & TRANSCRIPT SECTION ==========
+    // Interleave text with images for better readability
     if (module.frame_urls && module.frame_urls.length > 0) {
       if (y > pageHeight - 80) addPageWithHeaders();
       else y += 15;
@@ -1923,26 +1924,28 @@ export const generateMergedCoursePDF = async (
       pdf.setFontSize(14);
       pdf.setFont('helvetica', 'bold');
       pdf.setTextColor(0, 0, 0);
-      pdf.text(safe('Visual Frames'), margin, y);
+      pdf.text(safe('Visuals & Full Transcript'), margin, y);
       y += 10;
 
       // Sample frames evenly
       const sampledFrames = sampleFramesEvenly(module.frame_urls, Math.min(maxFrames, module.frame_urls.length));
 
-      // Cap quality for huge frame sets, but keep it high enough for UI legibility.
+      // Calculate time per frame window to match transcript
+      const timePerFrame = module.video_duration_seconds && sampledFrames.length > 0
+        ? module.video_duration_seconds / sampledFrames.length
+        : 10;
+
+      // Cap quality for huge frame sets
       const moduleRecommendedQuality = getRecommendedImageQuality(module.frame_urls.length);
       const moduleEffectiveQuality = Math.min(imageQuality, moduleRecommendedQuality);
 
       onProgress?.(progressPercent + 2, `Pre-loading ${sampledFrames.length} frames for Chapter ${i + 1}...`);
 
-      // PARALLEL LOAD OPTIMIZATION: Fetch all frames at once before loop
-      // This is 10x faster than awaiting them one-by-one in the loop
+      // Parallel load images
       await batchLoadImages(
         sampledFrames,
         moduleEffectiveQuality,
-        (loaded, total) => {
-          // Optional: update progress (fine-grained)
-        }
+        (loaded, total) => { }
       );
 
       for (let frameIdx = 0; frameIdx < sampledFrames.length; frameIdx++) {
@@ -1951,23 +1954,25 @@ export const generateMergedCoursePDF = async (
         }
 
         const frameUrl = sampledFrames[frameIdx];
-        const timestamp = module.video_duration_seconds
-          ? (frameIdx / sampledFrames.length) * module.video_duration_seconds
-          : frameIdx;
+        // Timestamps for this frame's "window"
+        const frameStart = frameIdx * timePerFrame;
+        const frameEnd = (frameIdx + 1) * timePerFrame;
 
-        pdf.setFontSize(8);
+        // Header: Frame number + timestamp
+        pdf.setFontSize(9);
         pdf.setFont('helvetica', 'bold');
-        pdf.setTextColor(100, 100, 100);
-        pdf.text(safe(`Frame ${frameIdx + 1} | ${formatTime(timestamp)}`), margin, y);
+        pdf.setTextColor(80, 80, 80);
+        pdf.text(safe(`Frame ${frameIdx + 1} | ${formatTime(frameStart)} - ${formatTime(frameEnd)}`), margin, y);
         y += 5;
 
+        // Render Image
         try {
           const imgData = await imageToBase64WithRetry(frameUrl, moduleEffectiveQuality, 2, 8000);
           if (imgData.dataUrl) {
             const imgWidth = Math.min(contentWidth, 160);
-            const imgHeight = imgWidth * 0.56; // 16:9 aspect ratio
+            const imgHeight = imgWidth * 0.56; // 16:9
 
-            if (y + imgHeight > pageHeight - 30) {
+            if (y + imgHeight > pageHeight - 40) {
               addPageWithHeaders();
             }
 
@@ -1979,6 +1984,51 @@ export const generateMergedCoursePDF = async (
           pdf.setTextColor(200, 100, 100);
           pdf.text(safe('[Frame could not be loaded]'), margin, y);
           y += 10;
+        }
+
+        // Render Relevant Transcript Text Below Image
+        if (module.transcript && module.transcript.length > 0) {
+          // Find transcript segments that overlap with this frame's time window
+          const frameTranscript = module.transcript.filter(seg => {
+            const segStart = seg.start || 0;
+            // A segment belongs to this frame if it starts within the frame's window
+            // OR if it started before but overlaps significantly into this frame
+            return (segStart >= frameStart && segStart < frameEnd);
+          });
+
+          if (frameTranscript.length > 0) {
+            pdf.setFontSize(10);
+            pdf.setFont('helvetica', 'normal');
+            pdf.setTextColor(20, 20, 20);
+
+            // Combine text into a block
+            const combinedText = frameTranscript.map(t => {
+              const speaker = t.speaker ? `${t.speaker}: ` : '';
+              return `${speaker}${t.text}`;
+            }).join(' ');
+
+            const safeText = safe(combinedText);
+            const textLines = pdf.splitTextToSize(safeText, contentWidth);
+
+            // Render text lines
+            for (const line of textLines) {
+              if (y > pageHeight - 15) {
+                addPageWithHeaders();
+                pdf.setFontSize(10);
+                pdf.setFont('helvetica', 'normal');
+              }
+              pdf.text(line, margin, y);
+              y += 5;
+            }
+            y += 8; // Extra padding after text block
+          } else {
+            // No speech in this frame window
+            pdf.setFontSize(9);
+            pdf.setFont('helvetica', 'italic');
+            pdf.setTextColor(150, 150, 150);
+            pdf.text('(No speech in this segment)', margin, y);
+            y += 10;
+          }
         }
       }
     }
