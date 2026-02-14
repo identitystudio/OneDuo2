@@ -68,6 +68,8 @@ interface FrameAnalysis {
   dependsOnPrevious?: boolean;
   // NEW: Unspoken Expert Nuance
   unspokenNuance?: UnspokenNuance;
+  // NEW: Visual Description (Visual Transcription)
+  visual_description?: string;
 }
 
 // Workflow types
@@ -212,6 +214,7 @@ export interface ModuleData {
   hidden_patterns?: IntelligenceLayerItem[];
   implementation_steps?: any[];
   oneduo_protocol?: any;
+  frameAnalyses?: (FrameAnalysis | null)[];
 }
 
 // Merged course data with all modules as chapters
@@ -1429,6 +1432,17 @@ export const generateChatGPTPDF = async (
         y += 43;
       }
 
+      // ===== VISUAL TRANSCRIPTION (NEW) =====
+      if (frameAnalysis?.visual_description) {
+        pdf.setFontSize(8);
+        pdf.setFont('helvetica', 'italic');
+        pdf.setTextColor(80, 80, 80);
+        const visualDesc = `Visual Transcription: ${frameAnalysis.visual_description}`;
+        const splitVisualDesc = pdf.splitTextToSize(visualDesc, contentWidth - 10);
+        pdf.text(splitVisualDesc, margin + 2, y + 2);
+        y += (splitVisualDesc.length * 4) + 6;
+      }
+
       // ===== OCR EXTRACTED TEXT =====
       if (hasOCR && frameAnalysis) {
         checkPageBreak(40);
@@ -2057,7 +2071,53 @@ export const generateMergedCoursePDF = async (
             }
 
             pdf.addImage(imgData.dataUrl, 'JPEG', margin, y, imgWidth, imgHeight, undefined, 'NONE');
-            y += imgHeight + 8;
+            y += imgHeight + 5;
+
+            // Render Frame Analysis if available
+            const frameAnalysis = module.frameAnalyses?.[frameIdx];
+            if (frameAnalysis) {
+              // 1. Visual Transcription (New)
+              if (frameAnalysis.visual_description) {
+                pdf.setFontSize(8);
+                pdf.setFont('helvetica', 'italic');
+                pdf.setTextColor(80, 80, 80);
+                const visualDesc = `Visual Transcription: ${frameAnalysis.visual_description}`;
+                const splitVisualDesc = pdf.splitTextToSize(safe(visualDesc), contentWidth - 10);
+                pdf.text(splitVisualDesc, margin + 2, y);
+                y += (splitVisualDesc.length * 4) + 4;
+              }
+
+              // 2. OCR Text
+              if (frameAnalysis.text && frameAnalysis.text.length > 0) {
+                pdf.setFontSize(8);
+                pdf.setFont('helvetica', 'bold');
+                pdf.setTextColor(0, 80, 120);
+                pdf.text('OCR Extracted Text:', margin + 2, y);
+                y += 4;
+                pdf.setFont('helvetica', 'normal');
+                pdf.setTextColor(60, 60, 60);
+                const ocrText = frameAnalysis.text.substring(0, 400);
+                const splitOCR = pdf.splitTextToSize(safe(ocrText), contentWidth - 10);
+                pdf.text(splitOCR, margin + 2, y);
+                y += (splitOCR.length * 4) + 4;
+              }
+
+              // 3. Instructor Intent
+              if (frameAnalysis.instructorIntent && frameAnalysis.instructorIntent.length > 0) {
+                pdf.setFontSize(8);
+                pdf.setFont('helvetica', 'bold');
+                pdf.setTextColor(150, 70, 0);
+                pdf.text('Instructor Intent:', margin + 2, y);
+                y += 4;
+                pdf.setFont('helvetica', 'normal');
+                pdf.setTextColor(80, 40, 0);
+                const intentText = frameAnalysis.instructorIntent;
+                const splitIntent = pdf.splitTextToSize(safe(intentText), contentWidth - 10);
+                pdf.text(splitIntent, margin + 2, y);
+                y += (splitIntent.length * 4) + 4;
+              }
+            }
+            y += 3;
           }
         } catch (e) {
           pdf.setFontSize(8);
