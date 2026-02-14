@@ -1319,38 +1319,25 @@ export const generateChatGPTPDF = async (
 
     const frameDuration = videoDuration > 0 ? videoDuration / Math.max(frames.length, 1) : 10;
 
-    // SEQUENTIAL TRANSCRIPT TRACKING
-    // This ensures segments are assigned once and never repeated across multiple frames
-    let currentSegmentIndex = 0;
-
     for (let i = 0; i < renderableFrameCount; i++) {
       const frameUrl = frames[i];
       const frameAnalysis = frameAnalyses[i] || null;
       const frameTime = frameAnalysis?.timestamp ?? (i * frameDuration);
-
-      // Calculate logical time boundaries for this frame
-      // We take everything from the previous midpoint to the next midpoint
-      const frameStart = i === 0 ? 0 : frameTime - (frameDuration / 2);
-      const frameEnd = i === renderableFrameCount - 1 ? videoDuration + 3600 : frameTime + (frameDuration / 2);
-
       const progress = 45 + ((i + 1) / renderableFrameCount) * 45;
       onProgress?.(Number(progress.toFixed(1)), `Embedding frame ${i + 1} of ${renderableFrameCount}...`);
 
-      // SEQUENTIAL ASSIGNMENT: Select all segments that START within this frame's window
-      // This guarantees 0% overlap and 100% coverage
-      const relevantTranscript: TranscriptSegment[] = [];
-      while (currentSegmentIndex < transcript.length) {
-        const seg = transcript[currentSegmentIndex];
+      // Use overlap-based matching: check if segment's time range overlaps with frame's time range
+      // This fixes the issue where long transcript segments (50-100s) weren't matching because
+      // their start time fell outside the narrow frame window, even when speech overlapped
+      const relevantTranscript = transcript.filter(seg => {
         const segStart = seg.start || 0;
+        const segEnd = seg.end || segStart + 60; // Default 60s if no end time provided
+        const frameStart = Math.max(0, frameTime - frameDuration / 2);
+        const frameEnd = frameTime + frameDuration / 2;
 
-        if (segStart < frameEnd) {
-          relevantTranscript.push(seg);
-          currentSegmentIndex++;
-        } else {
-          // Segment starts after this frame's window, save for next frame
-          break;
-        }
-      }
+        // Segment overlaps with frame if: segment starts before frame ends AND segment ends after frame starts
+        return segStart < frameEnd && segEnd > frameStart;
+      });
 
       const transcriptText = relevantTranscript.length > 0
         ? relevantTranscript.map(s => {
@@ -1440,33 +1427,82 @@ export const generateChatGPTPDF = async (
         y += 43;
       }
 
-      // ===== VIDEO TRANSCRIPTION (VISUAL DESCRIPTION) =====
-      // Pivot from verbal (audio) to visual (video) descriptions as per client request
-      pdf.setFontSize(10);
-      pdf.setFont('helvetica', 'bold');
-      pdf.setTextColor(40, 40, 40);
-      pdf.text('VIDEO TRANSCRIPTION (VISUAL):', margin, y);
-      y += 5;
+      // ===== OCR EXTRACTED TEXT =====
+      if (hasOCR && frameAnalysis) {
+        checkPageBreak(40);
 
-      pdf.setFont('helvetica', 'normal');
-      pdf.setTextColor(60, 60, 60);
+        const hasHighlight = frameAnalysis.emphasisFlags.highlight_detected || frameAnalysis.emphasisFlags.text_selected;
 
-      // Use instructor intent (visual action/intent) as the primary description
-      // Fallback to monologue/transcript ONLY if visual analysis is missing
-      const visualDescription = frameAnalysis?.instructorIntent || '';
-      const transcriptContent = visualDescription
-        ? visualDescription
-        : (transcriptText && transcriptText !== '(No transcript for this segment)' ? transcriptText : '(Monologue continues)');
+        if (hasHighlight) {
+          pdf.setFillColor(255, 255, 200);
+          pdf.setDrawColor(200, 180, 0);
+        } else {
+          pdf.setFillColor(240, 248, 255);
+          pdf.setDrawColor(100, 150, 200);
+        }
 
-      const splitText = pdf.splitTextToSize(transcriptContent, contentWidth - 5);
+        const ocrText = frameAnalysis.text.substring(0, 600);
+        const splitOCR = pdf.splitTextToSize(ocrText, contentWidth - 10);
+        const ocrHeight = Math.min(splitOCR.length * 4, 40) + 12;
 
-      // Check if description needs a page break
-      const descriptionHeight = splitText.length * 5;
-      checkPageBreak(descriptionHeight + 10);
+        pdf.roundedRect(margin, y, contentWidth, ocrHeight, 2, 2, 'FD');
 
-      pdf.text(splitText, margin, y);
-      y += descriptionHeight + 10;
+        y += 6;
+        pdf.setFontSize(9);
+        pdf.setFont('helvetica', 'bold');
+        pdf.setTextColor(0, 80, 120);
 
+        let ocrLabel = 'OCR Extracted Text';
+        if (hasHighlight) ocrLabel = '*HIGHLIGHTED/SELECTED TEXT*';
+        pdf.text(ocrLabel, margin + 3, y);
+        y += 5;
+
+        pdf.setFont('helvetica', 'normal');
+        pdf.setTextColor(30, 30, 30);
+        const truncatedOCR = splitOCR.slice(0, 7);
+        pdf.text(truncatedOCR, margin + 3, y);
+        y += truncatedOCR.length * 4 + 6;
+      }
+
+      // ===== INSTRUCTOR INTENT (ENHANCED WITH CONFIDENCE) =====
+      if (hasIntent && frameAnalysis) {
+        checkPageBreak(25);
+
+        const confColor = getConfidenceColor(frameAnalysis.intentSource);
+
+        pdf.setFillColor(230, 255, 230);
+        pdf.setDrawColor(0, 150, 50);
+        pdf.roundedRect(margin, y, contentWidth, 20, 2, 2, 'FD');
+
+        y += 5;
+        pdf.setFontSize(9);
+        pdf.setFont('helvetica', 'bold');
+        pdf.setTextColor(confColor.r, confColor.g, confColor.b);
+
+        const confLabel = getConfidenceLabel(frameAnalysis);
+        pdf.text(`Instructor Intent ${confLabel}:`, margin + 3, y);
+        y += 5;
+
+        pdf.setFont('helvetica', 'italic');
+        pdf.setTextColor(0, 80, 40);
+        const intentText = pdf.splitTextToSize(frameAnalysis.instructorIntent, contentWidth - 10);
+        pdf.text(intentText.slice(0, 2), margin + 3, y);
+        y += 12;
+      }
+
+      // ===== TRANSCRIPT SEGMENT (LABELED AS REFERENCE) =====
+      pdf.setFontSize(9);
+      pdf.setFont('courier', 'normal'); // Monospace for transcript consistency
+      pdf.setTextColor(30, 30, 30);
+
+      const transcriptContent = transcriptText ? `"${transcriptText}"` : '(Monologue continues)';
+      const splitText = pdf.splitTextToSize(`Transcript: ${transcriptContent}`, contentWidth - 5);
+      const textHeight = Math.min(splitText.length, 6) * 4.5;
+
+      checkPageBreak(textHeight + 10);
+
+      pdf.text(splitText.slice(0, 6), margin, y);
+      y += textHeight + 10;
     }
   } else {
     // No frames available - skip frame rendering but notify user
@@ -1903,45 +1939,21 @@ export const generateMergedCoursePDF = async (
       // This is 10x faster than awaiting them one-by-one in the loop
       await batchLoadImages(
         sampledFrames,
-        moduleEffectiveQuality
+        moduleEffectiveQuality,
+        (loaded, total) => {
+          // Optional: update progress (fine-grained)
+        }
       );
 
-      const moduleDuration = module.video_duration_seconds || 0;
-      const frameDuration = moduleDuration > 0 ? moduleDuration / Math.max(sampledFrames.length, 1) : 10;
-
-      // SEQUENTIAL TRANSCRIPT TRACKING for this module's frames
-      let currentSegmentIndex = 0;
-      const transcript = module.transcript || [];
-
       for (let frameIdx = 0; frameIdx < sampledFrames.length; frameIdx++) {
-        const frameUrl = sampledFrames[frameIdx];
-        const timestamp = moduleDuration
-          ? (frameIdx / sampledFrames.length) * moduleDuration
-          : frameIdx;
-
-        // Calculate logical time boundaries for this frame
-        const frameEnd = frameIdx === sampledFrames.length - 1 ? moduleDuration + 3600 : timestamp + (frameDuration / 2);
-
-        // Select segments sequentially
-        const relevantTranscript: TranscriptSegment[] = [];
-        while (currentSegmentIndex < transcript.length) {
-          const seg = transcript[currentSegmentIndex];
-          const segStart = seg.start || 0;
-          if (segStart < frameEnd) {
-            relevantTranscript.push(seg);
-            currentSegmentIndex++;
-          } else {
-            break;
-          }
-        }
-
-        const transcriptText = relevantTranscript.length > 0
-          ? relevantTranscript.map(s => `${s.speaker ? `${s.speaker}: ` : ''}${s.text}`).join(' ')
-          : '';
-
         if (y > pageHeight - 60) {
           addPageWithHeaders();
         }
+
+        const frameUrl = sampledFrames[frameIdx];
+        const timestamp = module.video_duration_seconds
+          ? (frameIdx / sampledFrames.length) * module.video_duration_seconds
+          : frameIdx;
 
         pdf.setFontSize(8);
         pdf.setFont('helvetica', 'bold');
@@ -1960,30 +1972,7 @@ export const generateMergedCoursePDF = async (
             }
 
             pdf.addImage(imgData.dataUrl, 'JPEG', margin, y, imgWidth, imgHeight, undefined, 'NONE');
-            y += imgHeight + 4;
-
-            // Video Transcription (Visual Description) below frame
-            pdf.setFontSize(10);
-            pdf.setFont('helvetica', 'bold');
-            pdf.setTextColor(40, 40, 40);
-            pdf.text(safe('VIDEO TRANSCRIPTION (VISUAL):'), margin + 5, y);
-            y += 5;
-
-            pdf.setFontSize(10);
-            pdf.setFont('helvetica', 'normal');
-            pdf.setTextColor(60, 60, 60);
-
-            // In merged mode, we might only have the verbal transcript unless analysis was pre-fetched
-            const transcriptContent = transcriptText ? transcriptText : '(Visual monologue continues)';
-            const splitTranscript = pdf.splitTextToSize(safe(transcriptContent), contentWidth - 10);
-            const transcriptHeight = splitTranscript.length * 5;
-
-            if (y + transcriptHeight > pageHeight - 25) {
-              addPageWithHeaders();
-            }
-
-            pdf.text(splitTranscript, margin + 5, y);
-            y += transcriptHeight + 10;
+            y += imgHeight + 8;
           }
         } catch (e) {
           pdf.setFontSize(8);

@@ -108,6 +108,11 @@ interface FrameAnalysis {
   visualHash?: string;
   boundingBoxes?: BoundingBox[];
   selectionRegions?: BoundingBox[];
+  instructorIntent?: string;
+  unspokenNuance?: {
+    type: string;
+    description: string;
+  };
   visualMetadata?: {
     hasTextSelection?: boolean;
     hasHighlightedRegion?: boolean;
@@ -129,30 +134,14 @@ function calculateVisualSimilarity(
   currentFrameData: FrameAnalysis,
   previousFrameData: FrameAnalysis
 ): number {
-  // PRIMARY: Compare visual hash signatures if available
-  if (currentFrameData.visualHash && previousFrameData.visualHash) {
-    const hash1 = currentFrameData.visualHash;
-    const hash2 = previousFrameData.visualHash;
-
-    // Hamming distance for perceptual hash comparison
-    let matchingBits = 0;
-    const totalBits = Math.min(hash1.length, hash2.length);
-
-    for (let i = 0; i < totalBits; i++) {
-      if (hash1[i] === hash2[i]) matchingBits++;
-    }
-
-    return totalBits > 0 ? matchingBits / totalBits : 0;
-  }
-
-  // SECONDARY: Compare bounding box positions (visual layout stability)
+  // PRIMARY: Compare bounding box stability (visual layout)
   if (currentFrameData.boundingBoxes && previousFrameData.boundingBoxes) {
     const currentBoxes = currentFrameData.boundingBoxes;
     const prevBoxes = previousFrameData.boundingBoxes;
 
     if (currentBoxes.length > 0 && prevBoxes.length > 0) {
       let overlapScore = 0;
-      const maxBoxes = Math.max(currentBoxes.length, prevBoxes.length);
+      const count = Math.max(currentBoxes.length, prevBoxes.length);
 
       for (const currBox of currentBoxes) {
         for (const prevBox of prevBoxes) {
@@ -163,11 +152,21 @@ function calculateVisualSimilarity(
         }
       }
 
-      return overlapScore / maxBoxes;
+      const layoutSimilarity = overlapScore / count;
+      // If layout is very stable, it's likely a pause
+      if (layoutSimilarity >= 0.9) return 0.98;
+
+      // Secondary: Check OCR text similarity as well
+      const ocrSim = calculateOcrSimilarity(
+        currentFrameData.ocrText || '',
+        previousFrameData.ocrText || ''
+      );
+
+      return (layoutSimilarity * 0.7) + (ocrSim * 0.3);
     }
   }
 
-  // TERTIARY FALLBACK: OCR text similarity (least reliable)
+  // FALLBACK: OCR text similarity 
   return calculateOcrSimilarity(
     currentFrameData.ocrText || '',
     previousFrameData.ocrText || ''
@@ -308,18 +307,26 @@ async function analyzeFrameWithVision(
         messages: [
           {
             role: 'system',
-            content: `You are analyzing a screen capture frame for human intent signals.
+            content: `You are analyzing a screen capture frame for human intent signals. 
 Detect these emphasis indicators:
-1. TEXT SELECTION: Look for highlighted/selected text regions (blue/colored background overlays on text)
-2. CURSOR POSITION: Look for mouse cursor near text or UI elements
-3. ZOOM/FOCUS: Check if content appears magnified or focused
-4. UI INTERACTIONS: Detect clicks, buttons in pressed state, form inputs with focus
+1. OCR TEXT: Extract ALL visible text in the frame.
+2. TEXT SELECTION: Look for highlighted/selected text regions (blue/colored background overlays on text).
+3. CURSOR POSITION: Look for mouse cursor near text or UI elements.
+4. ZOOM/FOCUS: Check if content appears magnified or focused.
+5. INSTRUCTOR INTENT: What is the instructor trying to SHOW or DO in this specific frame?
+6. UNSPOKEN NUANCE: Detect expert "instinct" signals like micro-hesitations or muscle memory.
 
 Return JSON only:
 {
+  "ocrText": "full text extracted",
   "hasTextSelection": boolean,
   "hasHighlightedRegion": boolean, 
   "boundingBoxes": [{"x": number, "y": number, "width": number, "height": number, "text": string, "isHighlighted": boolean}],
+  "instructorIntent": "detailed intent description",
+  "unspokenNuance": {
+    "type": "micro_hesitation|decision_point|expert_instinct|implicit_caution|muscle_memory|null",
+    "description": "the expert instinct detected"
+  },
   "dominantAction": "selection" | "navigation" | "input" | "idle"
 }`
           },
@@ -332,18 +339,18 @@ Return JSON only:
               },
               {
                 type: 'text',
-                text: `Analyze this frame (index ${frameIndex}). OCR detected: "${ocrText}". Return JSON analysis of intent signals.`
+                text: `Analyze this frame (index ${frameIndex}). Extract EVERYTHING including text and human intent signals.`
               }
             ]
           }
         ],
-        max_tokens: 500
+        max_tokens: 1000
       }),
     });
 
     if (!response.ok) {
       console.warn(`[Vision] API error for frame ${frameIndex}: ${response.status}`);
-      return simulateVisionAnalysis(frameIndex, ocrText, null);
+      return simulateVisionAnalysis(frameIndex, "", null);
     }
 
     const data = await response.json();
@@ -352,7 +359,7 @@ Return JSON only:
     // Parse JSON from response
     const jsonMatch = content.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
-      return simulateVisionAnalysis(frameIndex, ocrText, null);
+      return simulateVisionAnalysis(frameIndex, "", null);
     }
 
     const analysis = JSON.parse(jsonMatch[0]);
@@ -372,8 +379,8 @@ Return JSON only:
     const selectionRegions = boundingBoxes.filter(b => b.isHighlighted);
 
     return {
-      ocrText,
-      visualHash: generateDeterministicHash(ocrText + frameIndex),
+      ocrText: analysis.ocrText || "",
+      visualHash: generateDeterministicHash((analysis.ocrText || "") + frameIndex),
       boundingBoxes,
       selectionRegions,
       visualMetadata: {
@@ -526,11 +533,57 @@ serve(async (req) => {
     let pauseCount = 0;
     let selectionCount = 0;
 
-    for (let i = startFrom; i < framesToProcess; i++) {
-      const timestampMs = Math.floor((i / 3) * 1000);
-      const ocrText = sampleOcrTexts[i % sampleOcrTexts.length];
+    // Detect Course ID from storage path (e.g. "course_id/oneduo-3fps.pdf" or "course_id/module_id/...")
+    let courseId = "";
+    if (artifact.storage_path) {
+      courseId = artifact.storage_path.split('/')[0];
+    }
 
-      const currentAnalysis = await analyzeFrameWithVision(null, i, ocrText);
+    if (!courseId) {
+      console.warn("[OneDuo] Could not determine courseId from storage_path, using fallback");
+      // Fallback: try to find courseId from courses table using video_url
+      const { data: courseByUrl } = await supabase
+        .from("courses")
+        .select("id")
+        .eq("video_url", artifact.video_url)
+        .maybeSingle();
+      if (courseByUrl) courseId = courseByUrl.id;
+    }
+
+    // Get frame URLs from storage if not already in DB
+    const frameBase = `${courseId}/frames/3fps`;
+    console.log(`[OneDuo] Scanning frames in: ${frameBase}`);
+
+    const { data: storageFrames, error: listError } = await supabase.storage
+      .from("course-files")
+      .list(frameBase, {
+        limit: 10000,
+        sortBy: { column: 'name', order: 'asc' }
+      });
+
+    if (listError) {
+      console.warn("[OneDuo] Could not list frames from storage:", listError);
+    }
+
+    const totalAvailableFrames = storageFrames?.length || 0;
+    const processCount = Math.min(totalAvailableFrames || framesToProcess, 15000);
+
+    for (let i = startFrom; i < processCount; i++) {
+      const timestampMs = Math.floor((i / 3) * 1000);
+
+      // Get frame URL from storage file name if available, else fallback to index-based
+      let frameName = storageFrames?.[i]?.name || `frame_${String(i).padStart(5, '0')}.jpg`;
+      const framePath = `${frameBase}/${frameName}`;
+
+      const { data: urlData } = supabase.storage
+        .from("course-files")
+        .getPublicUrl(framePath);
+
+      const frameUrl = urlData.publicUrl;
+
+      // CORE: Vision Analysis on sampled frames (e.g. every 3rd frame or if change detected)
+      // For forensic accuracy, we analyze high-potential frames
+      const currentAnalysis = await analyzeFrameWithVision(frameUrl, i, "");
 
       let cursorPause = false;
       if (previousAnalysis) {
@@ -556,13 +609,23 @@ serve(async (req) => {
       score = Math.max(score, 0.05);
 
       const confidenceLevel = score >= 0.80 ? "HIGH" : score >= 0.50 ? "MEDIUM" : "LOW";
+
+      const ocrText = currentAnalysis.ocrText || "";
       const isCritical = criticalKeywords.some(kw => ocrText.toLowerCase().includes(kw));
+
+      // Combine intent and nuance for the visual_description column
+      let visualDescription = currentAnalysis.instructorIntent || "";
+      if (currentAnalysis.unspokenNuance?.type && currentAnalysis.unspokenNuance.type !== 'null') {
+        visualDescription += `\n[NUANCE: ${currentAnalysis.unspokenNuance.type.toUpperCase()}] ${currentAnalysis.unspokenNuance.description}`;
+      }
 
       const frameData = {
         artifact_id: artifactId,
         frame_index: i,
         timestamp_ms: timestampMs,
         ocr_text: ocrText,
+        screenshot_url: frameUrl,
+        visual_description: visualDescription,
         cursor_pause: cursorPause,
         text_selected: textSelected,
         zoom_focus: zoomFocus,
@@ -581,21 +644,25 @@ serve(async (req) => {
       if (textSelected) selectionCount++;
 
       // INSTANT SAVE: Insert when batch limit reached OR last frame
-      if (batchFrames.length >= batchSize || i === framesToProcess - 1) {
+      if (batchFrames.length >= batchSize || i === processCount - 1) {
         const { error: insertError } = await supabase
           .from("artifact_frames")
-          .insert(batchFrames);
+          .upsert(batchFrames, { onConflict: 'artifact_id,frame_index' });
 
         if (insertError) {
-          console.error(`[OneDuo] Batch insert error at index ${i}:`, insertError);
-          // Don't throw - try to continue or at least return what we have
+          console.error(`[OneDuo] Batch upsert error at index ${i}:`, insertError);
         } else {
-          console.log(`[OneDuo] Saved batch up to frame ${i} (${Math.round((i / framesToProcess) * 100)}%)`);
+          console.log(`[OneDuo] Saved batch up to frame ${i} (${Math.round((i / processCount) * 100)}%)`);
         }
         batchFrames = []; // Clear for next batch
       }
 
       previousAnalysis = currentAnalysis;
+
+      // Add small delay to avoid rate limits on Vision API if processing many frames
+      if (i % 10 === 0) {
+        await new Promise(r => setTimeout(r, 100));
+      }
     }
 
     // After all frames are processed, update the artifact status

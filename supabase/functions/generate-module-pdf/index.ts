@@ -55,16 +55,16 @@ async function generateModulePdfData(module: ModuleData): Promise<{
   const moduleTitle = (module.title || "Untitled Module").slice(0, 50);
   const courseTitle = (module.courses?.title || "Course").slice(0, 40);
   const shortTitle = moduleTitle.slice(0, 30);
-  
+
   // Calculate duration
   const durationMin = Math.floor((module.video_duration_seconds || 0) / 60);
   const durationSec = ((module.video_duration_seconds || 0) % 60).toString().padStart(2, "0");
   const totalDuration = `${durationMin}:${durationSec}`;
-  
+
   // First step reference
   const firstSegment = module.transcript?.[0];
-  const firstStep = firstSegment 
-    ? `Step 1 begins at ${Math.floor(firstSegment.start / 60)}:${(firstSegment.start % 60).toString().padStart(2, "0")}` 
+  const firstStep = firstSegment
+    ? `Step 1 begins at ${Math.floor(firstSegment.start / 60)}:${(firstSegment.start % 60).toString().padStart(2, "0")}`
     : "Review the transcript below";
 
   const metadata = {
@@ -124,7 +124,7 @@ I'm your guided playback system for ${shortTitle}.`,
 
 (press 📚 anytime for library knowledge mode)`,
     thenWait: "STOP and WAIT for the user to answer YES or NO before continuing.",
-    
+
     ifYes: {
       askVision: "Perfect — you've got the context. What's your vision / what business are you building with this?",
       afterVision: `🕹️ Welcome to the game of getting it done.
@@ -146,7 +146,7 @@ Your remote is active:
 
 Judge 🔨 👑, what is your first command?`
     },
-    
+
     ifNo: {
       giveSummary: "First, give a ONE PARAGRAPH summary of the module's core teaching (not bullet points).",
       thenAsk: `Before we dive in, let me understand what you're building so I can make this relevant.
@@ -155,7 +155,7 @@ What's your vision / what business are you working on?`,
       guidedMode: "After they answer, ask ONE question at a time. Check understanding before the next concept. Connect each concept to their stated vision.",
       afterVisionShowBoardroom: true
     },
-    
+
     libraryMode: {
       activation: "When user types 📚, switch to library/reference mode.",
       response: "📚 Library mode activated. What concept do you want to look up from this module? (type 🕹️ to return to game mode)",
@@ -259,7 +259,7 @@ What's your vision / what business are you working on?`,
     validation,
     essentialCommands,
     founderEscalation,
-    
+
     systemInstructions: {
       role: `You are the ${shortTitle} VIDEO SCRUB GUIDE with an Executive Board of advisors.`,
       context: `This is a OneDuo artifact PDF generated from "${courseTitle}" - Module ${module.module_number}: "${moduleTitle}". Treat this as a 3-FPS forensic capture. You "watched" this video.`,
@@ -354,20 +354,20 @@ What's your vision / what business are you working on?`,
     // === MANDATORY INSTRUCTIONS FIRST ===
     _AI_INSTRUCTIONS: "READ THIS FIRST. Your response MUST follow mandatoryFirstResponse below.",
     oneduoProtocol,
-    
+
     // === THEN METADATA ===
     metadata,
-    
+
     // === SUPPLEMENTARY DOCUMENTS (if any) ===
     ...(supplementaryContent && { supplementaryDocuments: supplementaryContent }),
-    
+
     // === THEN CONTENT ===
     transcript: module.transcript || [],
     frameUrls: module.frame_urls || [],
     audioEvents: module.audio_events || {},
     prosodyAnnotations: module.prosody_annotations || {},
     aiContext: module.ai_context || "",
-    
+
     // === REMINDER AT END ===
     _FINAL_REMINDER: reminderBlock
   }, null, 2);
@@ -423,10 +423,10 @@ serve(async (req) => {
     if (module.status !== "completed") {
       console.log(`[generate-module-pdf] Module status is ${module.status}, not completed yet`);
       return new Response(
-        JSON.stringify({ 
-          success: false, 
+        JSON.stringify({
+          success: false,
           error: "Module is not yet completed",
-          status: module.status 
+          status: module.status
         }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 400 }
       );
@@ -437,7 +437,7 @@ serve(async (req) => {
 
     // Upload to storage as JSON (client will generate actual PDF)
     const storagePath = `${module.course_id}/module_${module.module_number}/oneduo_data.json`;
-    
+
     const { error: uploadError } = await supabase.storage
       .from("course-files")
       .upload(storagePath, content, {
@@ -474,8 +474,8 @@ serve(async (req) => {
 
     const { error: updateError } = await supabase
       .from("course_modules")
-      .update({ 
-        module_files: updatedFiles 
+      .update({
+        module_files: updatedFiles
       })
       .eq("id", module.id);
 
@@ -499,7 +499,7 @@ serve(async (req) => {
   } catch (error) {
     console.error("[generate-module-pdf] Error:", error);
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
-    
+
     return new Response(
       JSON.stringify({ success: false, error: errorMessage }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 500 }
