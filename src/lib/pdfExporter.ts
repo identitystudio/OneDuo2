@@ -1739,7 +1739,7 @@ export const generateMergedCoursePDF = async (
   const safe = (v: unknown) => sanitizePdfText(v);
 
   // IMPORTANT: default imageQuality must be high; we cap it per-module based on frame count.
-  const { maxFrames = 1000, imageQuality = 1.0 } = options;
+  const { maxFrames = 1000, imageQuality = 1.0, includeOCR = false, ocrBatchSize = 5, fastMode = false } = options;
 
   const watermarkEmail = safe(mergedCourse.userEmail || localStorage.getItem('courseagent_email') || '');
   const watermarkTimestamp = new Date().toISOString().replace('T', ' ').substring(0, 19) + ' UTC';
@@ -2043,6 +2043,37 @@ export const generateMergedCoursePDF = async (
           // Optional: update progress (fine-grained)
         }
       );
+
+      // ========== RUN FRAME ANALYSIS (OCR + Visual Transcription) ==========
+      // If includeOCR is enabled and module doesn't already have frame analyses,
+      // run the extract-frame-text function to get visual_description for each frame.
+      const effectiveIncludeOCR = fastMode ? false : includeOCR;
+      if (effectiveIncludeOCR && (!module.frameAnalyses || module.frameAnalyses.length === 0)) {
+        onProgress?.(progressPercent + 3, `Running visual transcription for Chapter ${i + 1} (${sampledFrames.length} frames)...`);
+
+        const moduleTranscript = module.transcript || [];
+        const moduleDuration = module.video_duration_seconds || 0;
+
+        try {
+          const analyses = await extractFrameTextsWithProgress(
+            sampledFrames,
+            moduleDuration,
+            moduleTranscript,
+            (p, s) => {
+              // Sub-progress within this chapter's OCR phase
+              const subProgress = progressPercent + 3 + (p / 100) * 5;
+              onProgress?.(Number(subProgress.toFixed(1)), `Ch.${i + 1} visual transcription: ${s}`);
+            },
+            ocrBatchSize
+          );
+          // Attach the analyses to the module so the rendering loop below can use them
+          module.frameAnalyses = analyses;
+          console.log(`[MergedPDF] Visual transcription complete for Ch.${i + 1}: ${analyses.filter(a => a?.visual_description).length}/${analyses.length} frames described`);
+        } catch (ocrErr) {
+          console.warn(`[MergedPDF] Visual transcription failed for Ch.${i + 1}:`, ocrErr);
+          // Continue without visual transcription — frames will still render
+        }
+      }
 
       for (let frameIdx = 0; frameIdx < sampledFrames.length; frameIdx++) {
         if (y > pageHeight - 60) {
