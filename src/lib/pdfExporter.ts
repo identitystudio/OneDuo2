@@ -193,6 +193,7 @@ interface CourseData {
   implementation_steps?: any[];
   video_url?: string;
   created_at?: string;
+  oneduo_protocol?: any;
 }
 
 // Module data for merged course PDF
@@ -210,6 +211,7 @@ export interface ModuleData {
   concepts_frameworks?: IntelligenceLayerItem[];
   hidden_patterns?: IntelligenceLayerItem[];
   implementation_steps?: any[];
+  oneduo_protocol?: any;
 }
 
 // Merged course data with all modules as chapters
@@ -1403,7 +1405,7 @@ export const generateChatGPTPDF = async (
           const imgHeight = 40;
           // Preserve quality (avoid extra internal compression)
           pdf.addImage(base64Image, 'JPEG', margin, y, imgWidth, imgHeight, undefined, 'NONE');
-          y += imgHeight + 5;
+          y += imgHeight + 3;
         } else {
           // Log which frame failed for debugging
           console.warn(`[pdfExporter] Frame ${i + 1} failed to load: ${frameUrl.substring(0, 60)}...`);
@@ -1508,6 +1510,89 @@ export const generateChatGPTPDF = async (
     // No frames available - skip frame rendering but notify user
     onProgress?.(90, 'No frames available - generating transcript-only PDF...');
     console.log('[pdfExporter] Skipping frame blocks - no persisted frames available');
+  }
+
+  // ========== ONEDUO AI PROTOCOL (THINKING LAYER) ==========
+  if (course.oneduo_protocol) {
+    onProgress?.(82, 'Adding OneDuo Thinking Layer...');
+    addPageWithHeaders();
+
+    pdf.setFontSize(18);
+    pdf.setFont('helvetica', 'bold');
+    pdf.setTextColor(0, 0, 0);
+    pdf.text('ONEDUO AI THINKING LAYER', margin, y);
+    y += 12;
+
+    const protocol = typeof course.oneduo_protocol === 'string'
+      ? JSON.parse(course.oneduo_protocol).oneduoProtocol
+      : (course.oneduo_protocol.oneduoProtocol || course.oneduo_protocol);
+
+    if (protocol) {
+      // Executive Board
+      if (protocol.executiveBoard) {
+        pdf.setFontSize(14);
+        pdf.setFont('helvetica', 'bold');
+        pdf.setTextColor(25, 118, 210);
+        pdf.text('Tactical Advisory: The Executive Board', margin, y);
+        y += 8;
+
+        Object.entries(protocol.executiveBoard).forEach(([key, member]: [string, any]) => {
+          if (key.startsWith('_')) return;
+          checkPageBreak(25);
+          pdf.setFontSize(11);
+          pdf.setFont('helvetica', 'bold');
+          pdf.setTextColor(0, 0, 0);
+          pdf.text(`${member.emoji} ${member.title}: ${member.persona}`, margin + 5, y);
+          y += 6;
+          pdf.setFont('helvetica', 'italic');
+          pdf.setFontSize(10);
+          pdf.setTextColor(80, 80, 80);
+          const focusLines = pdf.splitTextToSize(`Focus: ${member.focus}`, contentWidth - 15);
+          pdf.text(focusLines, margin + 10, y);
+          y += focusLines.length * 5 + 4;
+        });
+        y += 6;
+      }
+
+      // Commands
+      if (protocol.essentialCommands) {
+        checkPageBreak(50);
+        pdf.setFontSize(14);
+        pdf.setFont('helvetica', 'bold');
+        pdf.setTextColor(25, 118, 210);
+        pdf.text('Essential Commands & Remote Control', margin, y);
+        y += 8;
+
+        protocol.essentialCommands.commands?.forEach((cmd: any) => {
+          checkPageBreak(10);
+          pdf.setFontSize(10);
+          pdf.setFont('helvetica', 'bold');
+          pdf.setTextColor(0, 0, 0);
+          pdf.text(`${cmd.emoji} ${cmd.code}`, margin + 5, y);
+          pdf.setFont('helvetica', 'normal');
+          pdf.text(` - ${cmd.desc}`, margin + 35, y);
+          y += 6;
+        });
+        y += 6;
+      }
+
+      // Escalation
+      if (protocol.founderEscalation) {
+        checkPageBreak(40);
+        pdf.setFontSize(14);
+        pdf.setFont('helvetica', 'bold');
+        pdf.setTextColor(180, 0, 0); // Red for escalation
+        pdf.text('Founder Escalation Protocol (🚨)', margin, y);
+        y += 8;
+
+        pdf.setFontSize(10);
+        pdf.setFont('helvetica', 'normal');
+        pdf.setTextColor(50, 50, 50);
+        const escLines = pdf.splitTextToSize("When the VA hits a decision point that requires founder-specific knowledge (brand, budget, or strategy), execution will PAUSE and generate a formatted alert message.", contentWidth - 10);
+        pdf.text(escLines, margin + 5, y);
+        y += escLines.length * 5 + 6;
+      }
+    }
   }
 
   // ========== SUPPLEMENTARY TRAINING DOCUMENTS SECTION ==========
@@ -1640,7 +1725,7 @@ export const generateMergedCoursePDF = async (
   const safe = (v: unknown) => sanitizePdfText(v);
 
   // IMPORTANT: default imageQuality must be high; we cap it per-module based on frame count.
-  const { maxFrames = 1000, imageQuality = 1.0, includeOCR = false } = options;
+  const { maxFrames = 1000, imageQuality = 1.0 } = options;
 
   const watermarkEmail = safe(mergedCourse.userEmail || localStorage.getItem('courseagent_email') || '');
   const watermarkTimestamp = new Date().toISOString().replace('T', ' ').substring(0, 19) + ' UTC';
@@ -1686,12 +1771,6 @@ export const generateMergedCoursePDF = async (
       pdf.setFontSize(6);
       pdf.setTextColor(130, 130, 130);
       pdf.text('This artifact is for private authorized educational use only.', pageWidth / 2, footerY + 4, { align: 'center' });
-    }
-  };
-
-  const checkPageBreak = (neededHeight: number) => {
-    if (y + neededHeight > pageHeight - 35) {
-      addPageWithHeaders();
     }
   };
 
@@ -1946,21 +2025,10 @@ export const generateMergedCoursePDF = async (
       await batchLoadImages(
         sampledFrames,
         moduleEffectiveQuality,
+        (loaded, total) => {
+          // Optional: update progress (fine-grained)
+        }
       );
-
-      let frameAnalyses: (FrameAnalysis | null)[] = [];
-      if (includeOCR) {
-        onProgress?.(progressPercent + 5, `Analyzing frames with AI vision for Chapter ${i + 1}...`);
-        frameAnalyses = await extractFrameTextsWithProgress(
-          sampledFrames,
-          module.video_duration_seconds || 0,
-          module.transcript || [],
-          (p, s) => {
-            // Fine-grained progress not needed inside the loop
-          },
-          3 // Batch size
-        );
-      }
 
       for (let frameIdx = 0; frameIdx < sampledFrames.length; frameIdx++) {
         if (y > pageHeight - 60) {
@@ -1989,42 +2057,79 @@ export const generateMergedCoursePDF = async (
             }
 
             pdf.addImage(imgData.dataUrl, 'JPEG', margin, y, imgWidth, imgHeight, undefined, 'NONE');
-            y += imgHeight + 5;
-
-            // Render OCR text if available (transcribed visual text)
-            const frameAnalysis = frameAnalyses[frameIdx];
-            if (includeOCR && frameAnalysis && frameAnalysis.text.length > 0) {
-              const ocrText = frameAnalysis.text.substring(0, 600);
-              const splitOCR = pdf.splitTextToSize(ocrText, contentWidth - 10);
-              const ocrHeight = Math.min(splitOCR.length * 4, 40) + 12;
-
-              checkPageBreak(ocrHeight + 5);
-
-              pdf.setFillColor(240, 248, 255);
-              pdf.setDrawColor(100, 150, 200);
-              pdf.roundedRect(margin, y, contentWidth, ocrHeight, 2, 2, 'FD');
-
-              y += 6;
-              pdf.setFontSize(9);
-              pdf.setFont('helvetica', 'bold');
-              pdf.setTextColor(0, 80, 120);
-              pdf.text('OCR Extracted Text:', margin + 3, y);
-              y += 5;
-
-              pdf.setFont('helvetica', 'normal');
-              pdf.setTextColor(30, 30, 30);
-              const truncatedOCR = splitOCR.slice(0, 7);
-              pdf.text(truncatedOCR, margin + 3, y);
-              y += truncatedOCR.length * 4 + 6;
-            } else {
-              y += 3; // Extra gap if no OCR
-            }
+            y += imgHeight + 8;
           }
         } catch (e) {
           pdf.setFontSize(8);
           pdf.setTextColor(200, 100, 100);
           pdf.text(safe('[Frame could not be loaded]'), margin, y);
           y += 10;
+        }
+      }
+    }
+
+    // ========== ONEDUO AI PROTOCOL (THINKING LAYER) ==========
+    if (module.oneduo_protocol) {
+      if (y > pageHeight - 60) addPageWithHeaders();
+      else y += 10;
+
+      pdf.setFontSize(16);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setTextColor(0, 0, 0);
+      pdf.text(safe('OneDuo AI Thinking Layer'), margin, y);
+      y += 10;
+
+      const protocol = typeof module.oneduo_protocol === 'string'
+        ? JSON.parse(module.oneduo_protocol).oneduoProtocol
+        : (module.oneduo_protocol.oneduoProtocol || module.oneduo_protocol);
+
+      if (protocol) {
+        // Executive Board
+        if (protocol.executiveBoard) {
+          pdf.setFontSize(12);
+          pdf.setFont('helvetica', 'bold');
+          pdf.setTextColor(25, 118, 210);
+          pdf.text(safe('Executive Board Advisors'), margin + 5, y);
+          y += 6;
+
+          Object.entries(protocol.executiveBoard).forEach(([key, member]: [string, any]) => {
+            if (key.startsWith('_')) return;
+            if (y > pageHeight - 30) addPageWithHeaders();
+            pdf.setFontSize(10);
+            pdf.setFont('helvetica', 'bold');
+            pdf.setTextColor(0, 0, 0);
+            pdf.text(safe(`${member.emoji} ${member.title}: ${member.persona}`), margin + 10, y);
+            y += 5;
+            pdf.setFont('helvetica', 'italic');
+            pdf.setFontSize(9);
+            pdf.setTextColor(100, 100, 100);
+            const focusLines = pdf.splitTextToSize(safe(`Focus: ${member.focus}`), contentWidth - 25);
+            pdf.text(focusLines, margin + 15, y);
+            y += focusLines.length * 4.5 + 3;
+          });
+          y += 5;
+        }
+
+        // Essential Commands
+        if (protocol.essentialCommands) {
+          if (y > pageHeight - 40) addPageWithHeaders();
+          pdf.setFontSize(12);
+          pdf.setFont('helvetica', 'bold');
+          pdf.setTextColor(25, 118, 210);
+          pdf.text(safe('Playback Commands'), margin + 5, y);
+          y += 6;
+
+          protocol.essentialCommands.commands?.slice(0, 6).forEach((cmd: any) => {
+            if (y > pageHeight - 15) addPageWithHeaders();
+            pdf.setFontSize(9);
+            pdf.setFont('helvetica', 'bold');
+            pdf.setTextColor(0, 0, 0);
+            pdf.text(safe(`${cmd.emoji} ${cmd.code}`), margin + 10, y);
+            pdf.setFont('helvetica', 'normal');
+            pdf.text(safe(` - ${cmd.desc}`), margin + 35, y);
+            y += 5;
+          });
+          y += 5;
         }
       }
     }

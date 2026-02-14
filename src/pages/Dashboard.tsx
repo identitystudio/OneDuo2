@@ -1535,6 +1535,20 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
         loadedSupplementalFiles = loadedResults.map(r => ({ name: r.name, content: r.content, size: r.size }));
       }
 
+      // ========== FETCH ONEDUO PROTOCOL ==========
+      let oneduoProtocol: any = null;
+      try {
+        const protocolFile = (courseData.module_files || []).find((f: any) => f.type === 'pdf_data');
+        if (protocolFile?.url) {
+          const response = await fetch(protocolFile.url);
+          if (response.ok) {
+            oneduoProtocol = await response.json();
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to fetch OneDuo protocol:', e);
+      }
+
       // Wrap PDF generation in a try-catch to prevent UI crashes
       let pdfBlob: Blob;
       try {
@@ -1547,7 +1561,8 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
             frame_urls: courseData.frame_urls,
             audio_events: courseData.audio_events,
             prosody_annotations: courseData.prosody_annotations,
-            supplementalFiles: loadedSupplementalFiles
+            supplementalFiles: loadedSupplementalFiles,
+            oneduo_protocol: oneduoProtocol
           },
           (progress, status) => {
             setPdfProgress(prev => ({ ...prev, progress: 25 + (progress / 100) * 75, status }));
@@ -1687,6 +1702,20 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
         loadedSupplementalFiles = loadedResults.map(r => ({ name: r.name, content: r.content, size: r.size }));
       }
 
+      // ========== FETCH ONEDUO PROTOCOL ==========
+      let oneduoProtocol: any = null;
+      try {
+        const protocolFile = (moduleData.module_files || []).find((f: any) => f.type === 'pdf_data');
+        if (protocolFile?.url) {
+          const response = await fetch(protocolFile.url);
+          if (response.ok) {
+            oneduoProtocol = await response.json();
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to fetch OneDuo protocol:', e);
+      }
+
       // Wrap PDF generation in a try-catch to prevent UI crashes
       let pdfBlob: Blob;
       try {
@@ -1699,7 +1728,8 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
             frame_urls: moduleData.frame_urls || [],
             audio_events: moduleData.audio_events,
             prosody_annotations: moduleData.prosody_annotations,
-            supplementalFiles: loadedSupplementalFiles
+            supplementalFiles: loadedSupplementalFiles,
+            oneduo_protocol: oneduoProtocol
           },
           (progress, status) => {
             setPdfProgress(prev => ({ ...prev, progress: 25 + (progress / 100) * 75, status }));
@@ -1830,6 +1860,20 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
 
         if (!moduleData) continue;
 
+        // ========== FETCH ONEDUO PROTOCOL ==========
+        let oneduoProtocol: any = null;
+        try {
+          const protocolFile = (moduleData.module_files || []).find((f: any) => f.type === 'pdf_data');
+          if (protocolFile?.url) {
+            const response = await fetch(protocolFile.url);
+            if (response.ok) {
+              oneduoProtocol = await response.json();
+            }
+          }
+        } catch (e) {
+          console.warn(`Failed to fetch OneDuo protocol for module ${item.id}:`, e);
+        }
+
         // Add to modules array for merged PDF
         modules.push({
           id: moduleData.id,
@@ -1844,6 +1888,7 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
           concepts_frameworks: moduleData.concepts_frameworks,
           hidden_patterns: moduleData.hidden_patterns,
           implementation_steps: moduleData.implementation_steps,
+          oneduo_protocol: oneduoProtocol,
         });
       }
 

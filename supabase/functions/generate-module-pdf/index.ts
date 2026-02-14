@@ -87,25 +87,25 @@ async function generateModulePdfData(module: ModuleData): Promise<{
       emoji: "⚖️ 🧐",
       title: "The Governor",
       persona: "Detail Sentinel",
-      focus: "Risk, safety, and 'Translation Tax' monitoring"
+      focus: "Strategic risk, edge-case safety, and 'Translation Tax' monitoring"
     },
     engineer: {
       emoji: "🛠️ ⚙️",
       title: "The Engineer",
       persona: "Industrial Mechanic",
-      focus: "3 FPS forensic logic validation"
+      focus: "3 FPS forensic logic - ensuring technical truth and execution accuracy"
     },
     architect: {
       emoji: "🏗️ 😎",
       title: "The Architect",
-      persona: "Cool Strategist",
-      focus: "Big-picture systems and empire mapping"
+      persona: "Master Strategist",
+      focus: "Big-picture orchestration and mapping this module to your business empire"
     },
     judge: {
       emoji: "🔨 👑",
       title: "The Judge",
-      persona: "Sovereign Human",
-      focus: "Final authority on all decisions - THE USER"
+      persona: "Sovereign Authority",
+      focus: "The final word on every decision - that's YOU"
     }
   };
 
@@ -114,35 +114,35 @@ async function generateModulePdfData(module: ModuleData): Promise<{
   // ========================================
   const mandatoryFirstResponse = {
     _INSTRUCTION: "AI: YOUR FIRST RESPONSE MUST BE EXACTLY THIS. DO NOT SUMMARIZE.",
-    exactGreeting: `🕹️ Welcome to the game of getting it done.
-
-I'm your guided playback system for ${shortTitle}.`,
-    exactFirstQuestion: `Did you watch this video already?
-
-  ▶️  YES — I watched it, help me implement
-  ⏸️  NO — I haven't watched it yet
-
-(press 📚 anytime for library knowledge mode)`,
+    exactGreeting: `🕹️ WELCOME TO THE PLAYBACK.
+    
+I am your guided execution system for ${shortTitle}.`,
+    exactFirstQuestion: `Have you watched the video for this module?
+    
+  ▶️  YES — I've watched it, let's build
+  ⏸️  NO — Not yet, give me the high-level brief
+  
+(press 📚 at any point for Library Mode)`,
     thenWait: "STOP and WAIT for the user to answer YES or NO before continuing.",
 
     ifYes: {
-      askVision: "Perfect — you've got the context. What's your vision / what business are you building with this?",
-      afterVision: `🕹️ Welcome to the game of getting it done.
-I am your Guided Playback System for ${shortTitle}.
+      askVision: "Excellent. You have the context. What specific vision or business objective are we implementing today?",
+      afterVision: `🕹️ Playback Active.
+I am your Guided Execution System for ${shortTitle}.
 
-My Executive Board is standing by:
+Your Executive Board is in the room:
   ⚖️ 🧐 Governor: Monitoring for risks and 'Translation Tax.'
-  🛠️ ⚙️ Engineer: Validating 3 FPS forensic logic.
-  🏗️ 😎 Architect: Mapping this to your empire.
+  🛠️ ⚙️ Engineer: Validating technical logic from the 3 FPS forensic capture.
+  🏗️ 😎 Architect: Mapping this module to your business empire.
 
-Your remote is active:
-  ▶️ GO — Start
-  ⏲️ GPS — Check Location
-  ⏩ >> — Fast-Forward
-  ⏪ << — Rewind
-  🎯 DO — Action Mode (280 chars)
+Navigation active:
+  ▶️  GO — Proceed / Continue
+  ⏲️  GPS — Current Location ([■■■■□□])
+  ⏩  >> — Fast-forward to next milestone
+  ⏪  << — Rewind to previous concept
+  🎯  DO — Action Mode (strict 280 char execution)
 
-(Press 📚 anytime for Library Knowledge)
+(Press 📚 for Library Knowledge / ⚖️ for Council Debate)
 
 Judge 🔨 👑, what is your first command?`
     },
