@@ -1440,20 +1440,32 @@ export const generateChatGPTPDF = async (
         y += 43;
       }
 
-      // ===== TRANSCRIPT SEGMENT (NOW BELOW IMAGE) =====
+      // ===== VIDEO TRANSCRIPTION (VISUAL DESCRIPTION) =====
+      // Pivot from verbal (audio) to visual (video) descriptions as per client request
       pdf.setFontSize(10);
-      pdf.setFont('helvetica', 'normal'); // Cleaner sans-serif for primary reading
-      pdf.setTextColor(30, 30, 30);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setTextColor(40, 40, 40);
+      pdf.text('VIDEO TRANSCRIPTION (VISUAL):', margin, y);
+      y += 5;
 
-      const transcriptContent = transcriptText ? transcriptText : '(Monologue continues)';
+      pdf.setFont('helvetica', 'normal');
+      pdf.setTextColor(60, 60, 60);
+
+      // Use instructor intent (visual action/intent) as the primary description
+      // Fallback to monologue/transcript ONLY if visual analysis is missing
+      const visualDescription = frameAnalysis?.instructorIntent || '';
+      const transcriptContent = visualDescription
+        ? visualDescription
+        : (transcriptText && transcriptText !== '(No transcript for this segment)' ? transcriptText : '(Monologue continues)');
+
       const splitText = pdf.splitTextToSize(transcriptContent, contentWidth - 5);
 
-      // Check if transcript needs a page break
-      const transcriptHeight = splitText.length * 5;
-      checkPageBreak(transcriptHeight + 10);
+      // Check if description needs a page break
+      const descriptionHeight = splitText.length * 5;
+      checkPageBreak(descriptionHeight + 10);
 
       pdf.text(splitText, margin, y);
-      y += transcriptHeight + 10;
+      y += descriptionHeight + 10;
 
     }
   } else {
@@ -1950,24 +1962,28 @@ export const generateMergedCoursePDF = async (
             pdf.addImage(imgData.dataUrl, 'JPEG', margin, y, imgWidth, imgHeight, undefined, 'NONE');
             y += imgHeight + 4;
 
-            // Render matched transcript below frame
-            if (transcriptText) {
-              pdf.setFontSize(10);
-              pdf.setFont('helvetica', 'normal');
-              pdf.setTextColor(40, 40, 40);
+            // Video Transcription (Visual Description) below frame
+            pdf.setFontSize(10);
+            pdf.setFont('helvetica', 'bold');
+            pdf.setTextColor(40, 40, 40);
+            pdf.text(safe('VIDEO TRANSCRIPTION (VISUAL):'), margin + 5, y);
+            y += 5;
 
-              const splitTranscript = pdf.splitTextToSize(safe(transcriptText), contentWidth - 10);
-              const transcriptHeight = splitTranscript.length * 5;
+            pdf.setFontSize(10);
+            pdf.setFont('helvetica', 'normal');
+            pdf.setTextColor(60, 60, 60);
 
-              if (y + transcriptHeight > pageHeight - 25) {
-                addPageWithHeaders();
-              }
+            // In merged mode, we might only have the verbal transcript unless analysis was pre-fetched
+            const transcriptContent = transcriptText ? transcriptText : '(Visual monologue continues)';
+            const splitTranscript = pdf.splitTextToSize(safe(transcriptContent), contentWidth - 10);
+            const transcriptHeight = splitTranscript.length * 5;
 
-              pdf.text(splitTranscript, margin + 5, y);
-              y += transcriptHeight + 10;
-            } else {
-              y += 4; // Minimal gap if no text
+            if (y + transcriptHeight > pageHeight - 25) {
+              addPageWithHeaders();
             }
+
+            pdf.text(splitTranscript, margin + 5, y);
+            y += transcriptHeight + 10;
           }
         } catch (e) {
           pdf.setFontSize(8);
