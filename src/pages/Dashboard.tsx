@@ -1566,10 +1566,6 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
           },
           (progress, status) => {
             setPdfProgress(prev => ({ ...prev, progress: 25 + (progress / 100) * 75, status }));
-          },
-          {
-            includeOCR: true,
-            fastMode: false
           }
         );
       } catch (pdfError) {
@@ -1737,10 +1733,6 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
           },
           (progress, status) => {
             setPdfProgress(prev => ({ ...prev, progress: 25 + (progress / 100) * 75, status }));
-          },
-          {
-            includeOCR: true,
-            fastMode: false
           }
         );
       } catch (pdfError) {
@@ -1997,10 +1989,7 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
             const scaledProgress = 50 + (progress * 0.50);
             setPdfProgress(prev => ({ ...prev, progress: scaledProgress, status }));
           },
-          {
-            maxFrames: 500, // Reduced for stability during OCR
-            includeOCR: true
-          }
+          { maxFrames: 1000 } // Allow more frames per module for merged PDFs
         );
       } catch (pdfError) {
         console.error('PDF generation failed:', pdfError);

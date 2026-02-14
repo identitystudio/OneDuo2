@@ -68,8 +68,6 @@ interface FrameAnalysis {
   dependsOnPrevious?: boolean;
   // NEW: Unspoken Expert Nuance
   unspokenNuance?: UnspokenNuance;
-  // NEW: Visual Description (Visual Transcription)
-  visual_description?: string;
 }
 
 // Workflow types
@@ -214,7 +212,6 @@ export interface ModuleData {
   hidden_patterns?: IntelligenceLayerItem[];
   implementation_steps?: any[];
   oneduo_protocol?: any;
-  frameAnalyses?: (FrameAnalysis | null)[];
 }
 
 // Merged course data with all modules as chapters
@@ -1432,17 +1429,6 @@ export const generateChatGPTPDF = async (
         y += 43;
       }
 
-      // ===== VISUAL TRANSCRIPTION (NEW) =====
-      if (frameAnalysis?.visual_description) {
-        pdf.setFontSize(8);
-        pdf.setFont('helvetica', 'italic');
-        pdf.setTextColor(80, 80, 80);
-        const visualDesc = `Visual Transcription: ${frameAnalysis.visual_description}`;
-        const splitVisualDesc = pdf.splitTextToSize(visualDesc, contentWidth - 10);
-        pdf.text(splitVisualDesc, margin + 2, y + 2);
-        y += (splitVisualDesc.length * 4) + 6;
-      }
-
       // ===== OCR EXTRACTED TEXT =====
       if (hasOCR && frameAnalysis) {
         checkPageBreak(40);
@@ -1739,7 +1725,7 @@ export const generateMergedCoursePDF = async (
   const safe = (v: unknown) => sanitizePdfText(v);
 
   // IMPORTANT: default imageQuality must be high; we cap it per-module based on frame count.
-  const { maxFrames = 1000, imageQuality = 1.0, includeOCR = false, ocrBatchSize = 5, fastMode = false } = options;
+  const { maxFrames = 1000, imageQuality = 1.0 } = options;
 
   const watermarkEmail = safe(mergedCourse.userEmail || localStorage.getItem('courseagent_email') || '');
   const watermarkTimestamp = new Date().toISOString().replace('T', ' ').substring(0, 19) + ' UTC';
@@ -2044,37 +2030,6 @@ export const generateMergedCoursePDF = async (
         }
       );
 
-      // ========== RUN FRAME ANALYSIS (OCR + Visual Transcription) ==========
-      // If includeOCR is enabled and module doesn't already have frame analyses,
-      // run the extract-frame-text function to get visual_description for each frame.
-      const effectiveIncludeOCR = fastMode ? false : includeOCR;
-      if (effectiveIncludeOCR && (!module.frameAnalyses || module.frameAnalyses.length === 0)) {
-        onProgress?.(progressPercent + 3, `Running visual transcription for Chapter ${i + 1} (${sampledFrames.length} frames)...`);
-
-        const moduleTranscript = module.transcript || [];
-        const moduleDuration = module.video_duration_seconds || 0;
-
-        try {
-          const analyses = await extractFrameTextsWithProgress(
-            sampledFrames,
-            moduleDuration,
-            moduleTranscript,
-            (p, s) => {
-              // Sub-progress within this chapter's OCR phase
-              const subProgress = progressPercent + 3 + (p / 100) * 5;
-              onProgress?.(Number(subProgress.toFixed(1)), `Ch.${i + 1} visual transcription: ${s}`);
-            },
-            ocrBatchSize
-          );
-          // Attach the analyses to the module so the rendering loop below can use them
-          module.frameAnalyses = analyses;
-          console.log(`[MergedPDF] Visual transcription complete for Ch.${i + 1}: ${analyses.filter(a => a?.visual_description).length}/${analyses.length} frames described`);
-        } catch (ocrErr) {
-          console.warn(`[MergedPDF] Visual transcription failed for Ch.${i + 1}:`, ocrErr);
-          // Continue without visual transcription — frames will still render
-        }
-      }
-
       for (let frameIdx = 0; frameIdx < sampledFrames.length; frameIdx++) {
         if (y > pageHeight - 60) {
           addPageWithHeaders();
@@ -2102,53 +2057,7 @@ export const generateMergedCoursePDF = async (
             }
 
             pdf.addImage(imgData.dataUrl, 'JPEG', margin, y, imgWidth, imgHeight, undefined, 'NONE');
-            y += imgHeight + 5;
-
-            // Render Frame Analysis if available
-            const frameAnalysis = module.frameAnalyses?.[frameIdx];
-            if (frameAnalysis) {
-              // 1. Visual Transcription (New)
-              if (frameAnalysis.visual_description) {
-                pdf.setFontSize(8);
-                pdf.setFont('helvetica', 'italic');
-                pdf.setTextColor(80, 80, 80);
-                const visualDesc = `Visual Transcription: ${frameAnalysis.visual_description}`;
-                const splitVisualDesc = pdf.splitTextToSize(safe(visualDesc), contentWidth - 10);
-                pdf.text(splitVisualDesc, margin + 2, y);
-                y += (splitVisualDesc.length * 4) + 4;
-              }
-
-              // 2. OCR Text
-              if (frameAnalysis.text && frameAnalysis.text.length > 0) {
-                pdf.setFontSize(8);
-                pdf.setFont('helvetica', 'bold');
-                pdf.setTextColor(0, 80, 120);
-                pdf.text('OCR Extracted Text:', margin + 2, y);
-                y += 4;
-                pdf.setFont('helvetica', 'normal');
-                pdf.setTextColor(60, 60, 60);
-                const ocrText = frameAnalysis.text.substring(0, 400);
-                const splitOCR = pdf.splitTextToSize(safe(ocrText), contentWidth - 10);
-                pdf.text(splitOCR, margin + 2, y);
-                y += (splitOCR.length * 4) + 4;
-              }
-
-              // 3. Instructor Intent
-              if (frameAnalysis.instructorIntent && frameAnalysis.instructorIntent.length > 0) {
-                pdf.setFontSize(8);
-                pdf.setFont('helvetica', 'bold');
-                pdf.setTextColor(150, 70, 0);
-                pdf.text('Instructor Intent:', margin + 2, y);
-                y += 4;
-                pdf.setFont('helvetica', 'normal');
-                pdf.setTextColor(80, 40, 0);
-                const intentText = frameAnalysis.instructorIntent;
-                const splitIntent = pdf.splitTextToSize(safe(intentText), contentWidth - 10);
-                pdf.text(splitIntent, margin + 2, y);
-                y += (splitIntent.length * 4) + 4;
-              }
-            }
-            y += 3;
+            y += imgHeight + 8;
           }
         } catch (e) {
           pdf.setFontSize(8);
