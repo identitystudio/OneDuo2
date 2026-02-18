@@ -258,162 +258,54 @@ const extractFrameTextsWithProgress = async (
   videoDuration: number,
   transcript: TranscriptSegment[],
   onProgress?: (progress: number, status: string) => void,
-  batchSize: number = 7 // Increased to 7 for better token efficiency and lower RPM (Requests Per Minute)
+  batchSize: number = 7 // Process in batches to balance progress updates and API efficiency
 ): Promise<(FrameAnalysis | null)[]> => {
-  const GEMINI_API_KEY = "AIzaSyBQkDNE_7YmmhLrVHpGHQyjNqrg6ZkwazI";
   const results: (FrameAnalysis | null)[] = [];
   const totalFrames = frameUrls.length;
 
-  // Build transcript context for verbal intent detection
+  // Build transcript context for verbal intent detection (shared across all batches)
   const transcriptContext = transcript.slice(0, 50).map(t => t.text).join(' ').substring(0, 2000);
-  const frameDuration = videoDuration > 0 ? videoDuration / Math.max(totalFrames, 1) : 10;
-
-  const systemPrompt = `You are ONEDUO — an execution intelligence system for course/tutorial frame analysis.
-Transform unstructured content into structured, actionable systems.
-
-Extract:
-1. ALL visible text (slides, code, UI)
-2. VISUAL TRANSCRIPTION: A clear, descriptive caption of what's happening visually.
-3. INSTRUCTOR INTENT: What the instructor wants the user to DO.
-4. PROSODY: Infer tone and pacing from visual cues.
-5. EMPHASIS: Detect highlights, bolding, cursor pauses.
-
-Respond MUST be in this exact JSON format:
-{
-  "text": "all visible text",
-  "visualDescription": "Detailed visual transcription of the frame",
-  "textType": "slide|document|ui|code|other",
-  "emphasisFlags": {
-    "highlight_detected": boolean,
-    "cursor_pause": boolean,
-    "zoom_focus": boolean,
-    "text_selected": boolean,
-    "lingering_frame": boolean,
-    "bold_text": boolean,
-    "underline_detected": boolean
-  },
-  "keyElements": ["element1", "element2"],
-  "instructorIntent": "Action-oriented intent",
-  "prosody": {
-    "tone": "neutral|emphatic|questioning|excited|serious|sarcastic|hesitant",
-    "pacing": "normal|fast|slow|pausing",
-    "volume": "normal|loud|soft",
-    "parenthetical": "(screenplay annotation)"
-  },
-  "dependsOnPrevious": boolean
-}`;
-
-  // Exponential backoff helper
-  const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
   for (let i = 0; i < totalFrames; i += batchSize) {
-    const currentBatchPaths = frameUrls.slice(i, i + batchSize);
-    const currentBatchIndices = Array.from({ length: currentBatchPaths.length }, (_, k) => i + k);
+    const currentBatch = frameUrls.slice(i, i + batchSize);
 
-    let lastError: any = null;
-    let fallbackDelay = 2000;
-    let success = false;
+    try {
+      onProgress?.(
+        Math.min(95, Number((10 + (i / totalFrames) * 85).toFixed(1))),
+        `Analyzing frames ${i + 1}-${Math.min(i + batchSize, totalFrames)} / ${totalFrames} (Replicate)`
+      );
 
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        onProgress?.(Number(((i / totalFrames) * 100).toFixed(1)), `Analyzing batch ${Math.floor(i / batchSize) + 1} (${currentBatchPaths.length} frames)...`);
-
-        const batchParts: any[] = [];
-        for (let j = 0; j < currentBatchPaths.length; j++) {
-          const path = currentBatchPaths[j];
-          const idx = currentBatchIndices[j];
-          const ts = idx * frameDuration;
-
-          const imgResp = await fetch(path);
-          const imgBlob = await imgResp.blob();
-          const arrayBuffer = await imgBlob.arrayBuffer();
-          const base64Image = btoa(
-            new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
-          );
-          const mimeType = imgBlob.type || 'image/jpeg';
-
-          batchParts.push({ text: `FRAME_${idx + 1}_TIMESTAMP: ${Math.floor(ts / 60)}:${String(Math.floor(ts % 60)).padStart(2, '0')}` });
-          batchParts.push({ inline_data: { mime_type: mimeType, data: base64Image } });
+      const { data, error } = await supabase.functions.invoke('extract-frame-text', {
+        body: {
+          frameUrls: currentBatch,
+          videoDuration,
+          startIndex: i,
+          transcriptContext,
+          allowPartialResults: true
         }
+      });
 
-        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{
-              parts: [
-                ...batchParts,
-                { text: `Transcript Context: "${transcriptContext}". Extract text and visual transcriptions for the ${currentBatchPaths.length} frames above. Respond with an array of JSON objects matching the specified schema.` }
-              ]
-            }],
-            system_instruction: {
-              parts: [{ text: `${systemPrompt}\n\nIMPORTANT: Return a JSON ARRAY of exactly ${currentBatchPaths.length} objects, one for each frame in order.` }]
-            },
-            generation_config: { response_mime_type: "application/json" }
-          })
+      if (error) throw error;
+
+      if (data?.results && Array.isArray(data.results)) {
+        data.results.forEach((res: FrameAnalysis | null, idx: number) => {
+          results[i + idx] = res;
+          console.log(`frame ${i + idx + 1}: successful visual transcription (Replicate)`);
         });
-
-        if (response.status === 429 || response.status === 503) {
-          console.warn(`Gemini Rate Limit (${response.status}). Retrying in ${fallbackDelay}ms...`);
-          await delay(fallbackDelay);
-          fallbackDelay *= 2;
-          continue;
-        }
-
-        if (!response.ok) throw new Error(`Gemini API error: ${response.status}`);
-
-        const data = await response.json();
-        const content = data.candidates?.[0]?.content?.parts?.[0]?.text || '[]';
-        const parsedBatch = JSON.parse(content);
-
-        // Ensure we handle array or object response (AI sometimes wraps)
-        const frameResults = Array.isArray(parsedBatch) ? parsedBatch : [parsedBatch];
-
-        for (let k = 0; k < currentBatchPaths.length; k++) {
-          const raw = frameResults[k] || {};
-          const frameIndex = currentBatchIndices[k];
-          const timestamp = frameIndex * frameDuration;
-
-          const frameAnalysis: FrameAnalysis = {
-            frameIndex,
-            timestamp,
-            text: raw.text || '',
-            visualDescription: raw.visualDescription || '',
-            textType: raw.textType || 'other',
-            emphasisFlags: {
-              highlight_detected: !!raw.emphasisFlags?.highlight_detected,
-              cursor_pause: !!raw.emphasisFlags?.cursor_pause,
-              zoom_focus: !!raw.emphasisFlags?.zoom_focus,
-              text_selected: !!raw.emphasisFlags?.text_selected,
-              lingering_frame: !!raw.emphasisFlags?.lingering_frame,
-              bold_text: !!raw.emphasisFlags?.bold_text,
-              underline_detected: !!raw.emphasisFlags?.underline_detected,
-            },
-            keyElements: raw.keyElements || [],
-            instructorIntent: raw.instructorIntent || '',
-            prosody: raw.prosody || { tone: 'neutral', pacing: 'normal', volume: 'normal', parenthetical: '' },
-            dependsOnPrevious: !!raw.dependsOnPrevious
-          };
-
-          results[frameIndex] = frameAnalysis;
-          console.log(`frame ${frameIndex + 1}: successful visual transcription`);
-        }
-
-        success = true;
-        break;
-      } catch (err: any) {
-        lastError = err;
-        console.error(`Batch starting at index ${i} failed (attempt ${attempt + 1}):`, err);
-        await delay(fallbackDelay);
-        fallbackDelay *= 2;
+      } else {
+        console.warn(`No results returned for batch at index ${i}`);
+        currentBatch.forEach((_, idx) => {
+          results[i + idx] = null;
+        });
       }
-    }
-
-    if (!success) {
-      console.error(`Batch starting at index ${i} failed after 3 attempts. Filling with nulls.`);
-      currentBatchIndices.forEach(idx => results[idx] = null);
+    } catch (err) {
+      console.error(`Batch analysis failed at index ${i}:`, err);
+      currentBatch.forEach((_, idx) => {
+        results[i + idx] = null;
+      });
     }
   }
+
   return results;
 };
 
