@@ -29,6 +29,7 @@ import CaseStudy from "./pages/CaseStudy";
 import Evidence from "./pages/Evidence";
 import DownloadPage from "./pages/Download";
 import DownloadModulePage from "./pages/DownloadModule";
+import DownloadFile from "./pages/DownloadFile";
 import FoundersNotes from "./pages/FoundersNotes";
 import Watch from "./pages/Watch";
 import NotFound from "./pages/NotFound";
@@ -52,47 +53,48 @@ const App = () => (
         <BrowserRouter>
           <UploadProgressBanner />
           <Routes>
-          <Route path="/" element={<Landing />} />
-          <Route path="/auth" element={<Auth />} />
-          <Route path="/signup" element={<Auth />} />
-          <Route path="/login" element={<Auth />} />
-          <Route path="/ecom" element={<LandingEcom />} />
-          <Route path="/film" element={<LandingFilm />} />
-          <Route path="/affiliate" element={<Affiliate />} />
-          <Route path="/upload" element={<AuthGuard><Upload /></AuthGuard>} />
-          <Route path="/dashboard" element={<AuthGuard><Dashboard /></AuthGuard>} />
-          <Route path="/chat/:courseId" element={<AuthGuard><Chat /></AuthGuard>} />
-          <Route path="/pricing" element={<Pricing />} />
-          <Route path="/soundboard" element={<Soundboard />} />
-          <Route path="/view/:courseId" element={<CourseView />} />
-          <Route path="/watch" element={<Watch />} />
-          <Route path="/download/:courseId" element={<DownloadPage />} />
-          <Route path="/download/module/:moduleId" element={<DownloadModulePage />} />
+            <Route path="/" element={<Landing />} />
+            <Route path="/auth" element={<Auth />} />
+            <Route path="/signup" element={<Auth />} />
+            <Route path="/login" element={<Auth />} />
+            <Route path="/ecom" element={<LandingEcom />} />
+            <Route path="/film" element={<LandingFilm />} />
+            <Route path="/affiliate" element={<Affiliate />} />
+            <Route path="/upload" element={<AuthGuard><Upload /></AuthGuard>} />
+            <Route path="/dashboard" element={<AuthGuard><Dashboard /></AuthGuard>} />
+            <Route path="/chat/:courseId" element={<AuthGuard><Chat /></AuthGuard>} />
+            <Route path="/pricing" element={<Pricing />} />
+            <Route path="/soundboard" element={<Soundboard />} />
+            <Route path="/view/:courseId" element={<CourseView />} />
+            <Route path="/watch" element={<Watch />} />
+            <Route path="/download/:courseId" element={<DownloadPage />} />
+            <Route path="/download/module/:moduleId" element={<DownloadModulePage />} />
+            <Route path="/download-file" element={<DownloadFile />} />
             <Route path="/admin" element={<AdminDashboard />} />
             <Route path="/admin/ops" element={<OpsDashboard />} />
             <Route path="/admin/users" element={<UserViewDashboard />} />
             <Route path="/admin/queue" element={<QueueMonitor />} />
-          <Route path="/terms" element={<Terms />} />
-          <Route path="/privacy" element={<Privacy />} />
-          <Route path="/help" element={<HelpCenter />} />
-          <Route path="/press" element={<Press />} />
-          <Route path="/case-study" element={<CaseStudy />} />
-          <Route path="/evidence" element={<AuthGuard><Evidence /></AuthGuard>} />
-          <Route path="/founders-notes" element={<AuthGuard><FoundersNotes /></AuthGuard>} />
-          <Route path="/ip-notice" element={<IPNotice />} />
-          {/* Transformation Engine Routes */}
-          <Route path="/transform" element={<AuthGuard><Transform /></AuthGuard>} />
-          <Route path="/transform/:artifactId/review" element={<AuthGuard><TransformReview /></AuthGuard>} />
-          <Route path="/artifacts" element={<AuthGuard><Artifacts /></AuthGuard>} />
-          <Route path="/patent-figures" element={<AuthGuard><PatentFigures /></AuthGuard>} />
+            <Route path="/terms" element={<Terms />} />
+            <Route path="/privacy" element={<Privacy />} />
+            <Route path="/help" element={<HelpCenter />} />
+            <Route path="/press" element={<Press />} />
+            <Route path="/case-study" element={<CaseStudy />} />
+            <Route path="/evidence" element={<AuthGuard><Evidence /></AuthGuard>} />
+            <Route path="/founders-notes" element={<AuthGuard><FoundersNotes /></AuthGuard>} />
+            <Route path="/ip-notice" element={<IPNotice />} />
+            {/* Transformation Engine Routes */}
+            <Route path="/transform" element={<AuthGuard><Transform /></AuthGuard>} />
+            <Route path="/transform/:artifactId/review" element={<AuthGuard><TransformReview /></AuthGuard>} />
+            <Route path="/artifacts" element={<AuthGuard><Artifacts /></AuthGuard>} />
+            <Route path="/patent-figures" element={<AuthGuard><PatentFigures /></AuthGuard>} />
             <Route path="/patent-archive" element={<AuthGuard><PatentArchive /></AuthGuard>} />
             {/* Upload Reliability Simulator - Sandbox only */}
             <Route path="/upload-simulator" element={<UploadSimulator />} />
             <Route path="*" element={<NotFound />} />
-        </Routes>
-      </BrowserRouter>
-    </TooltipProvider>
-  </QueryClientProvider>
+          </Routes>
+        </BrowserRouter>
+      </TooltipProvider>
+    </QueryClientProvider>
   </HelmetProvider>
 );
 

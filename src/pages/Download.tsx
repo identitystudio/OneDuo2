@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useParams, Link, useSearchParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
-import { Download as DownloadIcon, CheckCircle, Loader2, FileText, MessageSquare, AlertCircle, Package, Film, Layers, RefreshCw } from "lucide-react";
+import { Download as DownloadIcon, CheckCircle, Loader2, FileText, MessageSquare, AlertCircle, Package, Film, Layers, RefreshCw, Mail } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { generateChatGPTPDF } from "@/lib/pdfExporter";
 import { generateMemoryPackage, ExportMode } from "@/lib/memoryExporter";
@@ -41,10 +41,10 @@ const DownloadPage = () => {
   const [searchParams] = useSearchParams();
   const moduleParam = searchParams.get('module');
   const salvageMode = searchParams.get('salvage') === 'true';
-  
+
   const { user } = useAuth();
   const userEmail = user?.email;
-  
+
   const [course, setCourse] = useState<CourseData | null>(null);
   const [module, setModule] = useState<ModuleData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -57,6 +57,8 @@ const DownloadPage = () => {
   const [filmMode, setFilmMode] = useState(false);
   const [isPartial, setIsPartial] = useState(false);
   const [noDataAvailable, setNoDataAvailable] = useState(false);
+  const [emailing, setEmailing] = useState(false);
+  const [emailSent, setEmailSent] = useState(false);
   const hasAutoTriggered = useRef(false);
 
   useEffect(() => {
@@ -72,10 +74,10 @@ const DownloadPage = () => {
         // use get-export-data endpoint which works for partial/failed courses
         if (userEmail && salvageMode) {
           console.log(`[Download] Using salvage path for course ${courseId}`);
-          
+
           const moduleNumber = moduleParam ? parseInt(moduleParam, 10) : undefined;
           const { data, error: fetchError } = await supabase.functions.invoke('process-course', {
-            body: { 
+            body: {
               action: 'get-export-data',
               courseId,
               email: userEmail,
@@ -87,7 +89,7 @@ const DownloadPage = () => {
           if (data.error) throw new Error(data.error);
 
           setIsPartial(data.isPartial);
-          
+
           // Check if there's any data to export
           if (!data.hasTranscript && !data.hasFrames) {
             setNoDataAvailable(true);
@@ -97,11 +99,11 @@ const DownloadPage = () => {
 
           if (data.module) {
             setModule(data.module);
-            setCourse({ 
-              id: courseId, 
-              title: data.module.courseTitle, 
+            setCourse({
+              id: courseId,
+              title: data.module.courseTitle,
               status: data.module.status,
-              is_multi_module: true 
+              is_multi_module: true
             });
           } else if (data.course) {
             setCourse({
@@ -117,7 +119,7 @@ const DownloadPage = () => {
         if (moduleParam) {
           const moduleNumber = parseInt(moduleParam, 10);
           console.log(`[Download] Fetching module ${moduleNumber} for course ${courseId}`);
-          
+
           const { data, error: fetchError } = await supabase.functions.invoke('get-module-data', {
             body: { courseId, moduleNumber }
           });
@@ -126,11 +128,11 @@ const DownloadPage = () => {
           if (data.error) throw new Error(data.error);
 
           setModule(data.module);
-          setCourse({ 
-            id: courseId, 
-            title: data.module.courseTitle, 
+          setCourse({
+            id: courseId,
+            title: data.module.courseTitle,
             status: 'completed',
-            is_multi_module: true 
+            is_multi_module: true
           });
         } else {
           // Try the public endpoint for course data
@@ -142,14 +144,14 @@ const DownloadPage = () => {
           if (data.error) throw new Error(data.error);
 
           // Check if this is a multi-module course without frame data
-          const isMultiModule = data.course.is_multi_module || 
+          const isMultiModule = data.course.is_multi_module ||
             (!data.course.frame_urls || data.course.frame_urls.length === 0);
-          
+
           if (isMultiModule && !data.course.frame_urls?.length) {
             // For multi-module courses, we need to fetch module data
             // Try to get the first module's data
             console.log(`[Download] Multi-module course detected, fetching module 1`);
-            
+
             const { data: moduleData, error: moduleError } = await supabase.functions.invoke('get-module-data', {
               body: { courseId, moduleNumber: 1 }
             });
@@ -158,7 +160,7 @@ const DownloadPage = () => {
               setModule(moduleData.module);
             }
           }
-          
+
           setCourse({
             ...data.course,
             is_multi_module: isMultiModule
@@ -196,18 +198,18 @@ const DownloadPage = () => {
 
     setDownloading(true);
     setDownloadProgress(0);
-    
-    const formatLabel = selectedFormat === 'pdf' ? 'PDF' : 
+
+    const formatLabel = selectedFormat === 'pdf' ? 'PDF' :
       selectedFormat === 'memory-training' ? 'Training Memory Package' : 'Creative Memory Package';
     setDownloadStatus(`Preparing your OneDuo ${formatLabel}...`);
 
     // Track download
     try {
       await supabase.functions.invoke('log-download', {
-        body: { 
-          courseId: courseId, 
+        body: {
+          courseId: courseId,
           moduleId: module?.id,
-          source: module ? 'module_download' : 'dashboard' 
+          source: module ? 'module_download' : 'dashboard'
         }
       });
     } catch (e) {
@@ -218,7 +220,7 @@ const DownloadPage = () => {
       let blob: Blob;
       let filename: string;
 
-      const title = module 
+      const title = module
         ? `${course?.title || 'Course'} - ${module.title}`
         : course?.title || 'OneDuo';
 
@@ -276,6 +278,80 @@ const DownloadPage = () => {
     }
   };
 
+  const handleEmailPdf = async () => {
+    if (!userEmail) {
+      toast.error("You must be logged in to email the PDF.");
+      return;
+    }
+
+    const downloadData = module || course;
+    if (!downloadData) return;
+
+    setEmailing(true);
+    setDownloadProgress(0);
+    setDownloadStatus("Generating PDF for email delivery...");
+
+    try {
+      const title = module
+        ? `${course?.title || 'Course'} - ${module.title}`
+        : course?.title || 'OneDuo';
+
+      const dataForExport = {
+        id: module?.id || courseId,
+        title,
+        video_duration_seconds: module?.video_duration_seconds || course?.video_duration_seconds,
+        transcript: module?.transcript || course?.transcript || [],
+        frame_urls: module?.frame_urls || course?.frame_urls || [],
+        audio_events: module?.audio_events || course?.audio_events,
+        prosody_annotations: module?.prosody_annotations || course?.prosody_annotations,
+      };
+
+      const blob = await generateChatGPTPDF(
+        dataForExport,
+        (progress, status) => {
+          setDownloadProgress(progress);
+          setDownloadStatus(status);
+        }
+      );
+
+      const filename = `OneDuo_${title.replace(/[^a-zA-Z0-9]/g, "_")}_${Date.now()}.pdf`;
+      const storagePath = `exports/${filename}`;
+
+      setDownloadStatus("Uploading PDF...");
+
+      const { error: uploadError } = await supabase.storage
+        .from('course-files')
+        .upload(storagePath, blob, {
+          contentType: 'application/pdf',
+          upsert: true
+        });
+
+      if (uploadError) throw uploadError;
+
+      setDownloadStatus("Sending email...");
+
+      const { data: emailData, error: emailError } = await supabase.functions.invoke('send-pdf-email', {
+        body: {
+          courseId,
+          email: userEmail,
+          filePath: storagePath,
+          fileName: filename
+        }
+      });
+
+      if (emailError) throw new Error(emailError.message);
+      if (emailData.error) throw new Error(emailData.error);
+
+      setEmailSent(true);
+      toast.success("PDF has been sent to your email!");
+    } catch (err: any) {
+      console.error("Email failed:", err);
+      toast.error("Failed to email PDF. Please try again or download directly.");
+    } finally {
+      setEmailing(false);
+    }
+  };
+
   // Handle no data available state
   if (noDataAvailable) {
     return (
@@ -330,12 +406,12 @@ const DownloadPage = () => {
     );
   }
 
-  const displayTitle = module 
-    ? `${module.title}` 
+  const displayTitle = module
+    ? `${module.title}`
     : course?.title;
 
-  const displaySubtitle = module && course 
-    ? `Module ${module.moduleNumber} of ${course.title}` 
+  const displaySubtitle = module && course
+    ? `Module ${module.moduleNumber} of ${course.title}`
     : null;
 
   return (
@@ -378,13 +454,13 @@ const DownloadPage = () => {
                 </Link>
               </div>
             </div>
-          ) : downloading ? (
-            // Downloading State
+          ) : downloading || emailing ? (
+            // Downloading/Emailing State
             <div className="text-center">
               <div className="w-20 h-20 bg-primary/10 rounded-full flex items-center justify-center mx-auto mb-6">
                 <Loader2 className="h-10 w-10 text-primary animate-spin" />
               </div>
-              <h2 className="text-2xl font-bold mb-2">Generating Your PDF</h2>
+              <h2 className="text-2xl font-bold mb-2">{emailing ? 'Emailing Your PDF' : 'Generating Your PDF'}</h2>
               <p className="text-muted-foreground mb-6">{downloadStatus}</p>
 
               {/* Progress Bar */}
@@ -403,10 +479,10 @@ const DownloadPage = () => {
                 {module ? <Layers className={`h-10 w-10 ${isPartial ? 'text-amber-500' : 'text-primary'}`} /> : <FileText className={`h-10 w-10 ${isPartial ? 'text-amber-500' : 'text-primary'}`} />}
               </div>
               <h2 className="text-2xl font-bold mb-2">
-                {isPartial 
-                  ? 'Partial Data Available' 
-                  : module 
-                    ? `Module ${module.moduleNumber} Ready` 
+                {isPartial
+                  ? 'Partial Data Available'
+                  : module
+                    ? `Module ${module.moduleNumber} Ready`
                     : 'Your OneDuo is Ready'}
               </h2>
               <p className="text-muted-foreground mb-2">
@@ -415,7 +491,7 @@ const DownloadPage = () => {
               {displaySubtitle && (
                 <p className="text-sm text-muted-foreground mb-4">{displaySubtitle}</p>
               )}
-              
+
               {/* Partial Data Warning */}
               {isPartial && (
                 <div className="mb-6 p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-left">
@@ -432,11 +508,10 @@ const DownloadPage = () => {
                 <div className="grid gap-2">
                   <button
                     onClick={() => setSelectedFormat('pdf')}
-                    className={`p-3 rounded-lg border text-left transition-all ${
-                      selectedFormat === 'pdf' 
-                        ? 'border-primary bg-primary/5' 
+                    className={`p-3 rounded-lg border text-left transition-all ${selectedFormat === 'pdf'
+                        ? 'border-primary bg-primary/5'
                         : 'border-border hover:border-primary/50'
-                    }`}
+                      }`}
                   >
                     <div className="flex items-center gap-3">
                       <FileText className="h-5 w-5 text-primary" />
@@ -446,14 +521,13 @@ const DownloadPage = () => {
                       </div>
                     </div>
                   </button>
-                  
+
                   <button
                     onClick={() => setSelectedFormat('memory-training')}
-                    className={`p-3 rounded-lg border text-left transition-all ${
-                      selectedFormat === 'memory-training' 
-                        ? 'border-primary bg-primary/5' 
+                    className={`p-3 rounded-lg border text-left transition-all ${selectedFormat === 'memory-training'
+                        ? 'border-primary bg-primary/5'
                         : 'border-border hover:border-primary/50'
-                    }`}
+                      }`}
                   >
                     <div className="flex items-center gap-3">
                       <Package className="h-5 w-5 text-green-500" />
@@ -463,14 +537,13 @@ const DownloadPage = () => {
                       </div>
                     </div>
                   </button>
-                  
+
                   <button
                     onClick={() => setSelectedFormat('memory-creative')}
-                    className={`p-3 rounded-lg border text-left transition-all ${
-                      selectedFormat === 'memory-creative' 
-                        ? 'border-primary bg-primary/5' 
+                    className={`p-3 rounded-lg border text-left transition-all ${selectedFormat === 'memory-creative'
+                        ? 'border-primary bg-primary/5'
                         : 'border-border hover:border-primary/50'
-                    }`}
+                      }`}
                   >
                     <div className="flex items-center gap-3">
                       <Film className="h-5 w-5 text-purple-500" />
@@ -501,13 +574,37 @@ const DownloadPage = () => {
                 )}
               </div>
 
-              <Button onClick={handleDownload} size="lg" className="w-full text-lg py-6">
-                <DownloadIcon className="h-5 w-5 mr-2" />
-                {selectedFormat === 'pdf' ? 'Download PDF' : 'Download Memory Package'}
-              </Button>
+              <div className="grid gap-3">
+                <Button onClick={handleDownload} size="lg" className="w-full text-lg py-6">
+                  <DownloadIcon className="h-5 w-5 mr-2" />
+                  {selectedFormat === 'pdf' ? 'Download PDF' : 'Download Memory Package'}
+                </Button>
+
+                {selectedFormat === 'pdf' && userEmail && (
+                  <Button
+                    onClick={handleEmailPdf}
+                    variant="outline"
+                    size="lg"
+                    className="w-full text-lg py-6"
+                    disabled={emailSent}
+                  >
+                    {emailSent ? (
+                      <>
+                        <CheckCircle className="h-5 w-5 mr-2 text-green-500" />
+                        Email Sent
+                      </>
+                    ) : (
+                      <>
+                        <Mail className="h-5 w-5 mr-2" />
+                        Email me the PDF
+                      </>
+                    )}
+                  </Button>
+                )}
+              </div>
 
               <p className="text-xs text-muted-foreground mt-4">
-                {selectedFormat === 'pdf' 
+                {selectedFormat === 'pdf'
                   ? 'Your PDF includes all frames, transcripts, and AI instructions'
                   : 'ZIP includes memory.json, keyframes, transcript, and README'}
               </p>
