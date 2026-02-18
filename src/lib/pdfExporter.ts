@@ -68,8 +68,6 @@ interface FrameAnalysis {
   dependsOnPrevious?: boolean;
   // NEW: Unspoken Expert Nuance
   unspokenNuance?: UnspokenNuance;
-  // NEW: Visual description for PDF captions
-  visualDescription?: string;
 }
 
 // Workflow types
@@ -275,8 +273,6 @@ const extractFrameTextsWithProgress = async (
     const batchProgress = ((batchIndex + 1) / totalBatches) * 100;
     onProgress?.(Number(batchProgress.toFixed(1)), `Analyzing frames ${startIdx + 1}-${endIdx} of ${totalFrames}...`);
 
-    console.log(`[pdfExporter] Calling Gemini 2.5 Flash via extract-frame-text for frames ${startIdx + 1}-${endIdx}...`);
-
     try {
       const { data, error } = await supabase.functions.invoke('extract-frame-text', {
         body: {
@@ -311,8 +307,6 @@ const analyzeWorkflowSequences = async (
   onProgress?: (progress: number, status: string) => void
 ): Promise<WorkflowAnalysis | null> => {
   onProgress?.(36, 'Analyzing workflow sequences and dependencies...');
-
-  console.log(`[pdfExporter] Calling Gemini 2.5 Flash via analyze-workflow-sequence...`);
 
   try {
     const { data, error } = await supabase.functions.invoke('analyze-workflow-sequence', {
@@ -1381,9 +1375,7 @@ export const generateChatGPTPDF = async (
 
       pdf.setFontSize(8);
       pdf.setTextColor(100, 100, 100);
-      // Use visualDescription if available, else fallback to instructorIntent
-      const captionText = frameAnalysis?.visualDescription || frameAnalysis?.instructorIntent || 'Observe screen state';
-      const action = captionText.substring(0, 80);
+      const action = frameAnalysis?.instructorIntent?.substring(0, 80) || 'Observe screen state';
       const confidence = (frameAnalysis?.intentConfidence || 0.8) * 100;
       const instruction = confidence >= 80 ? 'Execute and verify.' : 'Verify with human if UI differs.';
       pdf.text(`[VALIDATION CHECKPOINT] (${action}, ${confidence.toFixed(0)}%, AI: ${instruction})`, margin + 4, y);
@@ -1643,7 +1635,6 @@ export const generateMergedCoursePDF = async (
   onProgress?: (progress: number, status: string) => void,
   options: ExportOptions = {}
 ): Promise<Blob> => {
-  console.log(`[CombinedPDF] Generating merged PDF using Gemini 2.5 Flash for transcription...`);
   // jsPDF built-in fonts are not Unicode-safe. Sanitize all user-provided text
   // (transcripts + extracted docs) to prevent hard crashes during pdf.text().
   const safe = (v: unknown) => sanitizePdfText(v);
