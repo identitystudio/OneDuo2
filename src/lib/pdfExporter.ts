@@ -68,6 +68,8 @@ interface FrameAnalysis {
   dependsOnPrevious?: boolean;
   // NEW: Unspoken Expert Nuance
   unspokenNuance?: UnspokenNuance;
+  // NEW: Visual description for PDF captions
+  visualDescription?: string;
 }
 
 // Workflow types
@@ -256,43 +258,125 @@ const extractFrameTextsWithProgress = async (
   videoDuration: number,
   transcript: TranscriptSegment[],
   onProgress?: (progress: number, status: string) => void,
-  batchSize: number = 3
+  batchSize: number = 2 // Keeping batch size small for direct API calls
 ): Promise<(FrameAnalysis | null)[]> => {
+  const GEMINI_API_KEY = "AIzaSyCEs2qXfxlEz2mimTf8a1YoDT8ahOCxpjU";
   const results: (FrameAnalysis | null)[] = [];
   const totalFrames = frameUrls.length;
-  const totalBatches = Math.ceil(totalFrames / batchSize);
 
   // Build transcript context for verbal intent detection
   const transcriptContext = transcript.slice(0, 50).map(t => t.text).join(' ').substring(0, 2000);
+  const frameDuration = videoDuration > 0 ? videoDuration / Math.max(totalFrames, 1) : 10;
 
-  for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {
-    const startIdx = batchIndex * batchSize;
-    const endIdx = Math.min(startIdx + batchSize, totalFrames);
-    const batchUrls = frameUrls.slice(startIdx, endIdx);
+  const systemPrompt = `You are ONEDUO — an execution intelligence system for course/tutorial frame analysis.
+Transform unstructured content into structured, actionable systems.
 
-    const batchProgress = ((batchIndex + 1) / totalBatches) * 100;
-    onProgress?.(Number(batchProgress.toFixed(1)), `Analyzing frames ${startIdx + 1}-${endIdx} of ${totalFrames}...`);
+Extract:
+1. ALL visible text (slides, code, UI)
+2. VISUAL TRANSCRIPTION: A clear, descriptive caption of what's happening visually.
+3. INSTRUCTOR INTENT: What the instructor wants the user to DO.
+4. PROSODY: Infer tone and pacing from visual cues.
+5. EMPHASIS: Detect highlights, bolding, cursor pauses.
+
+Respond MUST be in this exact JSON format:
+{
+  "text": "all visible text",
+  "visualDescription": "Detailed visual transcription of the frame",
+  "textType": "slide|document|ui|code|other",
+  "emphasisFlags": {
+    "highlight_detected": boolean,
+    "cursor_pause": boolean,
+    "zoom_focus": boolean,
+    "text_selected": boolean,
+    "lingering_frame": boolean,
+    "bold_text": boolean,
+    "underline_detected": boolean
+  },
+  "keyElements": ["element1", "element2"],
+  "instructorIntent": "Action-oriented intent",
+  "prosody": {
+    "tone": "neutral|emphatic|questioning|excited|serious|sarcastic|hesitant",
+    "pacing": "normal|fast|slow|pausing",
+    "volume": "normal|loud|soft",
+    "parenthetical": "(screenplay annotation)"
+  },
+  "dependsOnPrevious": boolean
+}`;
+
+  for (let i = 0; i < totalFrames; i++) {
+    const frameUrl = frameUrls[i];
+    const frameIndex = i;
+    const timestamp = i * frameDuration;
+
+    onProgress?.(Number(((i / totalFrames) * 100).toFixed(1)), `Analyzing frame ${i + 1} of ${totalFrames}...`);
 
     try {
-      const { data, error } = await supabase.functions.invoke('extract-frame-text', {
-        body: {
-          frameUrls: batchUrls,
-          batchSize: batchSize,
-          videoDuration,
-          startIndex: startIdx,
-          transcriptContext, // Pass transcript for verbal intent detection
-        }
+      // Fetch image and convert to base64
+      const imgResp = await fetch(frameUrl);
+      const imgBlob = await imgResp.blob();
+      const arrayBuffer = await imgBlob.arrayBuffer();
+      const base64Image = btoa(
+        new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
+      );
+      const mimeType = imgBlob.type || 'image/jpeg';
+
+      const userPrompt = `Analyze Frame #${i + 1} (${Math.floor(timestamp / 60)}:${String(Math.floor(timestamp % 60)).padStart(2, '0')}). Extract text and provide a visual transcription. Transcript Context: "${transcriptContext}"`;
+
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{
+            parts: [
+              { text: userPrompt },
+              { inline_data: { mime_type: mimeType, data: base64Image } }
+            ]
+          }],
+          system_instruction: {
+            parts: [{ text: systemPrompt }]
+          },
+          generation_config: {
+            response_mime_type: "application/json"
+          }
+        })
       });
 
-      if (error) {
-        console.error('OCR batch failed:', error);
-        results.push(...batchUrls.map(() => null));
-      } else {
-        results.push(...(data.results || batchUrls.map(() => null)));
-      }
+      if (!response.ok) throw new Error(`Gemini API error: ${response.status}`);
+
+      const data = await response.json();
+      const content = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      const parsed = JSON.parse(content);
+
+      const frameAnalysis: FrameAnalysis = {
+        frameIndex,
+        timestamp,
+        text: parsed.text || '',
+        visualDescription: parsed.visualDescription || '',
+        textType: parsed.textType || 'other',
+        emphasisFlags: {
+          highlight_detected: !!parsed.emphasisFlags?.highlight_detected,
+          cursor_pause: !!parsed.emphasisFlags?.cursor_pause,
+          zoom_focus: !!parsed.emphasisFlags?.zoom_focus,
+          text_selected: !!parsed.emphasisFlags?.text_selected,
+          lingering_frame: !!parsed.emphasisFlags?.lingering_frame,
+          bold_text: !!parsed.emphasisFlags?.bold_text,
+          underline_detected: !!parsed.emphasisFlags?.underline_detected,
+        },
+        keyElements: parsed.keyElements || [],
+        instructorIntent: parsed.instructorIntent || '',
+        prosody: parsed.prosody,
+        intentConfidence: 0.9,
+        intentSource: 'visual_verbal_aligned',
+        mustNotSkip: !!parsed.emphasisFlags?.highlight_detected,
+        dependsOnPrevious: !!parsed.dependsOnPrevious
+      };
+
+      results.push(frameAnalysis);
+      console.log(`frame ${i + 1}: successful visual transcription`);
+
     } catch (error) {
-      console.error('Failed to extract batch:', error);
-      results.push(...batchUrls.map(() => null));
+      console.error(`Failed to analyze frame ${i + 1}:`, error);
+      results.push(null);
     }
   }
 
@@ -1404,6 +1488,18 @@ export const generateChatGPTPDF = async (
           // Preserve quality (avoid extra internal compression)
           pdf.addImage(base64Image, 'JPEG', margin, y, imgWidth, imgHeight, undefined, 'NONE');
           y += imgHeight + 3;
+
+          // NEW: VISUAL TRANSCRIPTION BELOW IMAGE
+          if (frameAnalysis?.visualDescription) {
+            pdf.setFontSize(7);
+            pdf.setFont('helvetica', 'italic');
+            pdf.setTextColor(80, 80, 80);
+            const transcriptionText = `Visual Transcription: ${frameAnalysis.visualDescription}`;
+            const splitTranscription = pdf.splitTextToSize(transcriptionText, imgWidth);
+            pdf.text(splitTranscription, margin, y);
+            y += (splitTranscription.length * 3) + 3;
+            pdf.setFont('helvetica', 'normal'); // Reset font
+          }
         } else {
           // Log which frame failed for debugging
           console.warn(`[pdfExporter] Frame ${i + 1} failed to load: ${frameUrl.substring(0, 60)}...`);
