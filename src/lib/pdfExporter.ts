@@ -2027,18 +2027,16 @@ export const generateMergedCoursePDF = async (
 
       // Cap quality for huge frame sets, but keep it high enough for UI legibility.
       const moduleRecommendedQuality = getRecommendedImageQuality(module.frame_urls.length);
-      const moduleEffectiveQuality = Math.min(imageQuality, moduleRecommendedQuality);
+      const moduleEffectiveQuality = imageQuality > 0 ? Math.min(imageQuality, moduleRecommendedQuality) : moduleRecommendedQuality;
 
-      onProgress?.(progressPercent + 2, `Pre-loading ${sampledFrames.length} frames for Chapter ${i + 1}...`);
+      onProgress?.(progressPercent + 2, `Analyzing ${sampledFrames.length} frames for Chapter ${i + 1}...`);
 
-      // PARALLEL LOAD OPTIMIZATION: Fetch all frames at once before loop
-      // This is 10x faster than awaiting them one-by-one in the loop
-      await batchLoadImages(
+      // NEW: AI analysis for the merged chapter's frames
+      const moduleAnalyses = await extractFrameTextsWithProgress(
         sampledFrames,
-        moduleEffectiveQuality,
-        (loaded, total) => {
-          // Optional: update progress (fine-grained)
-        }
+        module.video_duration_seconds || 0,
+        module.transcript || [],
+        (p, s) => onProgress?.(progressPercent + (p / 100) * 10, `Chapter ${i + 1}: ${s}`)
       );
 
       for (let frameIdx = 0; frameIdx < sampledFrames.length; frameIdx++) {
@@ -2047,9 +2045,10 @@ export const generateMergedCoursePDF = async (
         }
 
         const frameUrl = sampledFrames[frameIdx];
-        const timestamp = module.video_duration_seconds
+        const frameAnalysis = moduleAnalyses[frameIdx];
+        const timestamp = frameAnalysis?.timestamp || (module.video_duration_seconds
           ? (frameIdx / sampledFrames.length) * module.video_duration_seconds
-          : frameIdx;
+          : frameIdx);
 
         pdf.setFontSize(8);
         pdf.setFont('helvetica', 'bold');
@@ -2068,7 +2067,26 @@ export const generateMergedCoursePDF = async (
             }
 
             pdf.addImage(imgData.dataUrl, 'JPEG', margin, y, imgWidth, imgHeight, undefined, 'NONE');
-            y += imgHeight + 8;
+            y += imgHeight + 3;
+
+            // NEW: VISUAL TRANSCRIPTION BELOW IMAGE (Merged PDF)
+            if (frameAnalysis?.visualDescription) {
+              pdf.setFontSize(7);
+              pdf.setFont('helvetica', 'italic');
+              pdf.setTextColor(80, 80, 80);
+              const transcriptionText = `Visual Transcription: ${frameAnalysis.visualDescription}`;
+              const splitTranscription = pdf.splitTextToSize(transcriptionText, imgWidth);
+
+              if (y + (splitTranscription.length * 3) > pageHeight - 20) {
+                addPageWithHeaders();
+              }
+
+              pdf.text(splitTranscription, margin, y);
+              y += (splitTranscription.length * 3) + 7;
+              pdf.setFont('helvetica', 'normal'); // Reset font
+            } else {
+              y += 5;
+            }
           }
         } catch (e) {
           pdf.setFontSize(8);
