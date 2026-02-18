@@ -303,85 +303,120 @@ Respond MUST be in this exact JSON format:
   "dependsOnPrevious": boolean
 }`;
 
-  for (let i = 0; i < totalFrames; i++) {
-    const frameUrl = frameUrls[i];
-    const frameIndex = i;
-    const timestamp = i * frameDuration;
+  // Exponential backoff helper
+  const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-    onProgress?.(Number(((i / totalFrames) * 100).toFixed(1)), `Analyzing frame ${i + 1} of ${totalFrames}...`);
+  for (let i = 0; i < totalFrames; i += batchSize) {
+    const currentBatchPaths = frameUrls.slice(i, i + batchSize);
+    const currentBatchIndices = Array.from({ length: currentBatchPaths.length }, (_, k) => i + k);
 
-    try {
-      // Fetch image and convert to base64
-      const imgResp = await fetch(frameUrl);
-      const imgBlob = await imgResp.blob();
-      const arrayBuffer = await imgBlob.arrayBuffer();
-      const base64Image = btoa(
-        new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
-      );
-      const mimeType = imgBlob.type || 'image/jpeg';
+    let lastError: any = null;
+    let fallbackDelay = 2000;
+    let success = false;
 
-      const userPrompt = `Analyze Frame #${i + 1} (${Math.floor(timestamp / 60)}:${String(Math.floor(timestamp % 60)).padStart(2, '0')}). Extract text and provide a visual transcription. Transcript Context: "${transcriptContext}"`;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        onProgress?.(Number(((i / totalFrames) * 100).toFixed(1)), `Analyzing batch ${Math.floor(i / batchSize) + 1} (${currentBatchPaths.length} frames)...`);
 
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{
-            parts: [
-              { text: userPrompt },
-              { inline_data: { mime_type: mimeType, data: base64Image } }
-            ]
-          }],
-          system_instruction: {
-            parts: [{ text: systemPrompt }]
-          },
-          generation_config: {
-            response_mime_type: "application/json"
-          }
-        })
-      });
+        const batchParts: any[] = [];
+        for (let j = 0; j < currentBatchPaths.length; j++) {
+          const path = currentBatchPaths[j];
+          const idx = currentBatchIndices[j];
+          const ts = idx * frameDuration;
 
-      if (!response.ok) throw new Error(`Gemini API error: ${response.status}`);
+          const imgResp = await fetch(path);
+          const imgBlob = await imgResp.blob();
+          const arrayBuffer = await imgBlob.arrayBuffer();
+          const base64Image = btoa(
+            new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
+          );
+          const mimeType = imgBlob.type || 'image/jpeg';
 
-      const data = await response.json();
-      const content = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-      const parsed = JSON.parse(content);
+          batchParts.push({ text: `FRAME_${idx + 1}_TIMESTAMP: ${Math.floor(ts / 60)}:${String(Math.floor(ts % 60)).padStart(2, '0')}` });
+          batchParts.push({ inline_data: { mime_type: mimeType, data: base64Image } });
+        }
 
-      const frameAnalysis: FrameAnalysis = {
-        frameIndex,
-        timestamp,
-        text: parsed.text || '',
-        visualDescription: parsed.visualDescription || '',
-        textType: parsed.textType || 'other',
-        emphasisFlags: {
-          highlight_detected: !!parsed.emphasisFlags?.highlight_detected,
-          cursor_pause: !!parsed.emphasisFlags?.cursor_pause,
-          zoom_focus: !!parsed.emphasisFlags?.zoom_focus,
-          text_selected: !!parsed.emphasisFlags?.text_selected,
-          lingering_frame: !!parsed.emphasisFlags?.lingering_frame,
-          bold_text: !!parsed.emphasisFlags?.bold_text,
-          underline_detected: !!parsed.emphasisFlags?.underline_detected,
-        },
-        keyElements: parsed.keyElements || [],
-        instructorIntent: parsed.instructorIntent || '',
-        prosody: parsed.prosody,
-        intentConfidence: 0.9,
-        intentSource: 'visual_verbal_aligned',
-        mustNotSkip: !!parsed.emphasisFlags?.highlight_detected,
-        dependsOnPrevious: !!parsed.dependsOnPrevious
-      };
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{
+              parts: [
+                ...batchParts,
+                { text: `Transcript Context: "${transcriptContext}". Extract text and visual transcriptions for the ${currentBatchPaths.length} frames above. Respond with an array of JSON objects matching the specified schema.` }
+              ]
+            }],
+            system_instruction: {
+              parts: [{ text: `${systemPrompt}\n\nIMPORTANT: Return a JSON ARRAY of exactly ${currentBatchPaths.length} objects, one for each frame in order.` }]
+            },
+            generation_config: { response_mime_type: "application/json" }
+          })
+        });
 
-      results.push(frameAnalysis);
-      console.log(`frame ${i + 1}: successful visual transcription`);
+        if (response.status === 429 || response.status === 503) {
+          console.warn(`Gemini Rate Limit (${response.status}). Retrying in ${fallbackDelay}ms...`);
+          await delay(fallbackDelay);
+          fallbackDelay *= 2;
+          continue;
+        }
 
-    } catch (error) {
-      console.error(`Failed to analyze frame ${i + 1}:`, error);
-      results.push(null);
+        if (!response.ok) throw new Error(`Gemini API error: ${response.status}`);
+
+        const data = await response.json();
+        const content = data.candidates?.[0]?.content?.parts?.[0]?.text || '[]';
+        const parsedBatch = JSON.parse(content);
+
+        // Ensure we handle array or object response (AI sometimes wraps)
+        const frameResults = Array.isArray(parsedBatch) ? parsedBatch : [parsedBatch];
+
+        for (let k = 0; k < currentBatchPaths.length; k++) {
+          const raw = frameResults[k] || {};
+          const frameIndex = currentBatchIndices[k];
+          const timestamp = frameIndex * frameDuration;
+
+          const frameAnalysis: FrameAnalysis = {
+            frameIndex,
+            timestamp,
+            text: raw.text || '',
+            visualDescription: raw.visualDescription || '',
+            textType: raw.textType || 'other',
+            emphasisFlags: {
+              highlight_detected: !!raw.emphasisFlags?.highlight_detected,
+              cursor_pause: !!raw.emphasisFlags?.cursor_pause,
+              zoom_focus: !!raw.emphasisFlags?.zoom_focus,
+              text_selected: !!raw.emphasisFlags?.text_selected,
+              lingering_frame: !!raw.emphasisFlags?.lingering_frame,
+              bold_text: !!raw.emphasisFlags?.bold_text,
+              underline_detected: !!raw.emphasisFlags?.underline_detected,
+            },
+            keyElements: raw.keyElements || [],
+            instructorIntent: raw.instructorIntent || '',
+            prosody: raw.prosody || { tone: 'neutral', pacing: 'normal', volume: 'normal', parenthetical: '' },
+            dependsOnPrevious: !!raw.dependsOnPrevious
+          };
+
+          results[frameIndex] = frameAnalysis;
+          console.log(`frame ${frameIndex + 1}: successful visual transcription`);
+        }
+
+        success = true;
+        break;
+      } catch (err: any) {
+        lastError = err;
+        console.error(`Batch starting at index ${i} failed (attempt ${attempt + 1}):`, err);
+        await delay(fallbackDelay);
+        fallbackDelay *= 2;
+      }
+    }
+
+    if (!success) {
+      console.error(`Batch starting at index ${i} failed after 3 attempts. Filling with nulls.`);
+      currentBatchIndices.forEach(idx => results[idx] = null);
     }
   }
-
   return results;
 };
+
 
 // NEW: Analyze workflow sequences
 const analyzeWorkflowSequences = async (
