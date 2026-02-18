@@ -125,7 +125,7 @@ Respond ONLY in this JSON format:
         ${transcript.slice(0, 10).map((t: any) => t.text).join(' ')}`;
 
         const output = await replicate.run(
-            "meta/llama-2-70b-chat:02e509c7899648321286b73a21cee29153523eab4a2927883e03107860a48d01",
+            "meta/meta-llama-3-70b-instruct:f1d50b387efe5fd16037f374ed225f18e99878198f8045aee176b66e1383792b",
             {
                 input: {
                     prompt: `${systemPrompt}\n\n${userPrompt}`,

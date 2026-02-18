@@ -79,7 +79,7 @@ serve(async (req) => {
                 try {
                     // Using LLaVA-1.6 for high-quality vision analysis
                     const output = await replicate.run(
-                        "yorickvp/llava-v1.6-vicuna-13b:b6f4805341a0b5f22ca0197c11d0c24a9d974e643f3f6c7a7b97c02b36712368",
+                        "yorickvp/llava-v1.6-vicuna-13b:0603dec596080fa084e26f0ae6d605fc5788ed2b1a0358cd25010619487eae63",
                         {
                             input: {
                                 image: frameUrl,
