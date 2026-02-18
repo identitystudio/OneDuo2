@@ -203,6 +203,19 @@ const DownloadPage = () => {
       selectedFormat === 'memory-training' ? 'Training Memory Package' : 'Creative Memory Package';
     setDownloadStatus(`Preparing your OneDuo ${formatLabel}...`);
 
+    // Fail-safe: Trigger background PDF generation for resilience
+    // This ensures that even if the tab is closed, the user receives their artifact
+    if (selectedFormat === 'pdf') {
+      console.log('[Download] Triggering background fail-safe generation...');
+      supabase.functions.invoke('generate-pdf-backend', {
+        body: {
+          courseId,
+          moduleId: module?.id,
+          userEmail,
+        }
+      }).catch(e => console.warn('[Download] Fail-safe trigger failed:', e));
+    }
+
     // Track download
     try {
       await supabase.functions.invoke('log-download', {
@@ -288,62 +301,23 @@ const DownloadPage = () => {
     if (!downloadData) return;
 
     setEmailing(true);
-    setDownloadProgress(0);
-    setDownloadStatus("Generating PDF for email delivery...");
+    setDownloadStatus("Triggering background delivery...");
 
     try {
-      const title = module
-        ? `${course?.title || 'Course'} - ${module.title}`
-        : course?.title || 'OneDuo';
-
-      const dataForExport = {
-        id: module?.id || courseId,
-        title,
-        video_duration_seconds: module?.video_duration_seconds || course?.video_duration_seconds,
-        transcript: module?.transcript || course?.transcript || [],
-        frame_urls: module?.frame_urls || course?.frame_urls || [],
-        audio_events: module?.audio_events || course?.audio_events,
-        prosody_annotations: module?.prosody_annotations || course?.prosody_annotations,
-      };
-
-      const blob = await generateChatGPTPDF(
-        dataForExport,
-        (progress, status) => {
-          setDownloadProgress(progress);
-          setDownloadStatus(status);
-        }
-      );
-
-      const filename = `OneDuo_${title.replace(/[^a-zA-Z0-9]/g, "_")}_${Date.now()}.pdf`;
-      const storagePath = `exports/${filename}`;
-
-      setDownloadStatus("Uploading PDF...");
-
-      const { error: uploadError } = await supabase.storage
-        .from('course-files')
-        .upload(storagePath, blob, {
-          contentType: 'application/pdf',
-          upsert: true
-        });
-
-      if (uploadError) throw uploadError;
-
-      setDownloadStatus("Sending email...");
-
-      const { data: emailData, error: emailError } = await supabase.functions.invoke('send-pdf-email', {
+      // Trigger background PDF generation and email
+      const { data, error } = await supabase.functions.invoke('generate-pdf-backend', {
         body: {
           courseId,
-          email: userEmail,
-          filePath: storagePath,
-          fileName: filename
+          moduleId: module?.id,
+          userEmail,
         }
       });
 
-      if (emailError) throw new Error(emailError.message);
-      if (emailData.error) throw new Error(emailData.error);
+      if (error) throw error;
+      if (data && data.error) throw new Error(data.error);
 
       setEmailSent(true);
-      toast.success("PDF has been sent to your email!");
+      toast.success("Background PDF generation started! You'll receive an email once it's complete.");
     } catch (err: any) {
       console.error("Email failed:", err);
       toast.error("Failed to email PDF. Please try again or download directly.");
@@ -437,7 +411,12 @@ const DownloadPage = () => {
                 <span className="font-medium text-foreground">"{displayTitle}"</span> has been downloaded.
               </p>
               {displaySubtitle && (
-                <p className="text-sm text-muted-foreground mb-6">{displaySubtitle}</p>
+                <p className="text-sm text-muted-foreground mb-2">{displaySubtitle}</p>
+              )}
+              {userEmail && (
+                <p className="text-sm text-muted-foreground animate-pulse mt-2">
+                  Even if you close this tab, your {selectedFormat === 'pdf' ? 'PDF' : 'OneDuo'} will be emailed to you once complete.
+                </p>
               )}
 
               <div className="space-y-3">
@@ -509,8 +488,8 @@ const DownloadPage = () => {
                   <button
                     onClick={() => setSelectedFormat('pdf')}
                     className={`p-3 rounded-lg border text-left transition-all ${selectedFormat === 'pdf'
-                        ? 'border-primary bg-primary/5'
-                        : 'border-border hover:border-primary/50'
+                      ? 'border-primary bg-primary/5'
+                      : 'border-border hover:border-primary/50'
                       }`}
                   >
                     <div className="flex items-center gap-3">
@@ -525,8 +504,8 @@ const DownloadPage = () => {
                   <button
                     onClick={() => setSelectedFormat('memory-training')}
                     className={`p-3 rounded-lg border text-left transition-all ${selectedFormat === 'memory-training'
-                        ? 'border-primary bg-primary/5'
-                        : 'border-border hover:border-primary/50'
+                      ? 'border-primary bg-primary/5'
+                      : 'border-border hover:border-primary/50'
                       }`}
                   >
                     <div className="flex items-center gap-3">
@@ -541,8 +520,8 @@ const DownloadPage = () => {
                   <button
                     onClick={() => setSelectedFormat('memory-creative')}
                     className={`p-3 rounded-lg border text-left transition-all ${selectedFormat === 'memory-creative'
-                        ? 'border-primary bg-primary/5'
-                        : 'border-border hover:border-primary/50'
+                      ? 'border-primary bg-primary/5'
+                      : 'border-border hover:border-primary/50'
                       }`}
                   >
                     <div className="flex items-center gap-3">
