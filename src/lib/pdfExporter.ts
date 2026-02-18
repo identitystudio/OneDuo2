@@ -258,7 +258,7 @@ const extractFrameTextsWithProgress = async (
   videoDuration: number,
   transcript: TranscriptSegment[],
   onProgress?: (progress: number, status: string) => void,
-  batchSize: number = 2 // Keeping batch size small for direct API calls
+  batchSize: number = 7 // Increased to 7 for better token efficiency and lower RPM (Requests Per Minute)
 ): Promise<(FrameAnalysis | null)[]> => {
   const GEMINI_API_KEY = "AIzaSyBQkDNE_7YmmhLrVHpGHQyjNqrg6ZkwazI";
   const results: (FrameAnalysis | null)[] = [];
