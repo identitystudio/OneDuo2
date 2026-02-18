@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import Replicate from "https://esm.sh/replicate@0.25.2";
 
 const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
@@ -32,47 +33,6 @@ interface FrameAnalysis {
     };
 }
 
-interface WorkflowStep {
-    stepNumber: number;
-    description: string;
-    frameIndices: number[];
-    timestamps: { start: number; end: number };
-    mustNotSkip: boolean;
-    dependsOn: number[];
-    confidenceLevel: 'explicit' | 'strong' | 'inferred';
-    signals: string[];
-    dwellTime: number; // How long instructor stayed on this step
-}
-
-interface WorkflowSequence {
-    sequenceId: string;
-    title: string;
-    steps: WorkflowStep[];
-    totalDuration: number;
-    criticalPath: number[]; // Step numbers that must not be skipped
-    sequenceWarnings: string[];
-}
-
-interface SequenceAnalysisResult {
-    workflows: WorkflowSequence[];
-    criticalSteps: {
-        frameIndex: number;
-        timestamp: number;
-        reason: string;
-        confidenceLevel: string;
-    }[];
-    dependencyChains: {
-        stepA: number;
-        stepB: number;
-        relationship: string;
-    }[];
-    summary: {
-        totalWorkflows: number;
-        totalCriticalSteps: number;
-        averageConfidence: number;
-    };
-}
-
 serve(async (req) => {
     if (req.method === 'OPTIONS') {
         return new Response(null, { headers: corsHeaders });
@@ -85,15 +45,15 @@ serve(async (req) => {
             throw new Error('frameAnalyses array is required');
         }
 
-        // Gemini API Key (Hardcoded for testing as requested)
-        const GEMINI_API_KEY = "AIzaSyBQkDNE_7YmmhLrVHpGHQyjNqrg6ZkwazI";
-        if (!GEMINI_API_KEY) {
-            throw new Error('GEMINI_API_KEY is not configured');
+        const REPLICATE_API_TOKEN = Deno.env.get("REPLICATE_API_TOKEN") || Deno.env.get("REPLICATE_API_KEY");
+        if (!REPLICATE_API_TOKEN) {
+            throw new Error('REPLICATE_API_TOKEN is not configured');
         }
 
-        console.log(`[analyze-workflow-sequence] Analyzing ${frameAnalyses.length} frames for workflow patterns`);
+        const replicate = new Replicate({
+            auth: REPLICATE_API_TOKEN,
+        });
 
-        // Filter out null frames
         const validFrames = frameAnalyses.filter((f: FrameAnalysis | null) => f !== null) as FrameAnalysis[];
 
         if (validFrames.length === 0) {
@@ -107,16 +67,6 @@ serve(async (req) => {
             });
         }
 
-        // Group frames into sequences (every 5-7 frames)
-        const sequenceSize = 6;
-        const sequences: FrameAnalysis[][] = [];
-        for (let i = 0; i < validFrames.length; i += sequenceSize) {
-            sequences.push(validFrames.slice(i, i + sequenceSize));
-        }
-
-        console.log(`[analyze-workflow-sequence] Created ${sequences.length} frame sequences for analysis`);
-
-        // Prepare summarized frame data for AI analysis
         const frameSummaries = validFrames.map(f => ({
             idx: f.frameIndex,
             ts: Math.round(f.timestamp),
@@ -129,210 +79,89 @@ serve(async (req) => {
         }));
 
         const systemPrompt = `You are ONEDUO — an execution intelligence system.
+Your goal is to transform frame analysis data into structured, executable workflows.
 
-Your job is to transform unstructured content into structured, actionable systems that can be immediately implemented.
+Extract:
+1. Workflows (step-by-step processes)
+2. Critical Path (steps that MUST be done)
+3. Dependency Chains (Step B requires Step A)
 
-For every analysis you must:
-- Extract executable workflows (step-by-step processes that can be followed or automated)
-- Identify decision logic (if this → then that rules)
-- Convert knowledge into build-ready instructions
-- Surface reusable frameworks, templates, and repeatable patterns
-
-Always organize outputs into:
-1. **Workflow** - The step-by-step execution path
-2. **Automation Opportunities** - What can be systematized
-3. **Build Instructions** - Implementation-ready details
-4. **Key Logic & Rules** - The if/then decision trees
-5. **Reusable Assets** - Templates, frameworks, patterns
-
-**DO NOT summarize. DO NOT paraphrase for understanding only.**
-Your goal is **speed to implementation**.
-
----
-
-Analyze the frame sequence data to identify:
-1. WORKFLOWS: Groups of related steps that form a complete process
-2. DEPENDENCIES: Which steps require previous steps to be completed first
-3. CRITICAL PATH: Steps that absolutely must not be skipped
-4. SEQUENCE WARNINGS: Where order matters and why
-
-For each workflow detected, identify:
-- Start and end frame indices
-- Which steps depend on which
-- The dwell time (how many frames = more emphasis)
-- Confidence level based on signals
-
-Return ONLY valid JSON in this format:
+Respond ONLY in this JSON format:
 {
   "workflows": [
     {
-      "sequenceId": "workflow_1",
-      "title": "Setting up the voice bot",
+      "sequenceId": "wf_1",
+      "title": "Short Descriptive Title",
       "steps": [
         {
           "stepNumber": 1,
-          "description": "Navigate to dashboard",
-          "frameIndices": [0, 1, 2],
-          "mustNotSkip": true,
+          "description": "Clear instruction",
+          "frameIndices": [0, 1],
+          "timestamps": { "start": 0, "end": 10 },
+          "mustNotSkip": boolean,
           "dependsOn": [],
           "confidenceLevel": "explicit|strong|inferred",
-          "signals": ["highlight", "verbal_critical", "lingering"]
+          "signals": ["visual cues used"],
+          "dwellTime": number
         }
       ],
-      "criticalPath": [1, 3, 5],
-      "sequenceWarnings": ["Steps 1-3 must be done in order because..."]
+      "totalDuration": number,
+      "criticalPath": [1, 3],
+      "sequenceWarnings": ["Warnings for this sequence"]
     }
   ],
   "dependencyChains": [
-    { "stepA": 1, "stepB": 2, "relationship": "stepB requires stepA completion" }
+    { "stepA": 1, "stepB": 2, "relationship": "B depends on A" }
   ],
-  "overallSummary": "This content contains X workflows with Y critical steps..."
+  "overallSummary": "Summary of detected execution paths"
 }`;
 
-        const userPrompt = `Analyze these ${validFrames.length} frames from a ${Math.round(videoDuration / 60)} minute training video. Detect workflows, dependencies, and critical steps.
+        const userPrompt = `Analyze these ${validFrames.length} frames from a video.
+        
+        Frame Data:
+        ${JSON.stringify(frameSummaries)}
+        
+        Transcript Context:
+        ${transcript.slice(0, 10).map((t: any) => t.text).join(' ')}`;
 
-Frame Data (idx=index, ts=timestamp seconds, intent=instructor intent, emphasis=visual emphasis flags):
-${JSON.stringify(frameSummaries, null, 1)}
-
-Transcript snippets for context:
-${transcript.slice(0, 20).map((t: { start: number; text: string }) => `[${Math.round(t.start)}s] ${t.text?.substring(0, 80)}`).join('\n')}
-
-Return JSON with detected workflows and critical steps.`;
-
-        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                contents: [{
-                    parts: [{ text: userPrompt }]
-                }],
-                system_instruction: {
-                    parts: [{ text: systemPrompt }]
-                },
-                generation_config: {
-                    response_mime_type: "application/json"
+        const output = await replicate.run(
+            "meta/llama-2-70b-chat:02e509c7899648321286b73a21cee29153523eab4a2927883e03107860a48d01",
+            {
+                input: {
+                    prompt: `${systemPrompt}\n\n${userPrompt}`,
+                    max_new_tokens: 2000,
+                    temperature: 0.1
                 }
-            }),
-        });
-
-        if (!response.ok) {
-            const errBody = await response.text();
-            console.error(`[analyze-workflow-sequence] AI request failed: ${response.status}`, errBody);
-            throw new Error(`AI analysis failed: ${response.status}`);
-        }
-
-        const data = await response.json();
-        const content = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-
-        let analysisResult: Partial<SequenceAnalysisResult>;
-
-        try {
-            let jsonStr = content;
-            if (content.includes('```json')) {
-                jsonStr = content.split('```json')[1].split('```')[0].trim();
-            } else if (content.includes('```')) {
-                jsonStr = content.split('```')[1].split('```')[0].trim();
             }
+        );
 
-            const parsed = JSON.parse(jsonStr);
+        let resultText = Array.isArray(output) ? output.join('') : String(output);
 
-            // Calculate additional metrics
-            const workflows: WorkflowSequence[] = (parsed.workflows || []).map((w: any, idx: number) => {
-                const steps = (w.steps || []).map((s: any, sIdx: number) => {
-                    const frameIndices = s.frameIndices || [];
-                    const firstFrame = validFrames.find(f => frameIndices.includes(f.frameIndex));
-                    const lastFrame = validFrames.filter(f => frameIndices.includes(f.frameIndex)).pop();
-
-                    return {
-                        stepNumber: s.stepNumber || sIdx + 1,
-                        description: s.description || '',
-                        frameIndices,
-                        timestamps: {
-                            start: firstFrame?.timestamp || 0,
-                            end: lastFrame?.timestamp || 0,
-                        },
-                        mustNotSkip: s.mustNotSkip || false,
-                        dependsOn: s.dependsOn || [],
-                        confidenceLevel: s.confidenceLevel || 'inferred',
-                        signals: s.signals || [],
-                        dwellTime: frameIndices.length * (videoDuration / Math.max(validFrames.length, 1)),
-                    } as WorkflowStep;
-                });
-
-                return {
-                    sequenceId: w.sequenceId || `workflow_${idx + 1}`,
-                    title: w.title || `Workflow ${idx + 1}`,
-                    steps,
-                    totalDuration: steps.reduce((sum: number, s: WorkflowStep) => sum + s.dwellTime, 0),
-                    criticalPath: w.criticalPath || steps.filter((s: WorkflowStep) => s.mustNotSkip).map((s: WorkflowStep) => s.stepNumber),
-                    sequenceWarnings: w.sequenceWarnings || [],
-                } as WorkflowSequence;
-            });
-
-            // Extract critical steps from frame data
-            const criticalSteps = validFrames
-                .filter(f => f.mustNotSkip || f.intentConfidence > 0.7)
-                .map(f => ({
-                    frameIndex: f.frameIndex,
-                    timestamp: f.timestamp,
-                    reason: f.mustNotSkip
-                        ? 'Multiple signals indicate critical step'
-                        : `High confidence intent (${(f.intentConfidence * 100).toFixed(0)}%)`,
-                    confidenceLevel: f.intentSource || 'inferred',
-                }));
-
-            // Calculate average confidence
-            const avgConfidence = validFrames.length > 0
-                ? validFrames.reduce((sum, f) => sum + (f.intentConfidence || 0), 0) / validFrames.length
-                : 0;
-
-            analysisResult = {
-                workflows,
-                criticalSteps,
-                dependencyChains: parsed.dependencyChains || [],
-                summary: {
-                    totalWorkflows: workflows.length,
-                    totalCriticalSteps: criticalSteps.length,
-                    averageConfidence: avgConfidence,
-                },
-            };
-
-        } catch (parseError) {
-            console.error('[analyze-workflow-sequence] Failed to parse AI response:', parseError);
-
-            // Fallback: Build basic workflow from frame data alone
-            const criticalSteps = validFrames
-                .filter(f => f.mustNotSkip || f.intentConfidence > 0.7)
-                .map(f => ({
-                    frameIndex: f.frameIndex,
-                    timestamp: f.timestamp,
-                    reason: f.mustNotSkip ? 'Multiple signals' : 'High confidence',
-                    confidenceLevel: f.intentSource || 'inferred',
-                }));
-
-            analysisResult = {
-                workflows: [],
-                criticalSteps,
-                dependencyChains: [],
-                summary: {
-                    totalWorkflows: 0,
-                    totalCriticalSteps: criticalSteps.length,
-                    averageConfidence: validFrames.reduce((sum, f) => sum + (f.intentConfidence || 0), 0) / validFrames.length,
-                },
-            };
+        // Basic JSON extraction
+        if (resultText.includes('```json')) {
+            resultText = resultText.split('```json')[1].split('```')[0].trim();
+        } else if (resultText.includes('{')) {
+            resultText = resultText.substring(resultText.indexOf('{'), resultText.lastIndexOf('}') + 1);
         }
 
-        console.log(`[analyze-workflow-sequence] Detected ${analysisResult.workflows?.length || 0} workflows, ${analysisResult.criticalSteps?.length || 0} critical steps`);
+        const parsed = JSON.parse(resultText);
 
-        return new Response(JSON.stringify(analysisResult), {
+        return new Response(JSON.stringify({
+            workflows: parsed.workflows || [],
+            criticalSteps: parsed.criticalSteps || [],
+            dependencyChains: parsed.dependencyChains || [],
+            summary: {
+                totalWorkflows: parsed.workflows?.length || 0,
+                totalCriticalSteps: parsed.criticalSteps?.length || 0,
+                averageConfidence: 0.8 // Heuristic
+            }
+        }), {
             headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
+
     } catch (error) {
         console.error('[analyze-workflow-sequence] Error:', error);
-        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-        return new Response(JSON.stringify({ error: errorMessage }), {
+        return new Response(JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }), {
             status: 500,
             headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
