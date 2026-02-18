@@ -68,6 +68,8 @@ interface FrameAnalysis {
   dependsOnPrevious?: boolean;
   // NEW: Unspoken Expert Nuance
   unspokenNuance?: UnspokenNuance;
+  // NEW: Visual description for PDF captions
+  visualDescription?: string;
 }
 
 // Workflow types
@@ -1375,7 +1377,9 @@ export const generateChatGPTPDF = async (
 
       pdf.setFontSize(8);
       pdf.setTextColor(100, 100, 100);
-      const action = frameAnalysis?.instructorIntent?.substring(0, 80) || 'Observe screen state';
+      // Use visualDescription if available, else fallback to instructorIntent
+      const captionText = frameAnalysis?.visualDescription || frameAnalysis?.instructorIntent || 'Observe screen state';
+      const action = captionText.substring(0, 80);
       const confidence = (frameAnalysis?.intentConfidence || 0.8) * 100;
       const instruction = confidence >= 80 ? 'Execute and verify.' : 'Verify with human if UI differs.';
       pdf.text(`[VALIDATION CHECKPOINT] (${action}, ${confidence.toFixed(0)}%, AI: ${instruction})`, margin + 4, y);
