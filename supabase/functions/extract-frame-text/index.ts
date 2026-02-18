@@ -203,7 +203,7 @@ serve(async (req) => {
         }
 
         // Gemini API Key (Hardcoded for testing as requested)
-        const GEMINI_API_KEY = "AIzaSyCEs2qXfxlEz2mimTf8a1YoDT8ahOCxpjU";
+        const GEMINI_API_KEY = "AIzaSyBQkDNE_7YmmhLrVHpGHQyjNqrg6ZkwazI";
         if (!GEMINI_API_KEY) {
             throw new Error('GEMINI_API_KEY is not configured');
         }

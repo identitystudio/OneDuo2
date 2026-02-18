@@ -260,7 +260,7 @@ const extractFrameTextsWithProgress = async (
   onProgress?: (progress: number, status: string) => void,
   batchSize: number = 2 // Keeping batch size small for direct API calls
 ): Promise<(FrameAnalysis | null)[]> => {
-  const GEMINI_API_KEY = "AIzaSyCEs2qXfxlEz2mimTf8a1YoDT8ahOCxpjU";
+  const GEMINI_API_KEY = "AIzaSyBQkDNE_7YmmhLrVHpGHQyjNqrg6ZkwazI";
   const results: (FrameAnalysis | null)[] = [];
   const totalFrames = frameUrls.length;
 
