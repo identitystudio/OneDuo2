@@ -258,7 +258,7 @@ const extractFrameTextsWithProgress = async (
   videoDuration: number,
   transcript: TranscriptSegment[],
   onProgress?: (progress: number, status: string) => void,
-  batchSize: number = 7 // Process in batches to balance progress updates and API efficiency
+  batchSize: number = 3 // Process in batches to balance progress updates and API efficiency
 ): Promise<(FrameAnalysis | null)[]> => {
   const results: (FrameAnalysis | null)[] = [];
   const totalFrames = frameUrls.length;

@@ -61,23 +61,19 @@ serve(async (req) => {
         });
 
         const frameDuration = videoDuration > 0 ? videoDuration / Math.max(frameUrls.length + startIndex, 1) : 10;
-        const results: (FrameAnalysis | null)[] = [];
 
-        console.log(`[extract-frame-text] Processing ${frameUrls.length} frames using Replicate...`);
+        console.log(`[extract-frame-text] Processing ${frameUrls.length} frames concurrently using Replicate...`);
 
-        for (let i = 0; i < frameUrls.length; i++) {
-            const frameUrl = frameUrls[i];
+        const results = await Promise.all(frameUrls.map(async (frameUrl, i) => {
             const frameIndex = startIndex + i;
             const timestamp = frameIndex * frameDuration;
 
             console.log(`[extract-frame-text] Analyzing frame ${frameIndex + 1}/${frameUrls.length + startIndex}`);
 
-            let success = false;
             let lastError = null;
 
             for (let attempt = 0; attempt <= maxRetries; attempt++) {
                 try {
-                    // Using LLaVA-1.6 for high-quality vision analysis
                     const output = await replicate.run(
                         "yorickvp/llava-v1.6-vicuna-13b:0603dec596080fa084e26f0ae6d605fc5788ed2b1a0358cd25010619487eae63",
                         {
@@ -124,10 +120,8 @@ serve(async (req) => {
                         }
                     );
 
-                    // Replicate models sometimes return arrays of strings or raw strings
                     let resultText = Array.isArray(output) ? output.join('') : String(output);
 
-                    // Clean JSON markers if present
                     if (resultText.includes('```json')) {
                         resultText = resultText.split('```json')[1].split('```')[0].trim();
                     } else if (resultText.includes('```')) {
@@ -136,7 +130,7 @@ serve(async (req) => {
 
                     const parsed = JSON.parse(resultText);
 
-                    results.push({
+                    return {
                         frameIndex,
                         timestamp,
                         text: parsed.text || '',
@@ -155,39 +149,33 @@ serve(async (req) => {
                         instructorIntent: parsed.instructorIntent || '',
                         prosody: parsed.prosody || { tone: 'neutral', pacing: 'normal', volume: 'normal', parenthetical: '' },
                         dependsOnPrevious: !!parsed.dependsOnPrevious
-                    });
-
-                    success = true;
-                    console.log(`[extract-frame-text] Successfully analyzed frame ${frameIndex + 1}`);
-                    break;
+                    };
                 } catch (error) {
                     lastError = error;
                     console.error(`[extract-frame-text] Attempt ${attempt + 1} failed for frame ${frameIndex}:`, error);
                     if (attempt < maxRetries) {
-                        await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
+                        await new Promise(r => setTimeout(r, 1000 * (attempt + 1))); // Reduced wait for parallel
                     }
                 }
             }
 
-            if (!success) {
-                if (allowPartialResults) {
-                    results.push({
-                        frameIndex,
-                        timestamp,
-                        text: '[Analysis failed]',
-                        textType: 'other',
-                        emphasisFlags: { highlight_detected: false, cursor_pause: false, zoom_focus: false, text_selected: false, lingering_frame: false, bold_text: false, underline_detected: false },
-                        keyElements: [],
-                        instructorIntent: 'Skip due to error',
-                        visualDescription: 'Error during analysis',
-                        prosody: { tone: 'neutral', pacing: 'normal', volume: 'normal', parenthetical: '' },
-                        dependsOnPrevious: false
-                    });
-                } else {
-                    throw lastError || new Error(`Failed to analyze frame ${frameIndex}`);
-                }
+            if (allowPartialResults) {
+                return {
+                    frameIndex,
+                    timestamp,
+                    text: '[Analysis failed]',
+                    textType: 'other',
+                    emphasisFlags: { highlight_detected: false, cursor_pause: false, zoom_focus: false, text_selected: false, lingering_frame: false, bold_text: false, underline_detected: false },
+                    keyElements: [],
+                    instructorIntent: 'Skip due to error',
+                    visualDescription: 'Error during analysis',
+                    prosody: { tone: 'neutral', pacing: 'normal', volume: 'normal', parenthetical: '' },
+                    dependsOnPrevious: false
+                };
+            } else {
+                throw lastError || new Error(`Failed to analyze frame ${frameIndex}`);
             }
-        }
+        }));
 
         return new Response(JSON.stringify({ results }), {
             headers: { ...corsHeaders, 'Content-Type': 'application/json' },
