@@ -203,19 +203,6 @@ const DownloadPage = () => {
       selectedFormat === 'memory-training' ? 'Training Memory Package' : 'Creative Memory Package';
     setDownloadStatus(`Preparing your OneDuo ${formatLabel}...`);
 
-    // Fail-safe: Trigger background PDF generation for resilience
-    // This ensures that even if the tab is closed, the user receives their artifact
-    if (selectedFormat === 'pdf') {
-      console.log('[Download] Triggering background fail-safe generation...');
-      supabase.functions.invoke('generate-pdf-backend', {
-        body: {
-          courseId,
-          moduleId: module?.id,
-          userEmail,
-        }
-      }).catch(e => console.warn('[Download] Fail-safe trigger failed:', e));
-    }
-
     // Track download
     try {
       await supabase.functions.invoke('log-download', {
@@ -253,6 +240,11 @@ const DownloadPage = () => {
           (progress, status) => {
             setDownloadProgress(progress);
             setDownloadStatus(status);
+          },
+          {
+            courseId,
+            moduleId: module?.id,
+            userEmail
           }
         );
         filename = `OneDuo_${title.replace(/[^a-zA-Z0-9]/g, "_")}.pdf`;
