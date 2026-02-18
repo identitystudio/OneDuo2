@@ -275,6 +275,8 @@ const extractFrameTextsWithProgress = async (
     const batchProgress = ((batchIndex + 1) / totalBatches) * 100;
     onProgress?.(Number(batchProgress.toFixed(1)), `Analyzing frames ${startIdx + 1}-${endIdx} of ${totalFrames}...`);
 
+    console.log(`[pdfExporter] Calling Gemini 2.5 Flash via extract-frame-text for frames ${startIdx + 1}-${endIdx}...`);
+
     try {
       const { data, error } = await supabase.functions.invoke('extract-frame-text', {
         body: {
@@ -309,6 +311,8 @@ const analyzeWorkflowSequences = async (
   onProgress?: (progress: number, status: string) => void
 ): Promise<WorkflowAnalysis | null> => {
   onProgress?.(36, 'Analyzing workflow sequences and dependencies...');
+
+  console.log(`[pdfExporter] Calling Gemini 2.5 Flash via analyze-workflow-sequence...`);
 
   try {
     const { data, error } = await supabase.functions.invoke('analyze-workflow-sequence', {
@@ -1639,6 +1643,7 @@ export const generateMergedCoursePDF = async (
   onProgress?: (progress: number, status: string) => void,
   options: ExportOptions = {}
 ): Promise<Blob> => {
+  console.log(`[CombinedPDF] Generating merged PDF using Gemini 2.5 Flash for transcription...`);
   // jsPDF built-in fonts are not Unicode-safe. Sanitize all user-provided text
   // (transcripts + extracted docs) to prevent hard crashes during pdf.text().
   const safe = (v: unknown) => sanitizePdfText(v);
