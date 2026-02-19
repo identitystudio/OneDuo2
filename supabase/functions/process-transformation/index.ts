@@ -56,7 +56,7 @@ const criticalKeywords = [
 //
 // TECHNICAL THRESHOLDS (Empirically Derived):
 // ┌─────────────────────────────────────────────────────────────────┐
-// │ SAMPLING RATE: 3 FPS (3 frames per second)                     │
+// │ SAMPLING RATE: 1 FPS (1 frame per second)                      │
 // │ - Captures sufficient granularity for screen-based workflows   │
 // │ - Balances accuracy vs. processing cost                        │
 // │ - Standard for video forensic analysis                         │
@@ -499,9 +499,9 @@ serve(async (req) => {
       );
     }
 
-    // Calculate frame count at 3 FPS
+    // Calculate frame count at 1 FPS
     const durationSeconds = artifact.duration_seconds || 30;
-    const frameCount = durationSeconds * 3;
+    const frameCount = durationSeconds * 1;
     const framesToProcess = Math.min(frameCount, 15000); // Increased limit from 5000 to support 1-hour+ videos
 
 
@@ -527,7 +527,7 @@ serve(async (req) => {
     let selectionCount = 0;
 
     for (let i = startFrom; i < framesToProcess; i++) {
-      const timestampMs = Math.floor((i / 3) * 1000);
+      const timestampMs = Math.floor((i / 1) * 1000);
       const ocrText = sampleOcrTexts[i % sampleOcrTexts.length];
 
       const currentAnalysis = await analyzeFrameWithVision(null, i, ocrText);

@@ -205,6 +205,7 @@ export interface ModuleData {
   video_duration_seconds?: number;
   transcript?: TranscriptSegment[];
   frame_urls?: string[];
+  frame_analyses?: any[];
   audio_events?: AudioEvents;
   prosody_annotations?: ProsodyData;
   // Intelligence Layers
@@ -399,7 +400,7 @@ const getConfidenceColor = (source?: string): { r: number; g: number; b: number 
 };
 
 // Frame sampling targets (keeps PDFs proportional to video length)
-const FRAMES_PER_MINUTE_TARGET = 180; // 3 FPS * 60 seconds = Every single frame included
+const FRAMES_PER_MINUTE_TARGET = 60; // 1 FPS * 60 seconds = Every single frame included
 const MIN_EXPORT_FRAMES = 250;
 const MAX_EXPORT_FRAMES = 15000;
 
@@ -1958,13 +1959,22 @@ export const generateMergedCoursePDF = async (
 
       onProgress?.(progressPercent + 2, `Analyzing ${sampledFrames.length} frames for Chapter ${i + 1}...`);
 
-      // NEW: AI analysis for the merged chapter's frames
-      const moduleAnalyses = await extractFrameTextsWithProgress(
-        sampledFrames,
-        module.video_duration_seconds || 0,
-        module.transcript || [],
-        (p, s) => onProgress?.(progressPercent + (p / 100) * 10, `Chapter ${i + 1}: ${s}`)
-      );
+      // Use pre-computed frame analyses from DB if available (zero Replicate cost)
+      // Falls back to browser-side Replicate OCR for legacy courses without cached data
+      let moduleAnalyses: any[];
+      if (module.frame_analyses && Array.isArray(module.frame_analyses) && module.frame_analyses.length > 0) {
+        console.log(`[Merged PDF] Chapter ${i + 1}: Using ${module.frame_analyses.length} cached frame analyses (0 API calls)`);
+        onProgress?.(progressPercent + 10, `Chapter ${i + 1}: Using cached frame analyses...`);
+        moduleAnalyses = module.frame_analyses;
+      } else {
+        console.log(`[Merged PDF] Chapter ${i + 1}: No cached analyses, running live Replicate OCR...`);
+        moduleAnalyses = await extractFrameTextsWithProgress(
+          sampledFrames,
+          module.video_duration_seconds || 0,
+          module.transcript || [],
+          (p, s) => onProgress?.(progressPercent + (p / 100) * 10, `Chapter ${i + 1}: ${s}`)
+        );
+      }
 
       for (let frameIdx = 0; frameIdx < sampledFrames.length; frameIdx++) {
         if (y > pageHeight - 60) {

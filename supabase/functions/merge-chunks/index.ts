@@ -203,7 +203,7 @@ Deno.serve(async (req) => {
 
       // Calculate timestamps for each frame
       frameUrls.forEach((url, frameIndex) => {
-        const framesPerSecond = 3; // Our standard FPS
+        const framesPerSecond = 1; // Our standard FPS
         const relativeTime = frameIndex / framesPerSecond;
         const absoluteTime = chunk.start_seconds + relativeTime;
 
