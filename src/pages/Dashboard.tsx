@@ -1807,6 +1807,7 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
       // Filter out only serious binary/unsupported formats
       // Images (.jpg, .png, etc.) and Docs (.docx, .pdf) are handled by OCR/Extraction in loader
       const courseFiles = (block.courseFiles || []).filter(file => {
+        if (!file?.name) return false;
         const fileName = file.name.toLowerCase();
         const binaryExts = ['.mp4', '.mov', '.avi', '.mkv', '.webm', '.zip', '.rar', '.7z', '.exe', '.dll', '.bin'];
         return !binaryExts.some(ext => fileName.endsWith(ext));
@@ -1913,11 +1914,14 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
 
           const existingFiles = (courseData?.course_files as any[]) || [];
           const updatedFiles = [
-            ...existingFiles.filter((f: any) => f.type !== 'pdf'),
+            ...existingFiles.filter((f: any) => f?.type !== 'pdf' && (f?.name || f?.filename)),
             {
               type: 'pdf',
-              storage_path: `course-files/${storagePath}`,
-              filename: filename,
+              name: filename, // For Dashboard compatibility
+              filename: filename, // For track-download compatibility
+              storagePath: storagePath, // For Dashboard compatibility
+              storage_path: `course-files/${storagePath}`, // For track-download compatibility
+              size: pdfBlob.size,
               uploaded_at: new Date().toISOString(),
               is_combined: true
             }
@@ -1925,7 +1929,11 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
 
           await supabase
             .from('courses')
-            .update({ course_files: updatedFiles, pdf_revision_pending: false })
+            .update({
+              course_files: updatedFiles,
+              pdf_revision_pending: false,
+              share_enabled: true // Ensure the email link works
+            })
             .eq('id', blockId);
 
           // Update local state to remove the "Updated" badge

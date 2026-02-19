@@ -39,7 +39,7 @@ async function loadSingleFile(file: CourseFile, timeoutMs: number = FILE_TIMEOUT
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const fileName = file.name.toLowerCase();
+    const fileName = (file.name || 'unnamed-file').toLowerCase();
 
     // Download file from storage
     const { data: fileData, error: downloadError } = await supabase.storage

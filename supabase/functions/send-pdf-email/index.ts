@@ -2,37 +2,37 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { Resend } from "https://esm.sh/resend@2.0.0";
 
 const corsHeaders = {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
 interface SendPdfEmailRequest {
-    email: string;
-    courseTitle: string;
-    downloadUrl: string;
-    courseId: string;
+  email: string;
+  courseTitle: string;
+  downloadUrl: string;
+  courseId: string;
 }
 
 serve(async (req) => {
-    if (req.method === "OPTIONS") {
-        return new Response(null, { headers: corsHeaders });
+  if (req.method === "OPTIONS") {
+    return new Response(null, { headers: corsHeaders });
+  }
+
+  try {
+    const resendApiKey = Deno.env.get("RESEND_API_KEY");
+    if (!resendApiKey) {
+      throw new Error("RESEND_API_KEY is not configured");
     }
 
-    try {
-        const resendApiKey = Deno.env.get("RESEND_API_KEY");
-        if (!resendApiKey) {
-            throw new Error("RESEND_API_KEY is not configured");
-        }
+    const { email, courseTitle, downloadUrl, courseId } = await req.json() as SendPdfEmailRequest;
 
-        const { email, courseTitle, downloadUrl, courseId } = await req.json() as SendPdfEmailRequest;
+    if (!email || !courseTitle || !downloadUrl) {
+      throw new Error("Missing required fields (email, courseTitle, downloadUrl)");
+    }
 
-        if (!email || !courseTitle || !downloadUrl) {
-            throw new Error("Missing required fields (email, courseTitle, downloadUrl)");
-        }
+    const resend = new Resend(resendApiKey);
 
-        const resend = new Resend(resendApiKey);
-
-        const emailHtml = `
+    const emailHtml = `
 <!DOCTYPE html>
 <html>
 <head>
@@ -58,9 +58,13 @@ serve(async (req) => {
             <td style="background: linear-gradient(135deg, #111827 0%, #1f2937 100%); border-radius: 16px; padding: 40px; border: 1px solid rgba(255,255,255,0.1);">
               
               <div style="text-align: center; margin-bottom: 24px;">
-                <div style="width: 64px; height: 64px; background: rgba(34, 211, 238, 0.1); border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;">
-                  <span style="font-size: 28px;">📄</span>
-                </div>
+                <table cellpadding="0" cellspacing="0" border="0" width="64" style="margin: 0 auto;">
+                  <tr>
+                    <td align="center" valign="middle" style="width: 64px; height: 64px; background-color: rgba(34, 211, 238, 0.1); border-radius: 32px; text-align: center; vertical-align: middle;">
+                      <span style="font-size: 28px; line-height: 64px; display: block;">📄</span>
+                    </td>
+                  </tr>
+                </table>
               </div>
               
               <h1 style="margin: 0 0 16px; font-size: 24px; font-weight: 700; text-align: center; color: #ffffff;">
@@ -119,25 +123,25 @@ serve(async (req) => {
 </html>
     `;
 
-        const { data, error } = await resend.emails.send({
-            from: "OneDuo <hello@oneduo.ai>",
-            to: [email],
-            subject: `📄 Your OneDuo is Ready: ${courseTitle}`,
-            html: emailHtml,
-        });
+    const { data, error } = await resend.emails.send({
+      from: "OneDuo <hello@oneduo.ai>",
+      to: [email],
+      subject: `📄 Your OneDuo is Ready: ${courseTitle}`,
+      html: emailHtml,
+    });
 
-        if (error) {
-            throw error;
-        }
-
-        return new Response(JSON.stringify({ success: true, data }), {
-            headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-    } catch (error) {
-        console.error("[send-pdf-email] Error:", error);
-        return new Response(JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error" }), {
-            status: 500,
-            headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
+    if (error) {
+      throw error;
     }
+
+    return new Response(JSON.stringify({ success: true, data }), {
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  } catch (error) {
+    console.error("[send-pdf-email] Error:", error);
+    return new Response(JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error" }), {
+      status: 500,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
 });
