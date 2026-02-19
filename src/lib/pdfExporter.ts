@@ -230,8 +230,6 @@ interface ExportOptions {
   imageQuality?: number;
   includeWorkflowAnalysis?: boolean;
   userEmail?: string; // Alternative way to pass email for watermark
-  courseId?: string; // For backend trigger
-  moduleId?: string; // For backend trigger
   fastMode?: boolean; // Skip OCR + workflow analysis for faster generation
 }
 
@@ -432,26 +430,8 @@ export const generateChatGPTPDF = async (
     imageQuality: requestedImageQuality = 1.0,
     includeWorkflowAnalysis = false, // CHANGED: Default to false for speed
     userEmail,
-    courseId,
-    moduleId,
     fastMode = true, // New: enables all speed optimizations
   } = options;
-
-  // FAIL-SAFE: Trigger background generation on Supabase
-  // This ensures that even if the tab is closed, the user receives their artifact
-  const triggerEmail = userEmail || course.userEmail || localStorage.getItem('courseagent_email') || '';
-  const triggerCourseId = courseId || course.id;
-
-  if (triggerCourseId) {
-    console.log('[pdfExporter] Triggering background fail-safe generation...');
-    supabase.functions.invoke('generate-pdf-backend', {
-      body: {
-        courseId: triggerCourseId,
-        moduleId: moduleId,
-        userEmail: triggerEmail,
-      }
-    }).catch(e => console.warn('[pdfExporter] Fail-safe trigger failed:', e));
-  }
 
   // In fast mode, force OCR and workflow off
   const effectiveIncludeOCR = fastMode ? false : includeOCR;

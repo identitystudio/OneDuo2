@@ -1886,6 +1886,77 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
           },
           { maxFrames: 1000 } // Allow more frames per module for merged PDFs
         );
+
+        // ========== UPLOAD TO STORAGE & TRIGGER EMAIL ==========
+        try {
+          const timestamp = Date.now();
+          const storagePath = `exports/${blockId}/${timestamp}_oneduo.pdf`;
+          const filename = `${block.name} - OneDuo.pdf`;
+
+          setPdfProgress(prev => ({ ...prev, progress: 92, status: 'Uploading to cloud for email delivery...' }));
+
+          const { error: uploadError } = await supabase.storage
+            .from('course-files')
+            .upload(storagePath, pdfBlob, {
+              contentType: 'application/pdf',
+              upsert: true
+            });
+
+          if (uploadError) throw uploadError;
+
+          // Update database with the PDF reference
+          const { data: courseData } = await supabase
+            .from('courses')
+            .select('course_files')
+            .eq('id', blockId)
+            .single();
+
+          const existingFiles = (courseData?.course_files as any[]) || [];
+          const updatedFiles = [
+            ...existingFiles.filter((f: any) => f.type !== 'pdf'),
+            {
+              type: 'pdf',
+              storage_path: `course-files/${storagePath}`,
+              filename: filename,
+              uploaded_at: new Date().toISOString(),
+              is_combined: true
+            }
+          ];
+
+          await supabase
+            .from('courses')
+            .update({ course_files: updatedFiles, pdf_revision_pending: false })
+            .eq('id', blockId);
+
+          // Update local state to remove the "Updated" badge
+          setCourses(prev => prev.map(c =>
+            c.id === blockId ? { ...c, pdf_revision_pending: false } : c
+          ));
+
+          // Send email
+          setPdfProgress(prev => ({ ...prev, progress: 96, status: 'Sending download link to your email...' }));
+
+          const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+          const functionsUrl = supabaseUrl?.replace('.supabase.co', '.functions.supabase.co');
+          const shareToken = block.courses[0]?.share_token;
+          const downloadUrl = `${functionsUrl}/track-download?courseId=${blockId}&source=email${shareToken ? `&token=${shareToken}` : ''}`;
+
+          await supabase.functions.invoke('send-pdf-email', {
+            body: {
+              email: user?.email,
+              courseTitle: block.name,
+              downloadUrl,
+              courseId: blockId
+            }
+          });
+
+          setPdfProgress(prev => ({ ...prev, progress: 100, status: 'OneDuo sent to your email!' }));
+
+        } catch (deliveryError) {
+          console.error('Failed to deliver PDF via email:', deliveryError);
+          toast.error('PDF generated but email delivery failed. Your local download is ready.');
+        }
+
       } catch (pdfError) {
         console.error('PDF generation failed:', pdfError);
         throw new Error('PDF generation failed. Please try again.');
@@ -1895,19 +1966,6 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
       try {
         const filename = `${block.name} - OneDuo.pdf`;
         downloadPDF(pdfBlob, filename);
-
-        // Clear the pdf_revision_pending flag after successful download
-        if (block.courses[0]?.pdf_revision_pending) {
-          await supabase
-            .from('courses')
-            .update({ pdf_revision_pending: false })
-            .eq('id', blockId);
-
-          // Update local state to remove the "Updated" badge immediately
-          setCourses(prev => prev.map(c =>
-            c.id === blockId ? { ...c, pdf_revision_pending: false } : c
-          ));
-        }
 
         // Enhanced success message with detailed summary
         let supplementalNote = '';

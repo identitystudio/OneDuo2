@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useParams, Link, useSearchParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
-import { Download as DownloadIcon, CheckCircle, Loader2, FileText, MessageSquare, AlertCircle, Package, Film, Layers, RefreshCw, Mail } from "lucide-react";
+import { Download as DownloadIcon, CheckCircle, Loader2, FileText, MessageSquare, AlertCircle, Package, Film, Layers, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { generateChatGPTPDF } from "@/lib/pdfExporter";
 import { generateMemoryPackage, ExportMode } from "@/lib/memoryExporter";
@@ -57,8 +57,6 @@ const DownloadPage = () => {
   const [filmMode, setFilmMode] = useState(false);
   const [isPartial, setIsPartial] = useState(false);
   const [noDataAvailable, setNoDataAvailable] = useState(false);
-  const [emailing, setEmailing] = useState(false);
-  const [emailSent, setEmailSent] = useState(false);
   const hasAutoTriggered = useRef(false);
 
   useEffect(() => {
@@ -240,11 +238,6 @@ const DownloadPage = () => {
           (progress, status) => {
             setDownloadProgress(progress);
             setDownloadStatus(status);
-          },
-          {
-            courseId,
-            moduleId: module?.id,
-            userEmail
           }
         );
         filename = `OneDuo_${title.replace(/[^a-zA-Z0-9]/g, "_")}.pdf`;
@@ -280,41 +273,6 @@ const DownloadPage = () => {
       hasAutoTriggered.current = false;
     } finally {
       setDownloading(false);
-    }
-  };
-
-  const handleEmailPdf = async () => {
-    if (!userEmail) {
-      toast.error("You must be logged in to email the PDF.");
-      return;
-    }
-
-    const downloadData = module || course;
-    if (!downloadData) return;
-
-    setEmailing(true);
-    setDownloadStatus("Triggering background delivery...");
-
-    try {
-      // Trigger background PDF generation and email
-      const { data, error } = await supabase.functions.invoke('generate-pdf-backend', {
-        body: {
-          courseId,
-          moduleId: module?.id,
-          userEmail,
-        }
-      });
-
-      if (error) throw error;
-      if (data && data.error) throw new Error(data.error);
-
-      setEmailSent(true);
-      toast.success("Background PDF generation started! You'll receive an email once it's complete.");
-    } catch (err: any) {
-      console.error("Email failed:", err);
-      toast.error("Failed to email PDF. Please try again or download directly.");
-    } finally {
-      setEmailing(false);
     }
   };
 
@@ -403,12 +361,7 @@ const DownloadPage = () => {
                 <span className="font-medium text-foreground">"{displayTitle}"</span> has been downloaded.
               </p>
               {displaySubtitle && (
-                <p className="text-sm text-muted-foreground mb-2">{displaySubtitle}</p>
-              )}
-              {userEmail && (
-                <p className="text-sm text-muted-foreground animate-pulse mt-2">
-                  Even if you close this tab, your {selectedFormat === 'pdf' ? 'PDF' : 'OneDuo'} will be emailed to you once complete.
-                </p>
+                <p className="text-sm text-muted-foreground mb-6">{displaySubtitle}</p>
               )}
 
               <div className="space-y-3">
@@ -425,13 +378,13 @@ const DownloadPage = () => {
                 </Link>
               </div>
             </div>
-          ) : downloading || emailing ? (
-            // Downloading/Emailing State
+          ) : downloading ? (
+            // Downloading State
             <div className="text-center">
               <div className="w-20 h-20 bg-primary/10 rounded-full flex items-center justify-center mx-auto mb-6">
                 <Loader2 className="h-10 w-10 text-primary animate-spin" />
               </div>
-              <h2 className="text-2xl font-bold mb-2">{emailing ? 'Emailing Your PDF' : 'Generating Your PDF'}</h2>
+              <h2 className="text-2xl font-bold mb-2">Generating Your PDF</h2>
               <p className="text-muted-foreground mb-6">{downloadStatus}</p>
 
               {/* Progress Bar */}
@@ -480,8 +433,8 @@ const DownloadPage = () => {
                   <button
                     onClick={() => setSelectedFormat('pdf')}
                     className={`p-3 rounded-lg border text-left transition-all ${selectedFormat === 'pdf'
-                      ? 'border-primary bg-primary/5'
-                      : 'border-border hover:border-primary/50'
+                        ? 'border-primary bg-primary/5'
+                        : 'border-border hover:border-primary/50'
                       }`}
                   >
                     <div className="flex items-center gap-3">
@@ -496,8 +449,8 @@ const DownloadPage = () => {
                   <button
                     onClick={() => setSelectedFormat('memory-training')}
                     className={`p-3 rounded-lg border text-left transition-all ${selectedFormat === 'memory-training'
-                      ? 'border-primary bg-primary/5'
-                      : 'border-border hover:border-primary/50'
+                        ? 'border-primary bg-primary/5'
+                        : 'border-border hover:border-primary/50'
                       }`}
                   >
                     <div className="flex items-center gap-3">
@@ -512,8 +465,8 @@ const DownloadPage = () => {
                   <button
                     onClick={() => setSelectedFormat('memory-creative')}
                     className={`p-3 rounded-lg border text-left transition-all ${selectedFormat === 'memory-creative'
-                      ? 'border-primary bg-primary/5'
-                      : 'border-border hover:border-primary/50'
+                        ? 'border-primary bg-primary/5'
+                        : 'border-border hover:border-primary/50'
                       }`}
                   >
                     <div className="flex items-center gap-3">
@@ -545,34 +498,10 @@ const DownloadPage = () => {
                 )}
               </div>
 
-              <div className="grid gap-3">
-                <Button onClick={handleDownload} size="lg" className="w-full text-lg py-6">
-                  <DownloadIcon className="h-5 w-5 mr-2" />
-                  {selectedFormat === 'pdf' ? 'Download PDF' : 'Download Memory Package'}
-                </Button>
-
-                {selectedFormat === 'pdf' && userEmail && (
-                  <Button
-                    onClick={handleEmailPdf}
-                    variant="outline"
-                    size="lg"
-                    className="w-full text-lg py-6"
-                    disabled={emailSent}
-                  >
-                    {emailSent ? (
-                      <>
-                        <CheckCircle className="h-5 w-5 mr-2 text-green-500" />
-                        Email Sent
-                      </>
-                    ) : (
-                      <>
-                        <Mail className="h-5 w-5 mr-2" />
-                        Email me the PDF
-                      </>
-                    )}
-                  </Button>
-                )}
-              </div>
+              <Button onClick={handleDownload} size="lg" className="w-full text-lg py-6">
+                <DownloadIcon className="h-5 w-5 mr-2" />
+                {selectedFormat === 'pdf' ? 'Download PDF' : 'Download Memory Package'}
+              </Button>
 
               <p className="text-xs text-muted-foreground mt-4">
                 {selectedFormat === 'pdf'

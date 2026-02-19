@@ -29,7 +29,6 @@ import CaseStudy from "./pages/CaseStudy";
 import Evidence from "./pages/Evidence";
 import DownloadPage from "./pages/Download";
 import DownloadModulePage from "./pages/DownloadModule";
-import DownloadFile from "./pages/DownloadFile";
 import FoundersNotes from "./pages/FoundersNotes";
 import Watch from "./pages/Watch";
 import NotFound from "./pages/NotFound";
@@ -69,7 +68,6 @@ const App = () => (
             <Route path="/watch" element={<Watch />} />
             <Route path="/download/:courseId" element={<DownloadPage />} />
             <Route path="/download/module/:moduleId" element={<DownloadModulePage />} />
-            <Route path="/download-file" element={<DownloadFile />} />
             <Route path="/admin" element={<AdminDashboard />} />
             <Route path="/admin/ops" element={<OpsDashboard />} />
             <Route path="/admin/users" element={<UserViewDashboard />} />
