@@ -1240,7 +1240,7 @@ export const generateChatGPTPDF = async (
   const metadata = [
     ['Course Title:', course.title],
     ['Duration:', duration],
-    ['Total Frames Captured:', `${frameCount} @ ~3 FPS`],
+    ['Total Frames Captured:', `${frameCount} @ ~1 FPS`],
     ['Frames with OCR:', `${ocrFrames} / ${frameCount}`],
     ['Key Moments (emphasis detected):', keyMoments.toString()],
     ['Critical Steps (must not skip):', mustNotSkipFrames.toString()],
@@ -1417,16 +1417,18 @@ export const generateChatGPTPDF = async (
           pdf.addImage(base64Image, 'JPEG', margin, y, imgWidth, imgHeight, undefined, 'NONE');
           y += imgHeight + 3;
 
-          // NEW: VISUAL TRANSCRIPTION BELOW IMAGE
-          if (frameAnalysis?.visualDescription) {
+          // VISUAL CAPTION: transcript excerpt below image
+          if (transcriptText && transcriptText !== '(No transcript for this segment)') {
             pdf.setFontSize(7);
             pdf.setFont('helvetica', 'italic');
             pdf.setTextColor(80, 80, 80);
-            const transcriptionText = `Visual Transcription: ${frameAnalysis.visualDescription}`;
-            const splitTranscription = pdf.splitTextToSize(transcriptionText, imgWidth);
-            pdf.text(splitTranscription, margin, y);
-            y += (splitTranscription.length * 3) + 3;
-            pdf.setFont('helvetica', 'normal'); // Reset font
+            const captionText = transcriptText.length > 120
+              ? `"${transcriptText.substring(0, 117)}..."`
+              : `"${transcriptText}"`;
+            const splitCaption = pdf.splitTextToSize(captionText, imgWidth);
+            pdf.text(splitCaption.slice(0, 2), margin, y);
+            y += (Math.min(splitCaption.length, 2) * 3) + 3;
+            pdf.setFont('helvetica', 'normal');
           }
         } else {
           // Log which frame failed for debugging
@@ -2006,21 +2008,38 @@ export const generateMergedCoursePDF = async (
             pdf.addImage(imgData.dataUrl, 'JPEG', margin, y, imgWidth, imgHeight, undefined, 'NONE');
             y += imgHeight + 3;
 
-            // NEW: VISUAL TRANSCRIPTION BELOW IMAGE (Merged PDF)
-            if (frameAnalysis?.visualDescription) {
+            // VISUAL CAPTION: transcript excerpt below image (Merged PDF)
+            const moduleTranscript = module.transcript || [];
+            const frameDurationSec = module.video_duration_seconds
+              ? module.video_duration_seconds / Math.max(sampledFrames.length, 1)
+              : 10;
+            const frameStartSec = Math.max(0, timestamp - frameDurationSec / 2);
+            const frameEndSec = timestamp + frameDurationSec / 2;
+            const matchedSegs = moduleTranscript.filter((seg: any) => {
+              const segStart = seg.start || 0;
+              const segEnd = seg.end || segStart + 60;
+              return segStart < frameEndSec && segEnd > frameStartSec;
+            });
+            const captionRaw = matchedSegs.length > 0
+              ? matchedSegs.map((s: any) => s.text).join(' ')
+              : '';
+
+            if (captionRaw) {
               pdf.setFontSize(7);
               pdf.setFont('helvetica', 'italic');
               pdf.setTextColor(80, 80, 80);
-              const transcriptionText = `Visual Transcription: ${frameAnalysis.visualDescription}`;
-              const splitTranscription = pdf.splitTextToSize(transcriptionText, imgWidth);
+              const captionText = captionRaw.length > 120
+                ? `"${captionRaw.substring(0, 117)}..."`
+                : `"${captionRaw}"`;
+              const splitCaption = pdf.splitTextToSize(safe(captionText), imgWidth);
 
-              if (y + (splitTranscription.length * 3) > pageHeight - 20) {
+              if (y + (Math.min(splitCaption.length, 2) * 3) > pageHeight - 20) {
                 addPageWithHeaders();
               }
 
-              pdf.text(splitTranscription, margin, y);
-              y += (splitTranscription.length * 3) + 7;
-              pdf.setFont('helvetica', 'normal'); // Reset font
+              pdf.text(splitCaption.slice(0, 2), margin, y);
+              y += (Math.min(splitCaption.length, 2) * 3) + 7;
+              pdf.setFont('helvetica', 'normal');
             } else {
               y += 5;
             }
