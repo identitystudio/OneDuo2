@@ -1372,6 +1372,57 @@ serve(async (req) => {
         }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
       }
 
+      // ============ SET TEAM EMAIL ============
+      case "set-team-email": {
+        const { courseId, teamEmail } = body;
+
+        if (!courseId || !teamEmail) {
+          return new Response(JSON.stringify({ error: "Missing required fields" }), {
+            status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
+
+        // Verify user owns the course
+        if (!authenticatedUserId) {
+          return new Response(JSON.stringify({ error: "Unauthorized" }), {
+            status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
+
+        const { data: course, error: fetchError } = await supabase
+          .from("courses")
+          .select("user_id")
+          .eq("id", courseId)
+          .single();
+
+        if (fetchError || !course) {
+          return new Response(JSON.stringify({ error: "Course not found" }), {
+            status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
+
+        if (course.user_id !== authenticatedUserId) {
+          return new Response(JSON.stringify({ error: "Forbidden: You don't own this course" }), {
+            status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
+
+        const { error: updateError } = await supabase
+          .from("courses")
+          .update({ team_notification_email: teamEmail })
+          .eq("id", courseId);
+
+        if (updateError) {
+          return new Response(JSON.stringify({ error: "Failed to update team email" }), {
+            status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
+
+        return new Response(JSON.stringify({ success: true }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
       // ============ ADD MODULES TO EXISTING COURSE ============
       case "add-modules": {
         const { email, modules } = body;
@@ -1543,26 +1594,26 @@ serve(async (req) => {
           const REPLICATE_API_KEY = Deno.env.get("REPLICATE_API_KEY");
           if (REPLICATE_API_KEY && enrichedCourses) {
             const updates = [];
-            
+
             for (const course of enrichedCourses) {
               // Check course-level extraction
-              if (course.status === 'processing' && 
-                  course.progress_step === 'extracting_frames' && 
-                  course.prediction_id && 
-                  // Only check if heartbeat is older than 10s or missing
-                  (!course.last_heartbeat_at || (Date.now() - new Date(course.last_heartbeat_at).getTime() > 10000))) {
-                
+              if (course.status === 'processing' &&
+                course.progress_step === 'extracting_frames' &&
+                course.prediction_id &&
+                // Only check if heartbeat is older than 10s or missing
+                (!course.last_heartbeat_at || (Date.now() - new Date(course.last_heartbeat_at).getTime() > 10000))) {
+
                 updates.push(checkReplicateProgress(supabase, course.id, 'courses', course.prediction_id, REPLICATE_API_KEY, course));
               }
 
               // Check module-level extractions
               for (const mod of course.modules) {
-                if (mod.status === 'processing' && 
-                    mod.progress_step === 'extracting_frames_module' && // Note: step name might differ for modules
-                    mod.prediction_id &&
-                    (!mod.heartbeat_at || (Date.now() - new Date(mod.heartbeat_at).getTime() > 10000))) {
-                   
-                   updates.push(checkReplicateProgress(supabase, mod.id, 'course_modules', mod.prediction_id, REPLICATE_API_KEY, mod));
+                if (mod.status === 'processing' &&
+                  mod.progress_step === 'extracting_frames_module' && // Note: step name might differ for modules
+                  mod.prediction_id &&
+                  (!mod.heartbeat_at || (Date.now() - new Date(mod.heartbeat_at).getTime() > 10000))) {
+
+                  updates.push(checkReplicateProgress(supabase, mod.id, 'course_modules', mod.prediction_id, REPLICATE_API_KEY, mod));
                 }
               }
             }
@@ -1585,7 +1636,7 @@ serve(async (req) => {
                       c.progress = u.progress;
                       c.last_heartbeat_at = new Date().toISOString();
                     }
-                  } 
+                  }
                   // Update module in list
                   else if (u.table === 'course_modules') {
                     for (const c of enrichedCourses) {
@@ -3659,11 +3710,11 @@ async function stepTranscribeModule(supabase: any, courseId: string, moduleNumbe
 
   // Use webhook-based transcription (non-blocking)
   const result = await transcribeVideoWithWebhook(
-    supabase, 
-    module.id, 
-    module.video_url, 
-    'course_modules', 
-    courseId, 
+    supabase,
+    module.id,
+    module.video_url,
+    'course_modules',
+    courseId,
     moduleNumber,
     'transcribe_module'
   );
@@ -3677,7 +3728,7 @@ async function stepTranscribeModule(supabase: any, courseId: string, moduleNumbe
       .eq("step", "transcribe_module");
 
     console.log(`[stepTranscribeModule] Job submitted, awaiting webhook for module ${moduleNumber}`);
-    
+
     // Throw a special "await webhook" signal that the caller should catch
     throw new AwaitWebhookSignal("Awaiting external webhook callbacks");
   }
@@ -4967,12 +5018,12 @@ async function stepTranscribe(supabase: any, courseId: string, fixMetadata?: any
 
   // Use webhook-based transcription (non-blocking)
   const result = await transcribeVideoWithWebhook(
-    supabase, 
-    courseId, 
-    course.video_url, 
-    'courses', 
-    courseId, 
-    undefined, 
+    supabase,
+    courseId,
+    course.video_url,
+    'courses',
+    courseId,
+    undefined,
     'transcribe'
   );
 
@@ -4985,7 +5036,7 @@ async function stepTranscribe(supabase: any, courseId: string, fixMetadata?: any
       .eq("step", "transcribe");
 
     console.log(`[stepTranscribe] Job submitted, awaiting webhook for course ${courseId}`);
-    
+
     // Throw a special "await webhook" signal that the caller should catch
     throw new AwaitWebhookSignal("Awaiting external webhook callbacks");
   }
@@ -5799,7 +5850,17 @@ async function sendModuleCompleteEmailIdempotent(
   // This is more reliable as it generates from the module's raw data
   const downloadUrl = `${appUrl}/download/module/${moduleId}`;
 
+  // Get course to check for team notification email
+  const { data: course } = await supabase
+    .from("courses")
+    .select("team_notification_email")
+    .eq("id", courseId)
+    .single();
+
+  const teamEmail = course?.team_notification_email;
+
   try {
+    // 1. Send to owner
     await resend.emails.send({
       from: "OneDuo <hello@oneduo.ai>",
       to: [email],
@@ -5876,6 +5937,87 @@ async function sendModuleCompleteEmailIdempotent(
       `,
     });
     console.log(`[sendModuleCompleteEmail] Module ${moduleNumber} email sent (idempotent)`);
+
+    // 2. Send to team member if configured
+    if (teamEmail) {
+      await resend.emails.send({
+        from: "OneDuo <hello@oneduo.ai>",
+        to: [teamEmail],
+        subject: `${courseTitle}, Module ${moduleNumber} OneDuo is ready for download!`,
+        html: `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        </head>
+        <body style="margin: 0; padding: 0; background-color: #0a0a0a; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+          <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #0a0a0a; padding: 40px 20px;">
+            <tr>
+              <td align="center">
+                <table width="100%" cellpadding="0" cellspacing="0" style="max-width: 520px; background-color: #111111; border-radius: 16px; overflow: hidden;">
+                  
+                  <!-- Header -->
+                  <tr>
+                    <td style="padding: 40px 40px 24px; text-align: center;">
+                      <p style="margin: 0; color: #00d4ff; font-size: 14px; font-weight: 500; letter-spacing: 0.5px;">OneDuo</p>
+                    </td>
+                  </tr>
+                  
+                  <!-- Main Content -->
+                  <tr>
+                    <td style="padding: 0 40px 24px;">
+                      <h2 style="margin: 0 0 16px; color: #ffffff; font-size: 24px; font-weight: 600; line-height: 1.3;">Module ${moduleNumber} Intel Distilled</h2>
+                      <p style="margin: 0 0 16px; color: #cccccc; font-size: 15px; line-height: 1.7;">
+                        <strong style="color: #ffffff;">${courseTitle}</strong> — Module ${moduleNumber} of ${totalModules} is now ready.
+                      </p>
+                      ${totalModules - moduleNumber > 0
+            ? `<p style="margin: 0; color: #888888; font-size: 14px; line-height: 1.6;">The remaining ${totalModules - moduleNumber} module(s) are still processing. You can begin implementation with this module now while the others complete.</p>`
+            : `<p style="margin: 0; color: #888888; font-size: 14px; line-height: 1.6;">All modules are now complete. Your entire course artifact is ready for AI-assisted execution.</p>`
+          }
+                    </td>
+                  </tr>
+                  
+                  <!-- CTA Button -->
+                  <tr>
+                    <td style="padding: 0 40px 24px; text-align: center;">
+                      <a href="${downloadUrl}" style="display: inline-block; background: linear-gradient(135deg, #00d4ff 0%, #00a8cc 100%); color: #000000; font-size: 15px; font-weight: 600; text-decoration: none; padding: 14px 32px; border-radius: 8px;">
+                        Access Module ${moduleNumber} →
+                      </a>
+                    </td>
+                  </tr>
+                  
+                  <!-- Proprietary Notice (compact) -->
+                  <tr>
+                    <td style="padding: 0 40px 40px;">
+                      <p style="margin: 0; color: #555555; font-size: 11px; line-height: 1.5; text-align: center;">
+                        This artifact is proprietary intel for authorized use only. Not to be redistributed.
+                      </p>
+                    </td>
+                  </tr>
+                  
+                </table>
+                
+                <!-- Subtle footer -->
+                <table width="100%" cellpadding="0" cellspacing="0" style="max-width: 520px; margin-top: 24px;">
+                  <tr>
+                    <td style="text-align: center;">
+                      <p style="margin: 0; color: #333333; font-size: 12px;">
+                        — OneDuo
+                      </p>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+          </table>
+        </body>
+        </html>
+        `,
+      });
+      console.log(`[sendModuleCompleteEmail] Team email sent to ${teamEmail}`);
+    }
+
   } catch (err) {
     console.error("[sendModuleCompleteEmail] Failed:", err);
     // Note: email_sent_at is already set, so we won't retry sending
@@ -6009,10 +6151,10 @@ async function sendFailureEmail(email: string, courseTitle: string, courseId: st
 }
 // Helper for Lazy Progress Updates
 async function checkReplicateProgress(
-  supabase: any, 
-  id: string, 
-  table: string, 
-  predictionId: string, 
+  supabase: any,
+  id: string,
+  table: string,
+  predictionId: string,
   apiKey: string,
   currentRecord: any
 ) {
@@ -6024,10 +6166,10 @@ async function checkReplicateProgress(
     if (!response.ok) return null;
 
     const prediction = await response.json();
-    
+
     // Calculate progress
     let progress = currentRecord.progress;
-    
+
     if (prediction.status === 'succeeded') {
       progress = 90; // Almost done, waiting for webhook to finalize
     } else if (prediction.status === 'processing') {
@@ -6042,8 +6184,8 @@ async function checkReplicateProgress(
           // Map 0-100 extraction to 25-90 overall progress
           progress = 25 + Math.floor((lastPct / 100) * 65);
         } else {
-           // Fallback: Increment by 1-5% per check up to 85%
-           progress = Math.min(85, (currentRecord.progress || 25) + 2);
+          // Fallback: Increment by 1-5% per check up to 85%
+          progress = Math.min(85, (currentRecord.progress || 25) + 2);
         }
       } else {
         progress = Math.min(85, (currentRecord.progress || 25) + 1);
@@ -6053,10 +6195,10 @@ async function checkReplicateProgress(
     }
 
     // Update DB
-    const updatePayload: any = { 
+    const updatePayload: any = {
       progress,
     };
-    
+
     if (table === 'courses') {
       updatePayload.last_heartbeat_at = new Date().toISOString();
     } else {
@@ -6064,7 +6206,7 @@ async function checkReplicateProgress(
     }
 
     await supabase.from(table).update(updatePayload).eq("id", id);
-    
+
     return { id, table, progress };
   } catch (e) {
     console.warn(`[checkReplicateProgress] Failed for ${id}:`, e);

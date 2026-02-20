@@ -804,15 +804,15 @@ export default function Dashboard() {
   const handleCopyPDFShareLink = (courseId: string) => {
     const link = `${window.location.origin}/view/${courseId}?action=download-pdf`;
     navigator.clipboard.writeText(link);
+
     toast.success('PDF share link copied! Anyone with this link can download the PDF.');
   };
 
   const handleTeamEmailSubmit = async (courseId: string, teamEmail: string) => {
     try {
-      const { error } = await supabase
-        .from('courses')
-        .update({ team_notification_email: teamEmail })
-        .eq('id', courseId);
+      const { error } = await supabase.functions.invoke('process-course', {
+        body: { action: 'set-team-email', courseId, teamEmail }
+      });
 
       if (error) throw error;
       toast.success(`We'll email ${teamEmail} when your OneDuo is ready!`);
