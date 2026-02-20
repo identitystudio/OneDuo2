@@ -15,6 +15,15 @@ const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 // FRAME OCR ANALYSIS (Replicate - cached)
 // ============================================
 
+// Duration sanity check: if DB duration implies < 0.5 FPS, it's likely a stale 300s default
+function sanitizeDuration(duration: number, frameCount: number): number {
+    if (duration > 0 && frameCount > 0 && duration / frameCount > 2) {
+        console.warn(`[generate-pdf-backend] Duration sanity check: ${duration}s for ${frameCount} frames (${(duration / frameCount).toFixed(1)}s/frame). Capping to ${frameCount}s.`);
+        return frameCount; // 1 FPS estimate
+    }
+    return duration;
+}
+
 async function analyzeFramesWithReplicate(
     frameUrls: string[],
     videoDuration: number,
@@ -23,7 +32,8 @@ async function analyzeFramesWithReplicate(
     batchSize: number = 5
 ): Promise<any[]> {
     const results: any[] = [];
-    const frameDuration = videoDuration > 0 ? videoDuration / Math.max(frameUrls.length, 1) : 10;
+    const safeDuration = sanitizeDuration(videoDuration, frameUrls.length);
+    const frameDuration = safeDuration > 0 ? safeDuration / Math.max(frameUrls.length, 1) : 10;
 
     for (let i = 0; i < frameUrls.length; i += batchSize) {
         const batch = frameUrls.slice(i, i + batchSize);
@@ -270,7 +280,11 @@ async function buildPDF(
     });
     y -= 20;
 
-    const totalDuration = modules.reduce((sum: number, m: any) => sum + (m.video_duration_seconds || 0), 0);
+    const totalDuration = modules.reduce((sum: number, m: any) => {
+        const dur = m.video_duration_seconds || 0;
+        const frames = (m.frame_urls || []).length;
+        return sum + sanitizeDuration(dur, frames);
+    }, 0);
     currentPage.drawText(safeText(`${modules.length} Chapters | Total Duration: ${formatTime(totalDuration)}`), {
         x: MARGIN, y, size: 10, font: font, color: rgb(0.4, 0.4, 0.4),
     });
@@ -317,9 +331,10 @@ async function buildPDF(
         });
         y -= 32;
 
-        // Duration
-        if (mod.video_duration_seconds) {
-            currentPage.drawText(safeText(`Duration: ${formatTime(mod.video_duration_seconds)}`), {
+        // Duration (with sanity check)
+        const correctedModDuration = sanitizeDuration(mod.video_duration_seconds || 0, (mod.frame_urls || []).length);
+        if (correctedModDuration > 0) {
+            currentPage.drawText(safeText(`Duration: ${formatTime(correctedModDuration)}`), {
                 x: MARGIN, y, size: 9, font: font, color: rgb(0.4, 0.4, 0.4),
             });
             y -= 15;
@@ -431,7 +446,8 @@ async function buildPDF(
             // Sample frames (max 50 for server-side to keep PDF size reasonable)
             const maxServerFrames = 50;
             const sampledFrameUrls = sampleFramesEvenly(frameUrls, maxServerFrames);
-            const frameDuration = (mod.video_duration_seconds || 0) / Math.max(frameUrls.length, 1);
+            const correctedDuration = sanitizeDuration(mod.video_duration_seconds || 0, frameUrls.length);
+            const frameDuration = correctedDuration > 0 ? correctedDuration / Math.max(frameUrls.length, 1) : 10;
 
             for (let fi = 0; fi < sampledFrameUrls.length; fi++) {
                 const frameUrl = sampledFrameUrls[fi];
@@ -477,9 +493,22 @@ async function buildPDF(
                     y -= 12;
                 }
 
-                // Visual transcription caption (from cached analysis)
-                if (analysis?.visualDescription) {
-                    drawWrappedText(`Visual Transcription: ${analysis.visualDescription}`, {
+                // Visual transcription caption (from cached analysis or transcript fallback)
+                let caption = analysis?.visualDescription || '';
+                if (!caption && mod.transcript && mod.transcript.length > 0) {
+                    // Transcript fallback: find segments overlapping this frame's time window
+                    const frameStart = Math.max(0, timestamp - frameDuration / 2);
+                    const frameEnd = timestamp + frameDuration / 2;
+                    const matched = mod.transcript.filter((seg: any) => {
+                        const segStart = seg.start || 0;
+                        const segEnd = seg.end || segStart + 60;
+                        return segStart < frameEnd && segEnd > frameStart;
+                    });
+                    caption = matched.map((s: any) => s.text || '').join(' ').trim();
+                    if (caption.length > 120) caption = caption.substring(0, 117) + '...';
+                }
+                if (caption) {
+                    drawWrappedText(`Visual Transcription: ${caption}`, {
                         size: 7, usedFont: italicFont, color: rgb(0.3, 0.3, 0.3),
                     });
                     y -= 5;
@@ -723,7 +752,7 @@ serve(async (req) => {
 
                     const analyses = await analyzeFramesWithReplicate(
                         sampledForOcr,
-                        mod.video_duration_seconds || 0,
+                        sanitizeDuration(mod.video_duration_seconds || 0, sampledForOcr.length),
                         transcriptContext,
                         replicate,
                         5 // batch size

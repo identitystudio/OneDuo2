@@ -339,8 +339,8 @@ function buildCriticalPath(
         timestamp: formatTimeFull(step.timestamps.start),
         action: step.description,
         why_critical: step.signals.join(', ') || 'Multiple signals aligned',
-        skip_consequence: step.signals.includes('skip_consequence') 
-          ? 'Skipping will cause downstream failures' 
+        skip_consequence: step.signals.includes('skip_consequence')
+          ? 'Skipping will cause downstream failures'
           : undefined,
       });
     });
@@ -354,8 +354,8 @@ function buildCriticalPath(
           step_number: stepNum++,
           timestamp: formatTimeFull(frame.timestamp),
           action: frame.instructorIntent || frame.text.substring(0, 100),
-          why_critical: frame.intentSource === 'verbal_explicit' 
-            ? 'Instructor explicitly marked as important' 
+          why_critical: frame.intentSource === 'verbal_explicit'
+            ? 'Instructor explicitly marked as important'
             : 'Multiple visual/verbal signals aligned',
         });
       }
@@ -407,9 +407,9 @@ function buildWeightedActions(
       frame_index: frame!.frameIndex,
       timestamp: formatTimeFull(frame!.timestamp),
       action: frame!.instructorIntent || frame!.text.substring(0, 100),
-      weight: frame!.mustNotSkip ? 1.0 : 
+      weight: frame!.mustNotSkip ? 1.0 :
         frame!.verbalIntentMarkers?.some(m => m.markerType === 'expert_tip') ? 0.9 :
-        Math.min(1.0, (frame!.intentConfidence || 0) * 1.2),
+          Math.min(1.0, (frame!.intentConfidence || 0) * 1.2),
       source: frame!.intentSource || 'inferred',
       skip_consequence: frame!.verbalIntentMarkers?.find(m => m.markerType === 'skip_consequence')?.phrase,
     }))
@@ -445,8 +445,8 @@ function buildEmotionalAnchors(
       .filter((a: any) => a.confidence > 0.7)
       .forEach((ann: any) => {
         // Avoid duplicates by checking timestamp proximity
-        const existing = anchors.find(a => 
-          Math.abs(parseFloat(a.timestamp.split(':').reduce((acc, t, i) => 
+        const existing = anchors.find(a =>
+          Math.abs(parseFloat(a.timestamp.split(':').reduce((acc, t, i) =>
             acc + parseFloat(t) * Math.pow(60, 1 - i), 0).toString()) - ann.timestamp) < 3
         );
         if (!existing) {
@@ -472,8 +472,8 @@ function buildCliffhangerAnchors(
 ): CliffhangerAnchor[] {
   if (!cliffhangerData || cliffhangerData.length === 0) return [];
 
-  const frameDuration = videoDuration && frameAnalyses.length > 0 
-    ? videoDuration / frameAnalyses.length 
+  const frameDuration = videoDuration && frameAnalyses.length > 0
+    ? videoDuration / frameAnalyses.length
     : 10;
 
   return cliffhangerData.map(ch => {
@@ -504,17 +504,17 @@ function detectQuickCuts(
     if (!frame) return;
 
     const score = frame.visualContinuityScore ?? 1.0;
-    
+
     if (score < 0.3) {
       consecutiveLowScores++;
-      
+
       const isMontage = consecutiveLowScores >= 3;
-      
+
       alerts.push({
         timestamp: formatTimeFull(frame.timestamp),
         frame_index: frame.frameIndex,
         visual_continuity_score: score,
-        recommendation: isMontage 
+        recommendation: isMontage
           ? `Fast B-roll/montage detected at ${formatTime(frame.timestamp)} - review for missed content`
           : `Scene change detected at ${formatTime(frame.timestamp)} - potential cut point`,
         is_montage: isMontage,
@@ -822,8 +822,8 @@ export async function generateMemoryPackage(
   zip.file('memory.json', JSON.stringify(memory, null, 2));
 
   onProgress?.(85, 'Generating README...');
-  const readme = mode === 'training' 
-    ? generateTrainingReadme(memory) 
+  const readme = mode === 'training'
+    ? generateTrainingReadme(memory)
     : generateCreativeReadme(memory);
   zip.file('README.md', readme);
 
@@ -836,7 +836,7 @@ export async function generateMemoryPackage(
   onProgress?.(95, 'Creating ZIP package...');
 
   // ========== PHASE 6: FINALIZE (96-100%) ==========
-  const zipBlob = await zip.generateAsync({ 
+  const zipBlob = await zip.generateAsync({
     type: 'blob',
     compression: 'DEFLATE',
     compressionOptions: { level: 6 }

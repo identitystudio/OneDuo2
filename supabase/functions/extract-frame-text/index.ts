@@ -42,6 +42,7 @@ serve(async (req) => {
             frameUrls,
             videoDuration = 0,
             startIndex = 0,
+            totalFrameCount = 0,
             transcriptContext = '',
             allowPartialResults = true,
             maxRetries = 2,
@@ -60,7 +61,9 @@ serve(async (req) => {
             auth: REPLICATE_API_TOKEN,
         });
 
-        const frameDuration = videoDuration > 0 ? videoDuration / Math.max(frameUrls.length + startIndex, 1) : 10;
+        // Use totalFrameCount if provided (correct), otherwise fall back to batch size + startIndex (legacy)
+        const effectiveTotalFrames = totalFrameCount > 0 ? totalFrameCount : (frameUrls.length + startIndex);
+        const frameDuration = videoDuration > 0 ? videoDuration / Math.max(effectiveTotalFrames, 1) : 10;
 
         console.log(`[extract-frame-text] Processing ${frameUrls.length} frames concurrently using Replicate...`);
 

@@ -281,6 +281,7 @@ const extractFrameTextsWithProgress = async (
           frameUrls: currentBatch,
           videoDuration,
           startIndex: i,
+          totalFrameCount: totalFrames,
           transcriptContext,
           allowPartialResults: true
         }
@@ -508,7 +509,15 @@ export const generateChatGPTPDF = async (
   };
 
   const allFrames = course.frame_urls || [];
-  const videoDuration = course.video_duration_seconds || 0;
+  const allFrameCount = allFrames.length;
+  // Duration sanity check: if the DB duration implies < 0.5 FPS (i.e. duration is too large
+  // relative to frame count), it's likely a stale 300s default. Estimate from frame count at 1 FPS.
+  let videoDuration = course.video_duration_seconds || 0;
+  if (videoDuration > 0 && allFrameCount > 0 && videoDuration / allFrameCount > 2) {
+    const estimatedDuration = allFrameCount; // 1 FPS → 1 frame per second
+    console.warn(`[PDF] Duration sanity check: DB says ${videoDuration}s for ${allFrameCount} frames (${(videoDuration / allFrameCount).toFixed(1)}s/frame). Capping to ${estimatedDuration}s (1 FPS estimate).`);
+    videoDuration = estimatedDuration;
+  }
   const transcript = course.transcript || [];
 
   // Determine how many frames to embed.
@@ -1331,6 +1340,14 @@ export const generateChatGPTPDF = async (
 
     const frameDuration = videoDuration > 0 ? videoDuration / Math.max(frames.length, 1) : 10;
 
+    // DEBUG: Log the overall parameters for caption matching
+    console.log(`[PDF CAPTION DEBUG] Starting frame loop: videoDuration=${videoDuration}s, frameDuration=${frameDuration.toFixed(2)}s, frames=${frames.length}, transcript segments=${transcript.length}`);
+    if (transcript.length > 0) {
+      const firstSeg = transcript[0];
+      const lastSeg = transcript[transcript.length - 1];
+      console.log(`[PDF CAPTION DEBUG] Transcript range: first=[${firstSeg.start}-${firstSeg.end}], last=[${lastSeg.start}-${lastSeg.end}]`);
+    }
+
     for (let i = 0; i < renderableFrameCount; i++) {
       const frameUrl = frames[i];
       const frameAnalysis = frameAnalyses[i] || null;
@@ -1357,6 +1374,12 @@ export const generateChatGPTPDF = async (
           return `${speakerLabel}${s.text}`;
         }).join(' ')
         : '(No transcript for this segment)';
+
+      // DEBUG: Log caption matching for first few frames
+      if (i < 3) {
+        console.log(`[PDF CAPTION DEBUG] Frame ${i + 1}: frameTime=${frameTime.toFixed(2)}s, frameDuration=${frameDuration.toFixed(2)}s, window=[${Math.max(0, frameTime - frameDuration / 2).toFixed(2)}-${(frameTime + frameDuration / 2).toFixed(2)}]s`);
+        console.log(`[PDF CAPTION DEBUG] Frame ${i + 1}: transcript.length=${transcript.length}, matched=${relevantTranscript.length}, text="${transcriptText.substring(0, 80)}..."`);
+      }
 
       const inlineAudioAnnotations = getInlineAudioAnnotations(frameTime);
 
@@ -1419,6 +1442,7 @@ export const generateChatGPTPDF = async (
 
           // VISUAL CAPTION: transcript excerpt below image
           if (transcriptText && transcriptText !== '(No transcript for this segment)') {
+            console.log(`[PDF CAPTION] Frame ${i + 1}: RENDERING caption: "${transcriptText.substring(0, 60)}..."`);
             pdf.setFontSize(7);
             pdf.setFont('helvetica', 'italic');
             pdf.setTextColor(80, 80, 80);
@@ -1429,6 +1453,8 @@ export const generateChatGPTPDF = async (
             pdf.text(splitCaption.slice(0, 2), margin, y);
             y += (Math.min(splitCaption.length, 2) * 3) + 3;
             pdf.setFont('helvetica', 'normal');
+          } else {
+            console.log(`[PDF CAPTION] Frame ${i + 1}: NO caption (transcriptText="${transcriptText.substring(0, 40)}")`);
           }
         } else {
           // Log which frame failed for debugging
@@ -1955,6 +1981,13 @@ export const generateMergedCoursePDF = async (
       // Sample frames evenly
       const sampledFrames = sampleFramesEvenly(module.frame_urls, Math.min(maxFrames, module.frame_urls.length));
 
+      // Duration sanity check: if DB duration implies < 0.5 FPS, it's likely a stale 300s default
+      let correctedModuleDuration = module.video_duration_seconds || 0;
+      if (correctedModuleDuration > 0 && module.frame_urls.length > 0 && correctedModuleDuration / module.frame_urls.length > 2) {
+        console.warn(`[Merged PDF] Chapter ${i + 1}: Duration sanity check failed (${correctedModuleDuration}s for ${module.frame_urls.length} frames). Using frame count as estimate.`);
+        correctedModuleDuration = module.frame_urls.length; // 1 FPS estimate
+      }
+
       // Cap quality for huge frame sets, but keep it high enough for UI legibility.
       const moduleRecommendedQuality = getRecommendedImageQuality(module.frame_urls.length);
       const moduleEffectiveQuality = imageQuality > 0 ? Math.min(imageQuality, moduleRecommendedQuality) : moduleRecommendedQuality;
@@ -1972,7 +2005,7 @@ export const generateMergedCoursePDF = async (
         console.log(`[Merged PDF] Chapter ${i + 1}: No cached analyses, running live Replicate OCR...`);
         moduleAnalyses = await extractFrameTextsWithProgress(
           sampledFrames,
-          module.video_duration_seconds || 0,
+          correctedModuleDuration,
           module.transcript || [],
           (p, s) => onProgress?.(progressPercent + (p / 100) * 10, `Chapter ${i + 1}: ${s}`)
         );
@@ -1985,8 +2018,10 @@ export const generateMergedCoursePDF = async (
 
         const frameUrl = sampledFrames[frameIdx];
         const frameAnalysis = moduleAnalyses[frameIdx];
-        const timestamp = frameAnalysis?.timestamp || (module.video_duration_seconds
-          ? (frameIdx / sampledFrames.length) * module.video_duration_seconds
+        // Duration sanity check for merged PDF: if DB duration implies < 0.5 FPS, cap it
+        let moduleDurationForTimestamp = correctedModuleDuration;
+        const timestamp = frameAnalysis?.timestamp || (moduleDurationForTimestamp
+          ? (frameIdx / sampledFrames.length) * moduleDurationForTimestamp
           : frameIdx);
 
         pdf.setFontSize(8);
@@ -2010,8 +2045,8 @@ export const generateMergedCoursePDF = async (
 
             // VISUAL CAPTION: transcript excerpt below image (Merged PDF)
             const moduleTranscript = module.transcript || [];
-            const frameDurationSec = module.video_duration_seconds
-              ? module.video_duration_seconds / Math.max(sampledFrames.length, 1)
+            const frameDurationSec = correctedModuleDuration
+              ? correctedModuleDuration / Math.max(sampledFrames.length, 1)
               : 10;
             const frameStartSec = Math.max(0, timestamp - frameDurationSec / 2);
             const frameEndSec = timestamp + frameDurationSec / 2;
