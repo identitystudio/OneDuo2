@@ -1485,6 +1485,7 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
             video_duration_seconds: courseData.video_duration_seconds,
             transcript: courseData.transcript,
             frame_urls: courseData.frame_urls,
+            frame_analyses: courseData.frame_analyses || [],
             audio_events: courseData.audio_events,
             prosody_annotations: courseData.prosody_annotations,
             supplementalFiles: loadedSupplementalFiles
@@ -1637,6 +1638,7 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
             video_duration_seconds: moduleData.video_duration_seconds,
             transcript: moduleData.transcript || [],
             frame_urls: moduleData.frame_urls || [],
+            frame_analyses: moduleData.frame_analyses || [],
             audio_events: moduleData.audio_events,
             prosody_annotations: moduleData.prosody_annotations,
             supplementalFiles: loadedSupplementalFiles

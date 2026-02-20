@@ -184,6 +184,7 @@ interface CourseData {
   video_duration_seconds?: number;
   transcript?: TranscriptSegment[];
   frame_urls?: string[];
+  frame_analyses?: FrameAnalysis[]; // Cached visual analyses from AI (visualDescription etc.)
   audio_events?: AudioEvents;
   prosody_annotations?: ProsodyData;
   userEmail?: string; // For watermarking
@@ -662,7 +663,26 @@ export const generateChatGPTPDF = async (
   // ========== PHASE 1: OCR EXTRACTION WITH ENHANCED INTENT ==========
   let frameAnalyses: (FrameAnalysis | null)[] = [];
 
-  if (effectiveIncludeOCR && hasFrames) {
+  // PRIORITY 1: Use cached frame analyses from database (persisted by generate-pdf-backend)
+  // This enables visual captions even in fast mode without re-running OCR
+  const cachedAnalyses = course.frame_analyses || [];
+  if (cachedAnalyses.length > 0 && hasFrames) {
+    console.log(`[pdfExporter] Using ${cachedAnalyses.length} cached frame analyses from database`);
+    // Map cached analyses to the frames we're rendering
+    // If frame counts don't match (e.g. different sampling), map by index ratio
+    if (cachedAnalyses.length === frames.length) {
+      frameAnalyses = cachedAnalyses;
+    } else {
+      // Proportional mapping: map each rendered frame to closest cached analysis
+      frameAnalyses = frames.map((_, i) => {
+        const mappedIdx = Math.round((i / Math.max(frames.length - 1, 1)) * (cachedAnalyses.length - 1));
+        return cachedAnalyses[mappedIdx] || null;
+      });
+      console.log(`[pdfExporter] Mapped ${cachedAnalyses.length} cached analyses to ${frames.length} frames`);
+    }
+    onProgress?.(35, 'Visual analyses loaded from cache...');
+  } else if (effectiveIncludeOCR && hasFrames) {
+    // PRIORITY 2: Run fresh OCR/visual analysis via Replicate
     onProgress?.(10, `Starting AI vision analysis of ${frames.length} frames...`);
 
     frameAnalyses = await extractFrameTextsWithProgress(
@@ -1340,14 +1360,6 @@ export const generateChatGPTPDF = async (
 
     const frameDuration = videoDuration > 0 ? videoDuration / Math.max(frames.length, 1) : 10;
 
-    // DEBUG: Log the overall parameters for caption matching
-    console.log(`[PDF CAPTION DEBUG] Starting frame loop: videoDuration=${videoDuration}s, frameDuration=${frameDuration.toFixed(2)}s, frames=${frames.length}, transcript segments=${transcript.length}`);
-    if (transcript.length > 0) {
-      const firstSeg = transcript[0];
-      const lastSeg = transcript[transcript.length - 1];
-      console.log(`[PDF CAPTION DEBUG] Transcript range: first=[${firstSeg.start}-${firstSeg.end}], last=[${lastSeg.start}-${lastSeg.end}]`);
-    }
-
     for (let i = 0; i < renderableFrameCount; i++) {
       const frameUrl = frames[i];
       const frameAnalysis = frameAnalyses[i] || null;
@@ -1374,12 +1386,6 @@ export const generateChatGPTPDF = async (
           return `${speakerLabel}${s.text}`;
         }).join(' ')
         : '(No transcript for this segment)';
-
-      // DEBUG: Log caption matching for first few frames
-      if (i < 3) {
-        console.log(`[PDF CAPTION DEBUG] Frame ${i + 1}: frameTime=${frameTime.toFixed(2)}s, frameDuration=${frameDuration.toFixed(2)}s, window=[${Math.max(0, frameTime - frameDuration / 2).toFixed(2)}-${(frameTime + frameDuration / 2).toFixed(2)}]s`);
-        console.log(`[PDF CAPTION DEBUG] Frame ${i + 1}: transcript.length=${transcript.length}, matched=${relevantTranscript.length}, text="${transcriptText.substring(0, 80)}..."`);
-      }
 
       const inlineAudioAnnotations = getInlineAudioAnnotations(frameTime);
 
@@ -1440,21 +1446,72 @@ export const generateChatGPTPDF = async (
           pdf.addImage(base64Image, 'JPEG', margin, y, imgWidth, imgHeight, undefined, 'NONE');
           y += imgHeight + 3;
 
-          // VISUAL CAPTION: transcript excerpt below image
-          if (transcriptText && transcriptText !== '(No transcript for this segment)') {
-            console.log(`[PDF CAPTION] Frame ${i + 1}: RENDERING caption: "${transcriptText.substring(0, 60)}..."`);
+          // ===== COMPOSITE VISUAL TRANSCRIPTION CAPTION =====
+          // Synthesizes ALL OneDuo features into one rich caption below the frame:
+          // 1. On-screen text/UI (slides, buttons, menus, highlighted text)
+          // 2. Cursor/highlight tracking (clicks, hovers, selections)
+          // 3. Audio events (music, sound effects, audience reactions)
+          // 4. Tone of voice (emphasis, pauses, pacing)
+          // 5. Visual description (overall screen state)
+          const captionParts: string[] = [];
+
+          // FEATURE 1: Visual description — what's visible on screen
+          if (frameAnalysis?.visualDescription) {
+            captionParts.push(frameAnalysis.visualDescription);
+          }
+
+          // FEATURE 2: On-screen text detection (slides, captions, UI elements, whiteboard)
+          if (frameAnalysis?.keyElements && frameAnalysis.keyElements.length > 0) {
+            const elementsSummary = frameAnalysis.keyElements.slice(0, 4).join(', ');
+            captionParts.push(`[On-screen: ${elementsSummary}]`);
+          }
+
+          // FEATURE 3: Cursor & highlight tracking
+          if (frameAnalysis?.emphasisFlags) {
+            const flags = frameAnalysis.emphasisFlags;
+            const interactionNotes: string[] = [];
+            if (flags.highlight_detected) interactionNotes.push('text highlighted');
+            if (flags.text_selected) interactionNotes.push('text selected');
+            if (flags.cursor_pause) interactionNotes.push('cursor paused here — this matters');
+            if (flags.zoom_focus) interactionNotes.push('zoomed/focused');
+            if (flags.lingering_frame) interactionNotes.push('lingered on this view');
+            if (flags.bold_text) interactionNotes.push('bold text emphasized');
+            if (flags.underline_detected) interactionNotes.push('underlined text');
+            if (interactionNotes.length > 0) {
+              captionParts.push(`[Interaction: ${interactionNotes.join('; ')}]`);
+            }
+          }
+
+          // FEATURE 4: Audio events — music, sound effects, audience reactions
+          // Uses the already-computed inlineAudioAnnotations which includes:
+          // - Music cues: [MUSIC BEGINS: upbeat - pop], [MUSIC FADES]
+          // - Ambient sounds: (typing sounds - demonstrating workflow)
+          // - Audience reactions: (audience laughs - emphatic)
+          // - Meaningful pauses: (beat) or (long pause for effect)
+          // - Prosody: (spoken with emphasis), (slows down deliberately)
+          if (inlineAudioAnnotations.length > 0) {
+            captionParts.push(inlineAudioAnnotations.slice(0, 3).join(' '));
+          }
+
+          // FEATURE 5: Vocal tone/emphasis from frame-level prosody
+          if (frameAnalysis?.prosody?.parenthetical && frameAnalysis.prosody.parenthetical.length > 0) {
+            captionParts.push(`(${frameAnalysis.prosody.parenthetical})`);
+          }
+
+          // Render the composite caption
+          const compositeCaption = captionParts.join(' | ');
+          if (compositeCaption.length > 0) {
             pdf.setFontSize(7);
             pdf.setFont('helvetica', 'italic');
             pdf.setTextColor(80, 80, 80);
-            const captionText = transcriptText.length > 120
-              ? `"${transcriptText.substring(0, 117)}..."`
-              : `"${transcriptText}"`;
-            const splitCaption = pdf.splitTextToSize(captionText, imgWidth);
-            pdf.text(splitCaption.slice(0, 2), margin, y);
-            y += (Math.min(splitCaption.length, 2) * 3) + 3;
+            const truncatedCaption = compositeCaption.length > 300
+              ? compositeCaption.substring(0, 297) + '...'
+              : compositeCaption;
+            const splitCaption = pdf.splitTextToSize(`"${truncatedCaption}"`, imgWidth + 60);
+            const maxLines = Math.min(splitCaption.length, 4);
+            pdf.text(splitCaption.slice(0, maxLines), margin, y);
+            y += (maxLines * 3) + 3;
             pdf.setFont('helvetica', 'normal');
-          } else {
-            console.log(`[PDF CAPTION] Frame ${i + 1}: NO caption (transcriptText="${transcriptText.substring(0, 40)}")`);
           }
         } else {
           // Log which frame failed for debugging
@@ -2043,37 +2100,98 @@ export const generateMergedCoursePDF = async (
             pdf.addImage(imgData.dataUrl, 'JPEG', margin, y, imgWidth, imgHeight, undefined, 'NONE');
             y += imgHeight + 3;
 
-            // VISUAL CAPTION: transcript excerpt below image (Merged PDF)
-            const moduleTranscript = module.transcript || [];
-            const frameDurationSec = correctedModuleDuration
-              ? correctedModuleDuration / Math.max(sampledFrames.length, 1)
-              : 10;
-            const frameStartSec = Math.max(0, timestamp - frameDurationSec / 2);
-            const frameEndSec = timestamp + frameDurationSec / 2;
-            const matchedSegs = moduleTranscript.filter((seg: any) => {
-              const segStart = seg.start || 0;
-              const segEnd = seg.end || segStart + 60;
-              return segStart < frameEndSec && segEnd > frameStartSec;
-            });
-            const captionRaw = matchedSegs.length > 0
-              ? matchedSegs.map((s: any) => s.text).join(' ')
-              : '';
+            // ===== COMPOSITE VISUAL TRANSCRIPTION CAPTION (Merged PDF) =====
+            // Same as single-course: synthesizes ALL OneDuo features
+            const captionParts: string[] = [];
+            const fa = moduleAnalyses[frameIdx] || null;
 
-            if (captionRaw) {
+            // FEATURE 1: Visual description
+            if (fa?.visualDescription) {
+              captionParts.push(fa.visualDescription);
+            }
+
+            // FEATURE 2: On-screen text/elements
+            if (fa?.keyElements && fa.keyElements.length > 0) {
+              captionParts.push(`[On-screen: ${fa.keyElements.slice(0, 4).join(', ')}]`);
+            }
+
+            // FEATURE 3: Cursor & highlight tracking
+            if (fa?.emphasisFlags) {
+              const interactionNotes: string[] = [];
+              if (fa.emphasisFlags.highlight_detected) interactionNotes.push('text highlighted');
+              if (fa.emphasisFlags.text_selected) interactionNotes.push('text selected');
+              if (fa.emphasisFlags.cursor_pause) interactionNotes.push('cursor paused here — this matters');
+              if (fa.emphasisFlags.zoom_focus) interactionNotes.push('zoomed/focused');
+              if (fa.emphasisFlags.lingering_frame) interactionNotes.push('lingered on this view');
+              if (interactionNotes.length > 0) {
+                captionParts.push(`[Interaction: ${interactionNotes.join('; ')}]`);
+              }
+            }
+
+            // FEATURE 4: Audio events for this timestamp
+            const modAudio = (module as any).audio_events || {};
+            const modProsody = (module as any).prosody_annotations || {};
+            const modMusicCues: any[] = modAudio.music_cues || [];
+            const modAmbient: any[] = modAudio.ambient_sounds || [];
+            const modReactions: any[] = modAudio.reactions || [];
+            const modPauses: any[] = modAudio.meaningful_pauses || [];
+            const modProsodyAnns: any[] = modProsody.annotations || [];
+            const audioNotes: string[] = [];
+            const windowSec = 5;
+            modMusicCues.forEach((cue: any) => {
+              if (timestamp >= cue.start && timestamp <= cue.end) {
+                if (Math.abs(timestamp - cue.start) < windowSec) {
+                  audioNotes.push(`[${cue.mood} music kicks in${cue.genre ? ` - ${cue.genre}` : ''}]`);
+                }
+              }
+            });
+            modAmbient.forEach((a: any) => {
+              if (Math.abs(a.timestamp - timestamp) < windowSec) {
+                audioNotes.push(`(${a.sound} - ${a.meaning})`);
+              }
+            });
+            modReactions.forEach((r: any) => {
+              if (Math.abs(r.timestamp - timestamp) < windowSec) {
+                audioNotes.push(`(${r.type}${r.intensity === 'strong' ? ' - emphatic' : ''} - ${r.context})`);
+              }
+            });
+            modPauses.forEach((p: any) => {
+              if (Math.abs(p.timestamp - timestamp) < windowSec) {
+                audioNotes.push(p.screenplayNote);
+              }
+            });
+            modProsodyAnns.forEach((p: any) => {
+              if (Math.abs(p.timestamp - timestamp) < windowSec) {
+                audioNotes.push(p.annotation);
+              }
+            });
+            if (audioNotes.length > 0) {
+              captionParts.push(audioNotes.slice(0, 3).join(' '));
+            }
+
+            // FEATURE 5: Vocal tone/emphasis
+            if (fa?.prosody?.parenthetical && fa.prosody.parenthetical.length > 0) {
+              captionParts.push(`(${fa.prosody.parenthetical})`);
+            }
+
+            // Render composite caption
+            const compositeCaption = captionParts.join(' | ');
+            if (compositeCaption.length > 0) {
               pdf.setFontSize(7);
               pdf.setFont('helvetica', 'italic');
               pdf.setTextColor(80, 80, 80);
-              const captionText = captionRaw.length > 120
-                ? `"${captionRaw.substring(0, 117)}..."`
-                : `"${captionRaw}"`;
-              const splitCaption = pdf.splitTextToSize(safe(captionText), imgWidth);
+              const truncatedCaption = compositeCaption.length > 300
+                ? compositeCaption.substring(0, 297) + '...'
+                : compositeCaption;
+              const splitCaption = pdf.splitTextToSize(safe(`"${truncatedCaption}"`), imgWidth);
+              const maxLines = Math.min(splitCaption.length, 4);
 
-              if (y + (Math.min(splitCaption.length, 2) * 3) > pageHeight - 20) {
+              if (y + (maxLines * 3) > pageHeight - 20) {
                 addPageWithHeaders();
               }
 
-              pdf.text(splitCaption.slice(0, 2), margin, y);
-              y += (Math.min(splitCaption.length, 2) * 3) + 7;
+              pdf.text(splitCaption.slice(0, maxLines), margin, y);
+              y += (maxLines * 3) + 3;
               pdf.setFont('helvetica', 'normal');
             } else {
               y += 5;

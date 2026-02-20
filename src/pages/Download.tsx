@@ -228,6 +228,7 @@ const DownloadPage = () => {
         video_duration_seconds: module?.video_duration_seconds || course?.video_duration_seconds,
         transcript: module?.transcript || course?.transcript || [],
         frame_urls: module?.frame_urls || course?.frame_urls || [],
+        frame_analyses: (module as any)?.frame_analyses || (course as any)?.frame_analyses || [],
         audio_events: module?.audio_events || course?.audio_events,
         prosody_annotations: module?.prosody_annotations || course?.prosody_annotations,
       };
@@ -433,8 +434,8 @@ const DownloadPage = () => {
                   <button
                     onClick={() => setSelectedFormat('pdf')}
                     className={`p-3 rounded-lg border text-left transition-all ${selectedFormat === 'pdf'
-                        ? 'border-primary bg-primary/5'
-                        : 'border-border hover:border-primary/50'
+                      ? 'border-primary bg-primary/5'
+                      : 'border-border hover:border-primary/50'
                       }`}
                   >
                     <div className="flex items-center gap-3">
@@ -449,8 +450,8 @@ const DownloadPage = () => {
                   <button
                     onClick={() => setSelectedFormat('memory-training')}
                     className={`p-3 rounded-lg border text-left transition-all ${selectedFormat === 'memory-training'
-                        ? 'border-primary bg-primary/5'
-                        : 'border-border hover:border-primary/50'
+                      ? 'border-primary bg-primary/5'
+                      : 'border-border hover:border-primary/50'
                       }`}
                   >
                     <div className="flex items-center gap-3">
@@ -465,8 +466,8 @@ const DownloadPage = () => {
                   <button
                     onClick={() => setSelectedFormat('memory-creative')}
                     className={`p-3 rounded-lg border text-left transition-all ${selectedFormat === 'memory-creative'
-                        ? 'border-primary bg-primary/5'
-                        : 'border-border hover:border-primary/50'
+                      ? 'border-primary bg-primary/5'
+                      : 'border-border hover:border-primary/50'
                       }`}
                   >
                     <div className="flex items-center gap-3">

@@ -14,17 +14,17 @@ const RATE_LIMIT_WINDOW_MS = 60 * 1000; // 1 minute window
 function checkRateLimit(identifier: string): { allowed: boolean; remaining: number; resetIn: number } {
   const now = Date.now();
   const record = rateLimitMap.get(identifier);
-  
+
   if (!record || now > record.resetTime) {
     // New window
     rateLimitMap.set(identifier, { count: 1, resetTime: now + RATE_LIMIT_WINDOW_MS });
     return { allowed: true, remaining: RATE_LIMIT_REQUESTS - 1, resetIn: RATE_LIMIT_WINDOW_MS };
   }
-  
+
   if (record.count >= RATE_LIMIT_REQUESTS) {
     return { allowed: false, remaining: 0, resetIn: record.resetTime - now };
   }
-  
+
   record.count++;
   return { allowed: true, remaining: RATE_LIMIT_REQUESTS - record.count, resetIn: record.resetTime - now };
 }
@@ -51,25 +51,25 @@ serve(async (req) => {
     const forwarded = req.headers.get('x-forwarded-for');
     const clientIp = forwarded ? forwarded.split(',')[0].trim() : 'unknown';
     const rateLimitKey = `${clientIp}:${sessionId}`;
-    
+
     // Check rate limit
     const rateCheck = checkRateLimit(rateLimitKey);
-    
+
     if (!rateCheck.allowed) {
       return new Response(
-        JSON.stringify({ 
+        JSON.stringify({
           error: 'Too many requests. Please try again later.',
           retryAfter: Math.ceil(rateCheck.resetIn / 1000)
         }),
-        { 
-          status: 429, 
-          headers: { 
-            ...corsHeaders, 
+        {
+          status: 429,
+          headers: {
+            ...corsHeaders,
             'Content-Type': 'application/json',
             'Retry-After': String(Math.ceil(rateCheck.resetIn / 1000)),
             'X-RateLimit-Remaining': '0',
             'X-RateLimit-Reset': String(Math.ceil(rateCheck.resetIn / 1000))
-          } 
+          }
         }
       );
     }
@@ -79,13 +79,13 @@ serve(async (req) => {
     if (!courseId) {
       return new Response(
         JSON.stringify({ error: 'Course ID is required' }),
-        { 
-          status: 400, 
-          headers: { 
-            ...corsHeaders, 
+        {
+          status: 400,
+          headers: {
+            ...corsHeaders,
             'Content-Type': 'application/json',
             'X-RateLimit-Remaining': String(rateCheck.remaining)
-          } 
+          }
         }
       );
     }
@@ -95,13 +95,13 @@ serve(async (req) => {
     if (!uuidRegex.test(courseId)) {
       return new Response(
         JSON.stringify({ error: 'Invalid course ID format' }),
-        { 
-          status: 400, 
-          headers: { 
-            ...corsHeaders, 
+        {
+          status: 400,
+          headers: {
+            ...corsHeaders,
             'Content-Type': 'application/json',
             'X-RateLimit-Remaining': String(rateCheck.remaining)
-          } 
+          }
         }
       );
     }
@@ -116,7 +116,7 @@ serve(async (req) => {
     // Fetch course data
     const { data: course, error } = await supabase
       .from('courses')
-      .select('id, title, video_duration_seconds, frame_urls, transcript, created_at, status')
+      .select('id, title, video_duration_seconds, frame_urls, transcript, frame_analyses, created_at, status')
       .eq('id', courseId)
       .single();
 
@@ -124,13 +124,13 @@ serve(async (req) => {
       console.error('Error fetching course:', error);
       return new Response(
         JSON.stringify({ error: 'Course not found' }),
-        { 
-          status: 404, 
-          headers: { 
-            ...corsHeaders, 
+        {
+          status: 404,
+          headers: {
+            ...corsHeaders,
             'Content-Type': 'application/json',
             'X-RateLimit-Remaining': String(rateCheck.remaining)
-          } 
+          }
         }
       );
     }
@@ -139,13 +139,13 @@ serve(async (req) => {
     if (course.status !== 'completed') {
       return new Response(
         JSON.stringify({ error: 'Course is still processing' }),
-        { 
-          status: 400, 
-          headers: { 
-            ...corsHeaders, 
+        {
+          status: 400,
+          headers: {
+            ...corsHeaders,
             'Content-Type': 'application/json',
             'X-RateLimit-Remaining': String(rateCheck.remaining)
-          } 
+          }
         }
       );
     }
@@ -172,7 +172,7 @@ serve(async (req) => {
     console.log(`Course found: ${course.title} with ${totalFrameCount} total frames -> ${limitedFrameUrls.length} sampled evenly`);
 
     return new Response(
-      JSON.stringify({ 
+      JSON.stringify({
         course: {
           id: course.id,
           title: course.title,
@@ -180,15 +180,16 @@ serve(async (req) => {
           frame_urls: limitedFrameUrls,
           total_frame_count: totalFrameCount,
           transcript: course.transcript,
+          frame_analyses: course.frame_analyses || [],
           created_at: course.created_at
         }
       }),
-      { 
-        headers: { 
-          ...corsHeaders, 
+      {
+        headers: {
+          ...corsHeaders,
           'Content-Type': 'application/json',
           'X-RateLimit-Remaining': String(rateCheck.remaining)
-        } 
+        }
       }
     );
 

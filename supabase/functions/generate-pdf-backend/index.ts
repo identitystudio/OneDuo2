@@ -493,22 +493,64 @@ async function buildPDF(
                     y -= 12;
                 }
 
-                // Visual transcription caption (from cached analysis or transcript fallback)
-                let caption = analysis?.visualDescription || '';
-                if (!caption && mod.transcript && mod.transcript.length > 0) {
-                    // Transcript fallback: find segments overlapping this frame's time window
-                    const frameStart = Math.max(0, timestamp - frameDuration / 2);
-                    const frameEnd = timestamp + frameDuration / 2;
-                    const matched = mod.transcript.filter((seg: any) => {
-                        const segStart = seg.start || 0;
-                        const segEnd = seg.end || segStart + 60;
-                        return segStart < frameEnd && segEnd > frameStart;
-                    });
-                    caption = matched.map((s: any) => s.text || '').join(' ').trim();
-                    if (caption.length > 120) caption = caption.substring(0, 117) + '...';
+                // ===== COMPOSITE VISUAL TRANSCRIPTION CAPTION =====
+                // Synthesizes ALL OneDuo features: visual, on-screen text, cursor/highlights, audio, tone
+                const captionParts: string[] = [];
+
+                // FEATURE 1: Visual description
+                if (analysis?.visualDescription) {
+                    captionParts.push(analysis.visualDescription);
                 }
-                if (caption) {
-                    drawWrappedText(`Visual Transcription: ${caption}`, {
+
+                // FEATURE 2: On-screen elements
+                if (analysis?.keyElements?.length > 0) {
+                    captionParts.push(`[On-screen: ${analysis.keyElements.slice(0, 4).join(', ')}]`);
+                }
+
+                // FEATURE 3: Cursor & highlight tracking
+                if (analysis?.emphasisFlags) {
+                    const notes: string[] = [];
+                    if (analysis.emphasisFlags.highlight_detected) notes.push('text highlighted');
+                    if (analysis.emphasisFlags.text_selected) notes.push('text selected');
+                    if (analysis.emphasisFlags.cursor_pause) notes.push('cursor paused here');
+                    if (analysis.emphasisFlags.zoom_focus) notes.push('zoomed/focused');
+                    if (analysis.emphasisFlags.lingering_frame) notes.push('lingered on this view');
+                    if (notes.length > 0) captionParts.push(`[Interaction: ${notes.join('; ')}]`);
+                }
+
+                // FEATURE 4: Audio events for this timestamp
+                const modAudioEvt = mod.audio_events || {};
+                const modProsodyData = mod.prosody_annotations || {};
+                const windowS = 5;
+                (modAudioEvt.music_cues || []).forEach((cue: any) => {
+                    if (timestamp >= cue.start && timestamp <= cue.end && Math.abs(timestamp - cue.start) < windowS) {
+                        captionParts.push(`[${cue.mood} music kicks in${cue.genre ? ` - ${cue.genre}` : ''}]`);
+                    }
+                });
+                (modAudioEvt.ambient_sounds || []).forEach((a: any) => {
+                    if (Math.abs(a.timestamp - timestamp) < windowS) captionParts.push(`(${a.sound} - ${a.meaning})`);
+                });
+                (modAudioEvt.reactions || []).forEach((r: any) => {
+                    if (Math.abs(r.timestamp - timestamp) < windowS) captionParts.push(`(${r.type} - ${r.context})`);
+                });
+                (modAudioEvt.meaningful_pauses || []).forEach((p: any) => {
+                    if (Math.abs(p.timestamp - timestamp) < windowS) captionParts.push(p.screenplayNote);
+                });
+                (modProsodyData.annotations || []).forEach((p: any) => {
+                    if (Math.abs(p.timestamp - timestamp) < windowS) captionParts.push(p.annotation);
+                });
+
+                // FEATURE 5: Vocal tone/emphasis
+                if (analysis?.prosody?.parenthetical?.length > 0) {
+                    captionParts.push(`(${analysis.prosody.parenthetical})`);
+                }
+
+                const compositeCaption = captionParts.join(' | ');
+                if (compositeCaption) {
+                    const truncated = compositeCaption.length > 300
+                        ? compositeCaption.substring(0, 297) + '...'
+                        : compositeCaption;
+                    drawWrappedText(`Visual Transcription: ${truncated}`, {
                         size: 7, usedFont: italicFont, color: rgb(0.3, 0.3, 0.3),
                     });
                     y -= 5;

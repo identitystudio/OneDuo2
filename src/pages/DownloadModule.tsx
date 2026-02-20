@@ -28,7 +28,7 @@ const DownloadModulePage = () => {
   const [searchParams] = useSearchParams();
   const courseId = searchParams.get('courseId');
   const moduleNumber = searchParams.get('module');
-  
+
   const [module, setModule] = useState<ModuleData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -47,7 +47,7 @@ const DownloadModulePage = () => {
       try {
         // Fetch module data from edge function
         const { data, error: fetchError } = await supabase.functions.invoke('get-module-data', {
-          body: moduleId 
+          body: moduleId
             ? { moduleId }
             : { courseId, moduleNumber: parseInt(moduleNumber || '1', 10) }
         });
@@ -61,16 +61,16 @@ const DownloadModulePage = () => {
         }
 
         setModule(data.module);
-        
+
         // OPTIMIZATION: Preload frame images with progress tracking
         if (data.module?.frame_urls?.length > 0) {
           const framesToPreload = data.module.frame_urls.slice(0, 150);
           console.log(`[DownloadModule] Preloading ${framesToPreload.length} frames...`);
-          
+
           // Track preload progress
           let loaded = 0;
           const total = framesToPreload.length;
-          
+
           // Load frames in batches with progress updates
           const BATCH_SIZE = 15;
           for (let i = 0; i < framesToPreload.length; i += BATCH_SIZE) {
@@ -91,7 +91,7 @@ const DownloadModulePage = () => {
               }
             }));
           }
-          
+
           console.log(`[DownloadModule] Preload complete: ${loaded}/${total} frames cached`);
           setPreloadComplete(true);
         } else {
@@ -127,18 +127,18 @@ const DownloadModulePage = () => {
 
     setDownloading(true);
     setDownloadProgress(0);
-    
-    const formatLabel = selectedFormat === 'pdf' ? 'PDF' : 
+
+    const formatLabel = selectedFormat === 'pdf' ? 'PDF' :
       selectedFormat === 'memory-training' ? 'Training Memory Package' : 'Creative Memory Package';
     setDownloadStatus(`Preparing your OneDuo ${formatLabel}...`);
 
     // Track download
     try {
       await supabase.functions.invoke('log-download', {
-        body: { 
-          courseId: module.course_id, 
+        body: {
+          courseId: module.course_id,
           moduleId: module.id,
-          source: 'module_download' 
+          source: 'module_download'
         }
       });
     } catch (e) {
@@ -159,6 +159,7 @@ const DownloadModulePage = () => {
             video_duration_seconds: module.video_duration_seconds,
             transcript: module.transcript || [],
             frame_urls: module.frame_urls || [],
+            frame_analyses: (module as any).frame_analyses || [],
             audio_events: module.audio_events,
             prosody_annotations: module.prosody_annotations,
           },
@@ -204,26 +205,26 @@ const DownloadModulePage = () => {
       toast.success(`Your OneDuo ${formatLabel} is downloading!`);
     } catch (err: any) {
       console.error("Download failed:", err);
-      
+
       // Auto-retry for transient errors
-      const isRetryable = err.message?.includes('network') || 
-                          err.message?.includes('timeout') ||
-                          err.message?.includes('fetch');
-      
+      const isRetryable = err.message?.includes('network') ||
+        err.message?.includes('timeout') ||
+        err.message?.includes('fetch');
+
       if (isRetryable && retryCount < MAX_RETRIES) {
         console.log(`[Download] Retrying (${retryCount + 1}/${MAX_RETRIES})...`);
         setDownloadStatus(`Retrying download (attempt ${retryCount + 2})...`);
         await new Promise(r => setTimeout(r, 1000 * (retryCount + 1))); // Exponential backoff
         return handleDownload(retryCount + 1);
       }
-      
+
       // Show specific error message
-      const userMessage = err.message?.includes('Frame extraction failed') 
+      const userMessage = err.message?.includes('Frame extraction failed')
         ? 'Frame extraction failed. Please contact support.'
         : err.message?.includes('Insufficient frames')
-        ? 'Not enough frames extracted. Please retry or contact support.'
-        : 'Failed to generate export. Please try again.';
-      
+          ? 'Not enough frames extracted. Please retry or contact support.'
+          : 'Failed to generate export. Please try again.';
+
       toast.error(userMessage);
       hasAutoTriggered.current = false;
     } finally {
@@ -347,11 +348,10 @@ const DownloadModulePage = () => {
                 <div className="grid gap-2">
                   <button
                     onClick={() => setSelectedFormat('pdf')}
-                    className={`p-3 rounded-lg border text-left transition-all ${
-                      selectedFormat === 'pdf' 
-                        ? 'border-primary bg-primary/5' 
+                    className={`p-3 rounded-lg border text-left transition-all ${selectedFormat === 'pdf'
+                        ? 'border-primary bg-primary/5'
                         : 'border-border hover:border-primary/50'
-                    }`}
+                      }`}
                   >
                     <div className="flex items-center gap-3">
                       <FileText className="h-5 w-5 text-primary" />
@@ -361,14 +361,13 @@ const DownloadModulePage = () => {
                       </div>
                     </div>
                   </button>
-                  
+
                   <button
                     onClick={() => setSelectedFormat('memory-training')}
-                    className={`p-3 rounded-lg border text-left transition-all ${
-                      selectedFormat === 'memory-training' 
-                        ? 'border-primary bg-primary/5' 
+                    className={`p-3 rounded-lg border text-left transition-all ${selectedFormat === 'memory-training'
+                        ? 'border-primary bg-primary/5'
                         : 'border-border hover:border-primary/50'
-                    }`}
+                      }`}
                   >
                     <div className="flex items-center gap-3">
                       <Package className="h-5 w-5 text-green-500" />
@@ -378,14 +377,13 @@ const DownloadModulePage = () => {
                       </div>
                     </div>
                   </button>
-                  
+
                   <button
                     onClick={() => setSelectedFormat('memory-creative')}
-                    className={`p-3 rounded-lg border text-left transition-all ${
-                      selectedFormat === 'memory-creative' 
-                        ? 'border-primary bg-primary/5' 
+                    className={`p-3 rounded-lg border text-left transition-all ${selectedFormat === 'memory-creative'
+                        ? 'border-primary bg-primary/5'
                         : 'border-border hover:border-primary/50'
-                    }`}
+                      }`}
                   >
                     <div className="flex items-center gap-3">
                       <Film className="h-5 w-5 text-purple-500" />
@@ -422,7 +420,7 @@ const DownloadModulePage = () => {
               </Button>
 
               <p className="text-xs text-muted-foreground mt-4">
-                {selectedFormat === 'pdf' 
+                {selectedFormat === 'pdf'
                   ? 'Your PDF includes all frames, transcripts, and AI instructions'
                   : 'ZIP includes memory.json, keyframes, transcript, and README'}
               </p>
