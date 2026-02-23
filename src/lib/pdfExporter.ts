@@ -1408,13 +1408,13 @@ export const generateChatGPTPDF = async (
       pdf.roundedRect(margin, y, contentWidth, 38, 1, 1, 'FD');
       y += 6;
 
-      pdf.setFontSize(10);
+      pdf.setFontSize(11);
       pdf.setFont('helvetica', 'bold');
       pdf.setTextColor(50, 50, 50);
       pdf.text(`STEP ${i + 1}: ${formatTime(frameTime)} | UI/DOC`, margin + 4, y);
       y += 7;
 
-      pdf.setFontSize(8);
+      pdf.setFontSize(9);
       pdf.setTextColor(100, 100, 100);
       const action = frameAnalysis?.instructorIntent?.substring(0, 80) || 'Observe screen state';
       const confidence = (frameAnalysis?.intentConfidence || 0.8) * 100;
@@ -1501,7 +1501,7 @@ export const generateChatGPTPDF = async (
           // Render the composite caption
           const compositeCaption = captionParts.join(' | ');
           if (compositeCaption.length > 0) {
-            pdf.setFontSize(7);
+            pdf.setFontSize(8);
             pdf.setFont('helvetica', 'italic');
             pdf.setTextColor(80, 80, 80);
             const truncatedCaption = compositeCaption.length > 300
@@ -1519,7 +1519,7 @@ export const generateChatGPTPDF = async (
           pdf.setFillColor(245, 245, 245);
           pdf.setDrawColor(200, 200, 200);
           pdf.roundedRect(margin, y, 70, 40, 2, 2, 'FD');
-          pdf.setFontSize(7);
+          pdf.setFontSize(8);
           pdf.setTextColor(150, 150, 150);
           pdf.text(`[Frame ${i + 1} at ${formatTime(frameTime)}]`, margin + 5, y + 18);
           pdf.text(`[Image unavailable - see transcript]`, margin + 5, y + 24);
@@ -1530,7 +1530,7 @@ export const generateChatGPTPDF = async (
         pdf.setFillColor(255, 240, 240);
         pdf.setDrawColor(200, 150, 150);
         pdf.roundedRect(margin, y, 70, 40, 2, 2, 'FD');
-        pdf.setFontSize(7);
+        pdf.setFontSize(8);
         pdf.setTextColor(180, 100, 100);
         pdf.text(`[Frame ${i + 1} error]`, margin + 5, y + 20);
         y += 43;
@@ -1557,7 +1557,7 @@ export const generateChatGPTPDF = async (
         pdf.roundedRect(margin, y, contentWidth, ocrHeight, 2, 2, 'FD');
 
         y += 6;
-        pdf.setFontSize(9);
+        pdf.setFontSize(10);
         pdf.setFont('helvetica', 'bold');
         pdf.setTextColor(0, 80, 120);
 
@@ -1584,7 +1584,7 @@ export const generateChatGPTPDF = async (
         pdf.roundedRect(margin, y, contentWidth, 20, 2, 2, 'FD');
 
         y += 5;
-        pdf.setFontSize(9);
+        pdf.setFontSize(10);
         pdf.setFont('helvetica', 'bold');
         pdf.setTextColor(confColor.r, confColor.g, confColor.b);
 
@@ -1600,7 +1600,7 @@ export const generateChatGPTPDF = async (
       }
 
       // ===== TRANSCRIPT SEGMENT (LABELED AS REFERENCE) =====
-      pdf.setFontSize(9);
+      pdf.setFontSize(10);
       pdf.setFont('courier', 'normal'); // Monospace for transcript consistency
       pdf.setTextColor(30, 30, 30);
 
