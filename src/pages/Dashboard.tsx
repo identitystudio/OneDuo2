@@ -1388,311 +1388,14 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
     }
   };
 
-  // Export PDF for a single-module course (with salvage fallback for failed/stalled courses)
+  // Export PDF for a single-module course (redirect to dedicated download page)
   const handleExportPDF = async (course: Course, moduleNumber: number, aiFidelityMode: boolean = false) => {
-    setGeneratingPDF(course.id);
-    setPdfProgress({ progress: 0, status: 'Starting...', title: course.title });
-
-    // Use setTimeout to prevent UI blocking
-    await new Promise(resolve => setTimeout(resolve, 0));
-
-    try {
-      let courseData: any = null;
-      let usedSalvagePath = false;
-
-      // First try the standard public course path (works for completed courses)
-      try {
-        const { data: response, error } = await supabase.functions.invoke('get-public-course', {
-          body: { courseId: course.id },
-        });
-
-        if (!error && response?.course) {
-          courseData = response.course;
-        }
-      } catch (e) {
-        console.log('[handleExportPDF] Public path failed, will try salvage path');
-      }
-
-      // If standard path failed or returned no data, AND user is logged in, try salvage path
-      if ((!courseData || (!courseData.transcript?.length && !courseData.frame_urls?.length)) && email) {
-        console.log(`[handleExportPDF] Trying salvage path for course ${course.id}`);
-        setPdfProgress(prev => ({ ...prev, progress: 5, status: 'Recovering data...' }));
-
-        const { data: salvageResponse, error: salvageError } = await supabase.functions.invoke('process-course', {
-          body: {
-            action: 'get-export-data',
-            courseId: course.id,
-            email,
-          },
-        });
-
-        if (salvageError) {
-          console.error('[handleExportPDF] Salvage path also failed:', salvageError);
-          throw new Error('Could not retrieve course data');
-        }
-
-        if (salvageResponse?.error) {
-          throw new Error(salvageResponse.error);
-        }
-
-        // Check if salvage returned usable data
-        if (!salvageResponse?.hasTranscript && !salvageResponse?.hasFrames) {
-          toast.error('No data available yet. Processing may still be in progress.');
-          return;
-        }
-
-        courseData = salvageResponse.course;
-        usedSalvagePath = true;
-
-        if (salvageResponse.isPartial) {
-          toast.info('Generating PDF with partial data. Some content may be missing.');
-        }
-      }
-
-      if (!courseData) {
-        throw new Error('Course not found');
-      }
-
-      // Check if we actually have data to generate PDF
-      if (!courseData.transcript?.length && !courseData.frame_urls?.length) {
-        toast.error('Module data not ready yet. Please wait for processing to complete.');
-        return;
-      }
-
-      // ========== LOAD SUPPLEMENTAL FILES ==========
-      let loadedSupplementalFiles: { name: string; content: string; size?: number }[] = [];
-      const courseFiles = (courseData.course_files || []).filter((file: any) => {
-        const fileName = file.name.toLowerCase();
-        const binaryExts = ['.mp4', '.mov', '.avi', '.mkv', '.webm', '.zip', '.rar', '.7z', '.exe', '.dll', '.bin'];
-        return !binaryExts.some(ext => fileName.endsWith(ext));
-      });
-
-      if (courseFiles.length > 0) {
-        setPdfProgress(prev => ({ ...prev, progress: 10, status: `Loading ${courseFiles.length} supplemental file(s)...` }));
-        const loadedResults = await loadFilesInParallel(courseFiles, (prog) => {
-          setPdfProgress(prev => ({ ...prev, progress: 10 + (prog.loaded / prog.total) * 15, status: `Loading ${prog.currentFile}...` }));
-        });
-        loadedSupplementalFiles = loadedResults.map(r => ({ name: r.name, content: r.content, size: r.size }));
-      }
-
-      // Wrap PDF generation in a try-catch to prevent UI crashes
-      let pdfBlob: Blob;
-      try {
-        pdfBlob = await generateChatGPTPDF(
-          {
-            id: course.id, // Required for frame persistence
-            title: courseData.title,
-            video_duration_seconds: courseData.video_duration_seconds,
-            transcript: courseData.transcript,
-            frame_urls: courseData.frame_urls,
-            frame_analyses: courseData.frame_analyses || [],
-            audio_events: courseData.audio_events,
-            prosody_annotations: courseData.prosody_annotations,
-            supplementalFiles: loadedSupplementalFiles
-          },
-          (progress, status) => {
-            setPdfProgress(prev => ({ ...prev, progress: 25 + (progress / 100) * 75, status }));
-          },
-          {
-            aiFidelityMode,
-            includeOCR: true // Always include OCR for AI Vision parity
-          }
-        );
-      } catch (pdfError) {
-        console.error('PDF generation failed:', pdfError);
-        throw new Error('PDF generation failed. Please try again.');
-      }
-
-      // Trigger download safely
-      try {
-        // Create clean filename: use original video filename (without extension) + " - OneDuo.pdf"
-        const getCleanFilename = (course: any): string => {
-          // Try to use original video filename first
-          if (course.video_filename) {
-            // Remove extension (.mov, .mp4, etc.)
-            const nameWithoutExt = course.video_filename.replace(/\.[^.]+$/, '');
-            return `${nameWithoutExt} - OneDuo.pdf`;
-          }
-          // Fallback to course title
-          return `${course.title} - OneDuo.pdf`;
-        };
-
-        const filename = getCleanFilename(courseData);
-        downloadPDF(pdfBlob, filename);
-
-        const successMessage = usedSalvagePath
-          ? '✓ PDF downloaded from salvaged data! Upload it to ChatGPT.'
-          : '✓ PDF downloaded successfully! Upload it to ChatGPT to enable visual analysis.';
-        toast.success(successMessage);
-      } catch (downloadError) {
-        console.error('Download failed:', downloadError);
-        throw new Error('Download failed. Please try again.');
-      }
-    } catch (err) {
-      console.error('PDF export failed:', err);
-      const errorMessage = err instanceof Error ? err.message : 'Failed to generate PDF';
-      toast.error(errorMessage);
-    } finally {
-      setGeneratingPDF(null);
-      setPdfProgress({ progress: 0, status: '', title: '' });
-    }
+    navigate(`/download/${course.id}${aiFidelityMode ? '?fidelity=true' : ''}`);
   };
 
-  // Export PDF for a specific module in a multi-module course
+  // Export PDF for a specific module in a multi-module course (redirect to dedicated download page)
   const handleExportModulePDF = async (moduleId: string, moduleTitle: string, courseTitle: string, isPartialSalvage: boolean = false, aiFidelityMode: boolean = false) => {
-    setGeneratingPDF(moduleId);
-    setPdfProgress({ progress: 0, status: 'Starting...', title: `${courseTitle} - ${moduleTitle}` });
-
-    // Use setTimeout to prevent UI blocking
-    await new Promise(resolve => setTimeout(resolve, 0));
-
-    try {
-      let moduleData: any;
-
-      if (isPartialSalvage) {
-        // SALVAGE PATH: Use get-export-data endpoint which works for partial/failed courses
-        // First find the module's parent course and module number
-        const moduleItem = courses
-          .flatMap(c => c.modules || [])
-          .find(m => m.id === moduleId);
-
-        if (!moduleItem) {
-          throw new Error('Module not found');
-        }
-
-        // Find the parent course to get the course ID
-        const parentCourse = courses.find(c => c.id === moduleItem.course_id);
-
-        if (!parentCourse) {
-          throw new Error('Parent course not found');
-        }
-
-        const { data: response, error } = await supabase.functions.invoke('process-course', {
-          body: {
-            action: 'get-export-data',
-            courseId: parentCourse.id,
-            email,
-            moduleNumber: moduleItem.module_number
-          },
-        });
-
-        if (error) throw error;
-        if (response?.error) throw new Error(response.error);
-
-        // Check if any data exists at all
-        if (!response?.hasTranscript && !response?.hasFrames) {
-          toast.error('No data available yet. Processing may still be in progress.');
-          return;
-        }
-
-        moduleData = response.module || {};
-        moduleData.isPartial = response.isPartial;
-      } else {
-        // Standard path: Use get-module-data
-        const { data: response, error } = await supabase.functions.invoke('get-module-data', {
-          body: { moduleId },
-        });
-
-        if (error) throw error;
-        if (response?.error) throw new Error(response.error);
-        if (!response?.module) throw new Error('Module not found');
-
-        moduleData = response.module;
-      }
-
-      // Check if we actually have data to generate PDF
-      if (!moduleData.transcript?.length && !moduleData.frame_urls?.length) {
-        toast.error('Module data not ready yet. Please wait for processing to complete.');
-        return;
-      }
-
-      // Show warning for partial data
-      if (moduleData.isPartial || isPartialSalvage) {
-        toast.info('Generating PDF with partial data. Some content may be missing.');
-      }
-
-      const fullTitle = `${courseTitle} - ${moduleTitle}`;
-
-      // ========== LOAD SUPPLEMENTAL FILES ==========
-      // Note: Supplemental files are typically linked at the COURSE level.
-      // We fetch the course files for the parent course if it's a module.
-      let loadedSupplementalFiles: { name: string; content: string; size?: number }[] = [];
-      const parentCourse = courses.find(c => c.id === (moduleData.course_id || moduleId));
-      const courseFiles = (parentCourse?.course_files || moduleData.course_files || []).filter((file: any) => {
-        const fileName = file.name.toLowerCase();
-        const binaryExts = ['.mp4', '.mov', '.avi', '.mkv', '.webm', '.zip', '.rar', '.7z', '.exe', '.dll', '.bin'];
-        return !binaryExts.some(ext => fileName.endsWith(ext));
-      });
-
-      if (courseFiles.length > 0) {
-        setPdfProgress(prev => ({ ...prev, progress: 10, status: `Loading ${courseFiles.length} supplemental file(s)...` }));
-        const loadedResults = await loadFilesInParallel(courseFiles, (prog) => {
-          setPdfProgress(prev => ({ ...prev, progress: 10 + (prog.loaded / prog.total) * 15, status: `Loading ${prog.currentFile}...` }));
-        });
-        loadedSupplementalFiles = loadedResults.map(r => ({ name: r.name, content: r.content, size: r.size }));
-      }
-
-      // Wrap PDF generation in a try-catch to prevent UI crashes
-      let pdfBlob: Blob;
-      try {
-        pdfBlob = await generateChatGPTPDF(
-          {
-            id: moduleId, // Required for frame persistence
-            title: fullTitle,
-            video_duration_seconds: moduleData.video_duration_seconds,
-            transcript: moduleData.transcript || [],
-            frame_urls: moduleData.frame_urls || [],
-            frame_analyses: moduleData.frame_analyses || [],
-            audio_events: moduleData.audio_events,
-            prosody_annotations: moduleData.prosody_annotations,
-            supplementalFiles: loadedSupplementalFiles
-          },
-          (progress, status) => {
-            setPdfProgress(prev => ({ ...prev, progress: 25 + (progress / 100) * 75, status }));
-          },
-          {
-            aiFidelityMode,
-            includeOCR: true
-          }
-        );
-      } catch (pdfError) {
-        console.error('PDF generation failed:', pdfError);
-        throw new Error('PDF generation failed. Please try again.');
-      }
-
-      // Trigger download safely
-      try {
-        // Create clean filename: use original video filename (without extension) + " - OneDuo.pdf"
-        const getModuleCleanFilename = (moduleData: any, courseTitle: string, moduleTitle: string): string => {
-          // For multi-module courses, use "CourseTitle - ModuleTitle - OneDuo.pdf"
-          // For single module, just use course title
-          if (moduleData.video_filename) {
-            const nameWithoutExt = moduleData.video_filename.replace(/\.[^.]+$/, '');
-            return `${nameWithoutExt} - OneDuo.pdf`;
-          }
-          // Fallback to course + module title
-          const combinedTitle = moduleTitle ? `${courseTitle} - ${moduleTitle}` : courseTitle;
-          return `${combinedTitle} - OneDuo.pdf`;
-        };
-
-        const filename = getModuleCleanFilename(moduleData, courseTitle, moduleTitle);
-        downloadPDF(pdfBlob, filename);
-
-        toast.success(moduleData.isPartial
-          ? '✓ Partial PDF downloaded! Some frames or transcript may be missing.'
-          : '✓ PDF downloaded successfully! Upload it to ChatGPT to enable visual analysis.'
-        );
-      } catch (downloadError) {
-        console.error('Download failed:', downloadError);
-        throw new Error('Download failed. Please try again.');
-      }
-    } catch (err: any) {
-      console.error('PDF export failed:', err);
-      toast.error(err.message || 'Failed to generate PDF');
-    } finally {
-      setGeneratingPDF(null);
-      setPdfProgress({ progress: 0, status: '', title: '' });
-    }
+    navigate(`/download/module/${moduleId}${aiFidelityMode ? '?fidelity=true' : ''}`);
   };
 
   // Export combined PDF for all modules in a training block (unified OneDuo)
@@ -1700,9 +1403,7 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
     const blockId = block.courses[0]?.id;
     if (!blockId) return;
 
-    // Get the block title from the block name
     const blockTitle = block.name || 'Combined Training';
-
     setGeneratingPDF(`block-${blockId}`);
     setPdfProgress({ progress: 0, status: 'Starting combined PDF generation...', title: blockTitle });
 
@@ -1710,15 +1411,9 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
     await new Promise(resolve => setTimeout(resolve, 0));
 
     try {
-      // Sort display items by module number
       const sortedItems = [...block.displayItems].sort((a, b) => a.moduleNumber - b.moduleNumber);
-
-      // Collect modules data for merged PDF generation
       const modules: PdfModuleData[] = [];
-
       const totalModules = sortedItems.length;
-
-      // Detect single-module course (data is on courses table, not course_modules)
       const isSingleModuleCourse = sortedItems.length === 1 && !sortedItems[0].isModule;
 
       for (let i = 0; i < sortedItems.length; i++) {
@@ -1730,21 +1425,12 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
         }));
 
         let moduleData: any = null;
-
         if (isSingleModuleCourse) {
-          // Single-module course: fetch from get-public-course (data is on courses table)
           const { data: response, error } = await supabase.functions.invoke('get-public-course', {
             body: { courseId: item.id },
           });
-
-          if (error) {
-            console.error(`Failed to fetch course ${item.id}:`, error);
-            continue;
-          }
-
-          // Map course data to module data format
-          const courseData = response?.course;
-          if (courseData) {
+          if (!error && response?.course) {
+            const courseData = response.course;
             moduleData = {
               id: courseData.id,
               title: courseData.title,
@@ -1761,199 +1447,125 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
             };
           }
         } else {
-          // Multi-module course: fetch from get-module-data
           const { data: response, error } = await supabase.functions.invoke('get-module-data', {
             body: { moduleId: item.id },
           });
-
-          if (error) {
-            console.error(`Failed to fetch module ${item.id}:`, error);
-            continue;
-          }
-
-          moduleData = response?.module;
-          if (moduleData) {
-            // Ensure moduleNumber is set
+          if (!error && response?.module) {
+            moduleData = response.module;
             moduleData.moduleNumber = moduleData.moduleNumber || item.moduleNumber;
           }
         }
 
-        if (!moduleData) continue;
-
-        // Add to modules array for merged PDF
-        modules.push({
-          id: moduleData.id,
-          moduleNumber: moduleData.moduleNumber || (i + 1),
-          title: moduleData.title || `Module ${i + 1}`,
-          video_duration_seconds: moduleData.video_duration_seconds,
-          transcript: moduleData.transcript,
-          frame_urls: moduleData.frame_urls,
-          audio_events: moduleData.audio_events,
-          prosody_annotations: moduleData.prosody_annotations,
-          key_moments_index: moduleData.key_moments_index,
-          concepts_frameworks: moduleData.concepts_frameworks,
-          hidden_patterns: moduleData.hidden_patterns,
-          implementation_steps: moduleData.implementation_steps,
-        });
+        if (moduleData) {
+          modules.push({
+            id: moduleData.id,
+            moduleNumber: moduleData.moduleNumber || (i + 1),
+            title: moduleData.title || `Module ${i + 1}`,
+            video_duration_seconds: moduleData.video_duration_seconds,
+            transcript: moduleData.transcript,
+            frame_urls: moduleData.frame_urls,
+            audio_events: moduleData.audio_events,
+            prosody_annotations: moduleData.prosody_annotations,
+            key_moments_index: moduleData.key_moments_index,
+            concepts_frameworks: moduleData.concepts_frameworks,
+            hidden_patterns: moduleData.hidden_patterns,
+            implementation_steps: moduleData.implementation_steps,
+          });
+        }
       }
 
-      // Check if we have any data
-      const hasFrames = modules.some(m => m.frame_urls && m.frame_urls.length > 0);
-      const hasTranscripts = modules.some(m => m.transcript && m.transcript.length > 0);
-      if (!hasFrames && !hasTranscripts) {
-        toast.error('No data available. Please wait for processing to complete.');
+      if (modules.length === 0) {
+        toast.error('No module data available to export.');
         return;
       }
 
-      // ========== FETCH SUPPLEMENTAL FILE CONTENTS (PARALLEL) ==========
-      // This embeds user-uploaded documents (templates, scripts, guides) into the PDF
-      // Using parallel loading with concurrency limit for better performance
-
-      // Filter out binary/unsupported formats that shouldn't be embedded as text
-      const EXCLUDED_EXTENSIONS = [
-        '.pdf', '.mp4', '.mov', '.avi', '.mkv', '.webm',
-        '.zip', '.rar', '.7z', '.exe', '.dll', '.bin'
-      ];
-      // Filter out only serious binary/unsupported formats
-      // Images (.jpg, .png, etc.) and Docs (.docx, .pdf) are handled by OCR/Extraction in loader
+      // Fetch supplemental files
+      const EXCLUDED_EXTENSIONS = ['.pdf', '.mp4', '.mov', '.avi', '.mkv', '.webm', '.zip', '.rar', '.7z', '.exe', '.dll', '.bin'];
       const courseFiles = (block.courseFiles || []).filter(file => {
         if (!file?.name) return false;
         const fileName = file.name.toLowerCase();
-        const binaryExts = ['.mp4', '.mov', '.avi', '.mkv', '.webm', '.zip', '.rar', '.7z', '.exe', '.dll', '.bin'];
-        return !binaryExts.some(ext => fileName.endsWith(ext));
+        return !EXCLUDED_EXTENSIONS.some(ext => fileName.endsWith(ext));
       });
       let supplementalFiles: { name: string; content: string; size?: number }[] = [];
       let fileLoadFailures: string[] = [];
 
       if (courseFiles.length > 0) {
-        setPdfProgress(prev => ({
-          ...prev,
-          progress: 32,
-          status: `Loading ${courseFiles.length} supplemental document(s) in parallel...`
-        }));
+        setPdfProgress(prev => ({ ...prev, progress: 32, status: `Loading ${courseFiles.length} supplemental document(s)...` }));
+        const concurrency = courseFiles.length > 50 ? 10 : 8;
+        const loadedFiles = await loadFilesInParallel(courseFiles, (progress) => {
+          const progressValue = 32 + (progress.loaded / progress.total) * 18;
+          setPdfProgress(prev => ({ ...prev, progress: progressValue, status: `Loading ${progress.loaded}/${progress.total} files` }));
+        }, concurrency);
 
-        // Use parallel loader with progress tracking and higher concurrency for large file sets
-        const concurrency = courseFiles.length > 100 ? 15 : courseFiles.length > 50 ? 10 : 8;
-        console.log(`[CombinedPDF] Loading ${courseFiles.length} files with concurrency ${concurrency}`);
-
-        const loadedFiles = await loadFilesInParallel(
-          courseFiles,
-          (progress) => {
-            const percentComplete = (progress.loaded / progress.total) * 100;
-            // Allocate more progress range for large file sets (32% to 50%)
-            const progressValue = 32 + (percentComplete / 100) * 18;
-
-            let statusText = `Loading ${progress.loaded}/${progress.total} files`;
-            if (progress.failed > 0) {
-              statusText += ` (${progress.failed} skipped)`;
-            }
-
-            setPdfProgress(prev => ({ ...prev, progress: progressValue, status: statusText }));
-          },
-          concurrency
-        );
-
-        // Process results
-        supplementalFiles = loadedFiles
-          .filter(f => f.content && f.content.trim().length > 0)
-          .map(f => ({
-            name: f.name,
-            content: f.content,
-            size: f.size,
-          }));
-
+        supplementalFiles = loadedFiles.filter(f => f.success && f.content?.trim()).map(f => ({ name: f.name, content: f.content, size: f.size }));
         fileLoadFailures = loadedFiles.filter(f => !f.success).map(f => f.name);
-
-        const successCount = loadedFiles.filter(f => f.success).length;
-        console.log(`Loaded ${successCount}/${courseFiles.length} supplemental files for PDF embedding`);
-
-        if (fileLoadFailures.length > 0) {
-          console.warn(`Failed to load ${fileLoadFailures.length} files:`, fileLoadFailures.slice(0, 10));
-        }
       }
 
-      setPdfProgress(prev => ({ ...prev, progress: 50, status: 'Building merged PDF with chapters...' }));
+      setPdfProgress(prev => ({ ...prev, progress: 50, status: 'Building merged PDF...' }));
 
-      // Generate merged course PDF with proper chapter structure and TOC
-      let pdfBlob: Blob;
+      const mergedCourseData: MergedCourseData = {
+        courseId: block.courses[0]?.id || blockId,
+        title: block.name,
+        modules,
+        userEmail: user?.email,
+        supplementalFiles: supplementalFiles.length > 0 ? supplementalFiles : undefined,
+      };
+
+      const pdfBlob = await generateMergedCoursePDF(
+        mergedCourseData,
+        (progress, status) => {
+          const scaledProgress = 50 + (progress * 0.50);
+          setPdfProgress(prev => ({ ...prev, progress: scaledProgress, status }));
+        },
+        { maxFrames: 1000, aiFidelityMode }
+      );
+
+      // Trigger immediate download
       try {
-        // Build merged course data structure
-        const mergedCourseData: MergedCourseData = {
-          courseId: block.courses[0]?.id || blockId,
-          title: block.name,
-          modules: modules,
-          userEmail: user?.email,
-          supplementalFiles: supplementalFiles.length > 0 ? supplementalFiles : undefined,
-        };
+        const filename = `${block.name} - OneDuo.pdf`;
+        downloadPDF(pdfBlob, filename);
+        toast.success(`✓ OneDuo PDF downloaded!`);
+      } catch (downloadError) {
+        console.error('Local download trigger failed:', downloadError);
+      }
 
-        console.log(`[CombinedPDF] Generating merged PDF with ${modules.length} chapters, ${supplementalFiles.length} supplemental files`);
+      // Background cloud sync & email delivery
+      try {
+        const timestamp = Date.now();
+        const storagePath = `exports/${blockId}/${timestamp}_oneduo.pdf`;
+        setPdfProgress(prev => ({ ...prev, progress: 92, status: 'Syncing with cloud...' }));
 
-        pdfBlob = await generateMergedCoursePDF(
-          mergedCourseData,
-          (progress, status) => {
-            // Scale progress from 50-100%
-            const scaledProgress = 50 + (progress * 0.50);
-            setPdfProgress(prev => ({ ...prev, progress: scaledProgress, status }));
-          },
-          { maxFrames: 1000, aiFidelityMode } // Allow more frames per module for merged PDFs
-        );
+        const { error: uploadError } = await supabase.storage.from('course-files').upload(storagePath, pdfBlob, {
+          contentType: 'application/pdf',
+          upsert: true
+        });
 
-        // ========== UPLOAD TO STORAGE & TRIGGER EMAIL ==========
-        try {
-          const timestamp = Date.now();
-          const storagePath = `exports/${blockId}/${timestamp}_oneduo.pdf`;
-          const filename = `${block.name} - OneDuo.pdf`;
-
-          setPdfProgress(prev => ({ ...prev, progress: 92, status: 'Uploading to cloud for email delivery...' }));
-
-          const { error: uploadError } = await supabase.storage
-            .from('course-files')
-            .upload(storagePath, pdfBlob, {
-              contentType: 'application/pdf',
-              upsert: true
-            });
-
-          if (uploadError) throw uploadError;
-
-          // Update database with the PDF reference
-          const { data: courseData } = await supabase
-            .from('courses')
-            .select('course_files')
-            .eq('id', blockId)
-            .single();
-
+        if (!uploadError) {
+          const { data: courseData } = await supabase.from('courses').select('course_files').eq('id', blockId).single();
           const existingFiles = (courseData?.course_files as any[]) || [];
           const updatedFiles = [
-            ...existingFiles.filter((f: any) => f?.type !== 'pdf' && (f?.name || f?.filename)),
+            ...existingFiles.filter((f: any) => f?.type !== 'pdf'),
             {
               type: 'pdf',
-              name: filename, // For Dashboard compatibility
-              filename: filename, // For track-download compatibility
-              storagePath: storagePath, // For Dashboard compatibility
-              storage_path: `course-files/${storagePath}`, // For track-download compatibility
+              name: `${block.name} - OneDuo.pdf`,
+              filename: `${block.name} - OneDuo.pdf`,
+              storagePath: storagePath,
+              storage_path: `course-files/${storagePath}`,
               size: pdfBlob.size,
               uploaded_at: new Date().toISOString(),
               is_combined: true
             }
           ];
 
-          await supabase
-            .from('courses')
-            .update({
-              course_files: updatedFiles,
-              pdf_revision_pending: false,
-              share_enabled: true // Ensure the email link works
-            })
-            .eq('id', blockId);
+          await supabase.from('courses').update({
+            course_files: updatedFiles,
+            pdf_revision_pending: false,
+            share_enabled: true
+          }).eq('id', blockId);
 
-          // Update local state to remove the "Updated" badge
-          setCourses(prev => prev.map(c =>
-            c.id === blockId ? { ...c, pdf_revision_pending: false } : c
-          ));
+          setCourses(prev => prev.map(c => c.id === blockId ? { ...c, pdf_revision_pending: false } : c));
 
           // Send email
-          setPdfProgress(prev => ({ ...prev, progress: 96, status: 'Sending download link to your email...' }));
-
           const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
           const functionsUrl = supabaseUrl?.replace('.supabase.co', '.functions.supabase.co');
           const shareToken = block.courses[0]?.share_token;
@@ -1967,48 +1579,15 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
               courseId: blockId
             }
           });
-
-          setPdfProgress(prev => ({ ...prev, progress: 100, status: 'OneDuo sent to your email!' }));
-
-        } catch (deliveryError) {
-          console.error('Failed to deliver PDF via email:', deliveryError);
-          toast.error('PDF generated but email delivery failed. Your local download is ready.');
         }
-
-      } catch (pdfError) {
-        console.error('PDF generation failed:', pdfError);
-        throw new Error('PDF generation failed. Please try again.');
+      } catch (cloudError) {
+        console.warn('Background sync failed:', cloudError);
       }
 
-      // Trigger download
-      try {
-        const filename = `${block.name} - OneDuo.pdf`;
-        downloadPDF(pdfBlob, filename);
-
-        // Enhanced success message with detailed summary
-        let supplementalNote = '';
-        if (courseFiles.length > 0) {
-          const successCount = supplementalFiles.length;
-          const failCount = fileLoadFailures.length;
-          if (failCount === 0) {
-            supplementalNote = ` All ${successCount} supplemental document(s) embedded.`;
-          } else {
-            supplementalNote = ` ${successCount}/${courseFiles.length} supplemental files embedded (${failCount} failed).`;
-          }
-        }
-
-        toast.success(`✓ Combined PDF downloaded! All ${totalModules} modules merged.${supplementalNote}`);
-
-        // Show warning if files failed
-        if (fileLoadFailures.length > 0 && fileLoadFailures.length <= 5) {
-          toast.warning(`${fileLoadFailures.length} file(s) could not be loaded: ${fileLoadFailures.slice(0, 3).join(', ')}${fileLoadFailures.length > 3 ? '...' : ''}`);
-        } else if (fileLoadFailures.length > 5) {
-          toast.warning(`${fileLoadFailures.length} supplemental files failed to load. Check console for details.`);
-        }
-      } catch (downloadError) {
-        console.error('Download failed:', downloadError);
-        throw new Error('Download failed. Please try again.');
+      if (fileLoadFailures.length > 0) {
+        toast.warning(`${fileLoadFailures.length} supplemental files failed to embed.`);
       }
+
     } catch (err: any) {
       console.error('Combined PDF export failed:', err);
       toast.error(err.message || 'Failed to generate combined PDF');

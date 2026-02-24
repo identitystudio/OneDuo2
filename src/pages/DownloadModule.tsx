@@ -28,6 +28,7 @@ const DownloadModulePage = () => {
   const [searchParams] = useSearchParams();
   const courseId = searchParams.get('courseId');
   const moduleNumber = searchParams.get('module');
+  const fidelityMode = searchParams.get('fidelity') === 'true';
 
   const [module, setModule] = useState<ModuleData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -38,7 +39,7 @@ const DownloadModulePage = () => {
   const [downloadComplete, setDownloadComplete] = useState(false);
   const [selectedFormat, setSelectedFormat] = useState<ExportFormat>('pdf');
   const [filmMode, setFilmMode] = useState(false);
-  const [aiVisionMode, setAiVisionMode] = useState(true);
+  const [aiVisionMode, setAiVisionMode] = useState(fidelityMode);
   const [preloadProgress, setPreloadProgress] = useState(0);
   const [preloadComplete, setPreloadComplete] = useState(false);
   const hasAutoTriggered = useRef(false);

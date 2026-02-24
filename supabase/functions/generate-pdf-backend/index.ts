@@ -453,35 +453,48 @@ async function buildPDF(
                 });
                 y -= 25;
 
-                currentPage.drawText('This artifact is optimized for AI Vision and High-Fidelity reconstruction.', {
-                    x: MARGIN, y, size: 10, font: font, color: rgb(0.2, 0.2, 0.2),
-                });
-                y -= 15;
-
-                const aiPrompt = [
-                    "Below this page is a sequence of high-resolution visual frames sampled from the workshop video.",
-                    "For each frame, you will find a blue 'ONE DUO SENSORY DATA' block. You MUST prioritize",
-                    "the data in these blocks to 'see' and 'hear' the original video context:",
-                    "1. VISUAL DESCRIPTION: The literal screen state (UI, speaker, whiteboard).",
-                    "2. INTERACTION TRACKING: Cursors, clicks, zoom focus, and text selections.",
-                    "3. AUDIO FEATURES: Music cues, ambient sounds, and audience reactions.",
-                    "4. PROSODY LAYER: Vocal tone, emphasis, pacing, and meaningful pauses.",
-                    "Use this data to bridge the gap between transcript text and embodied presence."
-                ];
-
-                for (const line of aiPrompt) {
-                    drawWrappedText(line, { size: 9, color: rgb(0.3, 0.3, 0.3) });
-                }
+                const introText = "This artifact is optimized for AI Vision and High-Fidelity reconstruction. It uses a multi-layered sensory matrix to bridge the gap between verbatim text and the original embodied context of the workshop.";
+                drawWrappedText(introText, { size: 10, color: rgb(0.2, 0.2, 0.2) });
                 y -= 10;
 
+                // Structured Matrix Header
                 currentPage.drawRectangle({
-                    x: MARGIN, y: y - 5, width: CONTENT_WIDTH, height: 20,
-                    color: rgb(0.9, 0.95, 1),
+                    x: MARGIN, y: y - 5, width: CONTENT_WIDTH, height: 16,
+                    color: rgb(0.96, 0.96, 0.98),
                 });
-                currentPage.drawText('AI INSTRUCTION: Cross-reference frame timestamps with transcript segments to reconstruct the full intent.', {
-                    x: MARGIN + 5, y: y, size: 8, font: boldFont, color: rgb(0.1, 0.2, 0.4),
+                currentPage.drawText('SENSORY LAYER', { x: MARGIN + 5, y: y + 2, size: 9, font: boldFont, color: rgb(0, 0.2, 0.4) });
+                currentPage.drawText('DESCRIPTION & UTILITY', { x: MARGIN + 120, y: y + 2, size: 9, font: boldFont, color: rgb(0, 0.2, 0.4) });
+                y -= 20;
+
+                const layers = [
+                    { name: 'Visual Frame', color: rgb(0, 0.3, 0.6), desc: 'Literal screen state (UI, whiteboard, speaker posture) for scene reconstruction.' },
+                    { name: 'Interaction', color: rgb(0.6, 0.3, 0), desc: 'Cursor pauses, highlights, and zoom focus indicators identifying critical attention points.' },
+                    { name: 'Audio Events', color: rgb(0, 0.4, 0), desc: 'Music cues, environmental sounds, and audience reactions mapping the workshop\'s "vibe".' },
+                    { name: 'Prosody', color: rgb(0.4, 0, 0.4), desc: 'Vocal tone, emphasis, and pacing data for detecting nuance often lost in pure text.' }
+                ];
+
+                for (const layer of layers) {
+                    currentPage.drawRectangle({
+                        x: MARGIN, y: y - 5, width: CONTENT_WIDTH, height: 12,
+                        color: rgb(1, 1, 1), borderColor: rgb(0.9, 0.9, 0.94), borderWidth: 0.5
+                    });
+                    currentPage.drawText(layer.name, { x: MARGIN + 5, y: y, size: 8, font: boldFont, color: layer.color });
+                    currentPage.drawText(layer.desc, { x: MARGIN + 120, y: y, size: 8, font: font, color: rgb(0.3, 0.3, 0.3) });
+                    y -= 12;
+                }
+
+                y -= 8;
+                currentPage.drawRectangle({
+                    x: MARGIN, y: y - 5, width: CONTENT_WIDTH, height: 25,
+                    color: rgb(0.94, 0.97, 1),
                 });
-                y -= 30;
+                currentPage.drawText('AI INSTRUCTION: Prioritize the "ONE DUO SENSORY DATA" blocks below each frame.', {
+                    x: MARGIN + 5, y: y + 8, size: 8, font: boldFont, color: rgb(0, 0.1, 0.3),
+                });
+                currentPage.drawText('Cross-reference timestamps with transcript segments to reconstruct the full instructor intent.', {
+                    x: MARGIN + 5, y: y - 2, size: 8, font: font, color: rgb(0, 0.1, 0.3),
+                });
+                y -= 40;
             }
 
             // Sample frames (max 50 for server-side to keep PDF size reasonable)
@@ -586,14 +599,27 @@ async function buildPDF(
                     captionParts.push(`(${analysis.prosody.parenthetical})`);
                 }
 
-                const compositeCaption = captionParts.join(' | ');
+                // Sanitize caption: remove AI filler/literalisms
+                const sanitizedParts = captionParts.map(part => {
+                    return part
+                        .replace(/Note: The image is a screenshot from a tutorial video, showing /gi, '')
+                        .replace(/This frame shows /gi, '')
+                        .replace(/In this frame, /gi, '')
+                        .replace(/The image shows /gi, '')
+                        .replace(/\. \(Note:.*?\)$/gi, '.')
+                        .trim();
+                }).filter(part => part.length > 0);
+
+                const compositeCaption = sanitizedParts.join(' | ');
                 if (compositeCaption) {
                     if (aiFidelityMode) {
+                        const hasFocus = analysis?.emphasisFlags?.cursor_pause || analysis?.emphasisFlags?.zoom_focus;
                         const truncated = compositeCaption.length > 500
                             ? compositeCaption.substring(0, 497) + '...'
                             : compositeCaption;
 
-                        const textToDraw = `ONE DUO SENSORY DATA: "${truncated}"`;
+                        const label = hasFocus ? 'ONE DUO SENSORY DATA [CRITICAL FOCUS]:' : 'ONE DUO SENSORY DATA:';
+                        const textToDraw = `${label} "${truncated}"`;
                         const fontSize = 7;
 
                         // Simple wrap logic to calculate box height
@@ -614,24 +640,37 @@ async function buildPDF(
                         const rectHeight = (lines * (fontSize * 1.3)) + 8;
                         ensureSpace(rectHeight + 5);
 
-                        currentPage.drawRectangle({
-                            x: MARGIN,
-                            y: y - rectHeight,
-                            width: CONTENT_WIDTH,
-                            height: rectHeight,
-                            color: rgb(0.98, 0.98, 1),
-                            borderColor: rgb(0.8, 0.8, 1),
-                            borderWidth: 0.5,
-                        });
+                        if (hasFocus) {
+                            currentPage.drawRectangle({
+                                x: MARGIN,
+                                y: y - rectHeight,
+                                width: CONTENT_WIDTH,
+                                height: rectHeight,
+                                color: rgb(1, 1, 0.94),
+                                borderColor: rgb(0.8, 0.7, 0),
+                                borderWidth: 0.5,
+                            });
+                        } else {
+                            currentPage.drawRectangle({
+                                x: MARGIN,
+                                y: y - rectHeight,
+                                width: CONTENT_WIDTH,
+                                height: rectHeight,
+                                color: rgb(0.98, 0.98, 1),
+                                borderColor: rgb(0.8, 0.8, 1),
+                                borderWidth: 0.5,
+                            });
+                        }
 
                         y -= 2; // padding top
                         drawWrappedText(textToDraw, {
                             x: MARGIN + 5,
                             size: fontSize,
                             usedFont: italicFont,
-                            color: rgb(0.2, 0.2, 0.4),
+                            color: hasFocus ? rgb(0.4, 0.2, 0) : rgb(0.2, 0.2, 0.4),
                             maxWidth: CONTENT_WIDTH - 10
                         });
+                        y -= 4; // padding bottom
                         y -= 4; // padding bottom
                     } else {
                         const truncated = compositeCaption.length > 300

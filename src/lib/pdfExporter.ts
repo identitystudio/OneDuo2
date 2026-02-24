@@ -1377,34 +1377,58 @@ export const generateChatGPTPDF = async (
 
       pdf.setFontSize(10);
       pdf.setFont('helvetica', 'normal');
-      pdf.setTextColor(50, 50, 50);
-      const aiPrompt = [
-        "This artifact is optimized for AI Vision and High-Fidelity reconstruction.",
-        "Below this page is a sequence of high-resolution visual frames sampled from the workshop video.",
-        "",
-        "For each frame, you will find a blue 'ONE DUO SENSORY DATA' block. You MUST prioritize",
-        "the data in these blocks to 'see' and 'hear' the original video context:",
-        "",
-        "1. VISUAL DESCRIPTION: The literal screen state (UI, speaker, whiteboard).",
-        "2. INTERACTION TRACKING: Cursors, clicks, zoom focus, and text selections.",
-        "3. AUDIO FEATURES: Music cues, ambient sounds, and audience reactions.",
-        "4. PROSODY LAYER: Vocal tone, emphasis, pacing, and meaningful pauses.",
-        "",
-        "Use this data to bridge the gap between transcript text and embodied presence."
+      pdf.setTextColor(60, 60, 60);
+
+      const introText = "This artifact is optimized for AI Vision and High-Fidelity reconstruction. It uses a multi-layered sensory matrix to bridge the gap between verbatim text and the original embodied context of the workshop.";
+      const splitIntro = pdf.splitTextToSize(introText, contentWidth);
+      pdf.text(splitIntro, margin, y);
+      y += (splitIntro.length * 5) + 8;
+
+      // Structured Matrix Header
+      pdf.setFillColor(245, 245, 250);
+      pdf.setDrawColor(200, 200, 220);
+      pdf.roundedRect(margin, y, contentWidth, 8, 1, 1, 'FD');
+      pdf.setFont('helvetica', 'bold');
+      pdf.setFontSize(9);
+      pdf.setTextColor(0, 51, 102);
+      pdf.text('SENSORY LAYER', margin + 5, y + 5.5);
+      pdf.text('DESCRIPTION & UTILITY', margin + 50, y + 5.5);
+      y += 8;
+
+      const layers = [
+        { name: 'Visual Frame', color: [0, 80, 150], desc: 'Literal screen state (UI, whiteboard, speaker posture) for scene reconstruction.' },
+        { name: 'Interaction', color: [150, 80, 0], desc: 'Cursor pauses, highlights, and zoom focus indicators identifying critical attention points.' },
+        { name: 'Audio Events', color: [0, 120, 0], desc: 'Music cues, environmental sounds, and audience reactions mapping the workshop\'s "vibe".' },
+        { name: 'Prosody', color: [120, 0, 120], desc: 'Vocal tone, emphasis, and pacing data for detecting nuance often lost in pure text.' }
       ];
 
-      aiPrompt.forEach(line => {
-        pdf.text(line, margin, y);
-        y += 6;
+      layers.forEach((layer, idx) => {
+        pdf.setFillColor(255, 255, 255);
+        pdf.setDrawColor(230, 230, 240);
+        pdf.rect(margin, y, contentWidth, 12, 'FD');
+
+        pdf.setFont('helvetica', 'bold');
+        pdf.setTextColor(layer.color[0], layer.color[1], layer.color[2]);
+        pdf.text(layer.name, margin + 5, y + 7.5);
+
+        pdf.setFont('helvetica', 'normal');
+        pdf.setTextColor(80, 80, 80);
+        pdf.text(layer.desc, margin + 50, y + 7.5);
+        y += 12;
       });
 
       y += 10;
       pdf.setFillColor(240, 248, 255);
       pdf.setDrawColor(100, 150, 200);
-      pdf.roundedRect(margin, y, contentWidth, 20, 2, 2, 'FD');
+      pdf.roundedRect(margin, y, contentWidth, 18, 2, 2, 'FD');
       y += 7;
       pdf.setFont('helvetica', 'bold');
-      pdf.text('AI INSTRUCTION: Cross-reference frame timestamps with transcript segments to reconstruct the full intent.', margin + 5, y);
+      pdf.setFontSize(9);
+      pdf.setTextColor(0, 40, 80);
+      pdf.text('AI INSTRUCTION: Prioritize the "ONE DUO SENSORY DATA" blocks below each frame.', margin + 5, y);
+      y += 5;
+      pdf.setFont('helvetica', 'normal');
+      pdf.text('Cross-reference timestamps with transcript segments to reconstruct the full instructor intent.', margin + 5, y);
       y += 20;
     }
 
@@ -1553,19 +1577,40 @@ export const generateChatGPTPDF = async (
             captionParts.push(`(${frameAnalysis.prosody.parenthetical})`);
           }
 
+          // Sanitize caption: remove AI filler/literalisms
+          const sanitizedParts = captionParts.map(part => {
+            return part
+              .replace(/Note: The image is a screenshot from a tutorial video, showing /gi, '')
+              .replace(/This frame shows /gi, '')
+              .replace(/In this frame, /gi, '')
+              .replace(/The image shows /gi, '')
+              .replace(/\. \(Note:.*?\)$/gi, '.')
+              .trim();
+          }).filter(part => part.length > 0);
+
           // Render the composite caption
-          const compositeCaption = captionParts.join(' | ');
+          const compositeCaption = sanitizedParts.join(' | ');
           if (compositeCaption.length > 0) {
+            const hasFocus = frameAnalysis?.emphasisFlags?.cursor_pause || frameAnalysis?.emphasisFlags?.zoom_focus;
             const captionWidth = isAIFidelity ? contentWidth : (imgWidth + 60);
+
             pdf.setFontSize(isAIFidelity ? 9 : 8);
             pdf.setFont('helvetica', 'italic');
             pdf.setTextColor(80, 80, 80);
 
             if (isAIFidelity) {
-              pdf.setFillColor(250, 250, 255);
-              pdf.setDrawColor(200, 200, 255);
-              const wrapCaption = pdf.splitTextToSize(`ONE DUO SENSORY DATA: "${compositeCaption}"`, captionWidth - 10);
+              if (hasFocus) {
+                pdf.setFillColor(250, 250, 240);
+                pdf.setDrawColor(220, 200, 0);
+              } else {
+                pdf.setFillColor(250, 250, 255);
+                pdf.setDrawColor(200, 200, 255);
+              }
+
+              const label = hasFocus ? 'ONE DUO SENSORY DATA [CRITICAL FOCUS]:' : 'ONE DUO SENSORY DATA:';
+              const wrapCaption = pdf.splitTextToSize(`${label} "${compositeCaption}"`, captionWidth - 10);
               const rectHeight = (wrapCaption.length * 4) + 6;
+
               pdf.roundedRect(margin, y - 1, captionWidth, rectHeight, 1, 1, 'FD');
               y += 5;
               pdf.text(wrapCaption, margin + 5, y);
@@ -2254,16 +2299,38 @@ export const generateMergedCoursePDF = async (
               captionParts.push(`(${fa.prosody.parenthetical})`);
             }
 
+            // Sanitize caption: remove AI filler/literalisms
+            const sanitizedParts = captionParts.map(part => {
+              return part
+                .replace(/Note: The image is a screenshot from a tutorial video, showing /gi, '')
+                .replace(/This frame shows /gi, '')
+                .replace(/In this frame, /gi, '')
+                .replace(/The image shows /gi, '')
+                .replace(/\. \(Note:.*?\)$/gi, '.')
+                .trim();
+            }).filter(part => part.length > 0);
+
             // Render composite caption
-            const compositeCaption = captionParts.join(' | ');
+            const compositeCaption = sanitizedParts.join(' | ');
             if (compositeCaption.length > 0) {
               if (aiFidelityMode) {
+                const fa = moduleAnalyses[frameIdx];
+                const hasFocus = fa?.emphasisFlags?.cursor_pause || fa?.emphasisFlags?.zoom_focus;
+
                 pdf.setFontSize(9);
                 pdf.setFont('helvetica', 'italic');
                 pdf.setTextColor(80, 80, 80);
-                pdf.setFillColor(250, 250, 255);
-                pdf.setDrawColor(200, 200, 255);
-                const wrapCaption = pdf.splitTextToSize(`ONE DUO SENSORY DATA: "${compositeCaption}"`, contentWidth - 10);
+
+                if (hasFocus) {
+                  pdf.setFillColor(250, 250, 240);
+                  pdf.setDrawColor(220, 200, 0);
+                } else {
+                  pdf.setFillColor(250, 250, 255);
+                  pdf.setDrawColor(200, 200, 255);
+                }
+
+                const label = hasFocus ? 'ONE DUO SENSORY DATA [CRITICAL FOCUS]:' : 'ONE DUO SENSORY DATA:';
+                const wrapCaption = pdf.splitTextToSize(`${label} "${compositeCaption}"`, contentWidth - 10);
                 const rectHeight = (wrapCaption.length * 4) + 6;
 
                 if (y + rectHeight > pageHeight - 20) {

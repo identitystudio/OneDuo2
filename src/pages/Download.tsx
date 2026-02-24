@@ -41,6 +41,7 @@ const DownloadPage = () => {
   const [searchParams] = useSearchParams();
   const moduleParam = searchParams.get('module');
   const salvageMode = searchParams.get('salvage') === 'true';
+  const fidelityMode = searchParams.get('fidelity') === 'true';
 
   const { user } = useAuth();
   const userEmail = user?.email;
@@ -55,7 +56,7 @@ const DownloadPage = () => {
   const [downloadComplete, setDownloadComplete] = useState(false);
   const [selectedFormat, setSelectedFormat] = useState<ExportFormat>('pdf');
   const [filmMode, setFilmMode] = useState(false);
-  const [aiVisionMode, setAiVisionMode] = useState(true);
+  const [aiVisionMode, setAiVisionMode] = useState(fidelityMode);
   const [isPartial, setIsPartial] = useState(false);
   const [noDataAvailable, setNoDataAvailable] = useState(false);
   const hasAutoTriggered = useRef(false);
