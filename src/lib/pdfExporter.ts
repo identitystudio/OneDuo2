@@ -867,38 +867,38 @@ export const generateChatGPTPDF = async (
   // Layer A: Key Moments
   if (course.key_moments_index && course.key_moments_index.length > 0) {
     if (y > pageHeight - 50) addPageWithHeaders();
-    else y += 15;
+    else y += 8; // Reduced from 15
 
     onProgress?.(42, 'Adding Intelligence Layer A...');
     pdf.setFontSize(16);
     pdf.setFont('helvetica', 'bold');
     pdf.text('INTELLIGENCE LAYER A: KEY MOMENTS INDEX', margin, y);
-    y += 15;
+    y += 10; // Reduced from 15
     pdf.setFontSize(10);
     pdf.setFont('helvetica', 'normal');
     course.key_moments_index.forEach((m) => {
       checkPageBreak(12);
       pdf.text(`[${m.timestamp || '--:--'}] - ${m.description}`, margin + 5, y);
-      y += 8;
+      y += 6; // Reduced from 8
     });
   }
 
   // Layer B: Concepts & Frameworks
   if (course.concepts_frameworks && course.concepts_frameworks.length > 0) {
     if (y > pageHeight - 60) addPageWithHeaders();
-    else y += 15;
+    else y += 8; // Reduced from 15
 
     onProgress?.(43, 'Adding Intelligence Layer B...');
     pdf.setFontSize(16);
     pdf.setFont('helvetica', 'bold');
     pdf.text('INTELLIGENCE LAYER B: CONCEPTS & FRAMEWORKS', margin, y);
-    y += 12;
+    y += 10; // Reduced from 12
     course.concepts_frameworks.forEach((c) => {
       checkPageBreak(15);
       pdf.setFontSize(10);
       pdf.setFont('helvetica', 'bold');
       pdf.text(`* ${c.title || 'Concept'}`, margin + 5, y);
-      y += 6;
+      y += 5; // Reduced from 6
       pdf.setFont('helvetica', 'normal');
       pdf.setFontSize(9);
       const descLines = pdf.splitTextToSize(sanitizePdfText(c.description), contentWidth - 15);
@@ -909,47 +909,47 @@ export const generateChatGPTPDF = async (
           pdf.setFontSize(9);
         }
         pdf.text(line, margin + 10, y);
-        y += 5;
+        y += 4.5; // Reduced from 5
       });
-      y += 3;
+      y += 2; // Reduced from 3
     });
   }
 
   // Layer C: Actionable Steps
   if (course.implementation_steps && course.implementation_steps.length > 0) {
     if (y > pageHeight - 50) addPageWithHeaders();
-    else y += 15;
+    else y += 8; // Reduced from 15
 
     onProgress?.(44, 'Adding Intelligence Layer C...');
     pdf.setFontSize(16);
     pdf.setFont('helvetica', 'bold');
     pdf.text('INTELLIGENCE LAYER C: ACTIONABLE STEPS', margin, y);
-    y += 12;
+    y += 10; // Reduced from 12
     pdf.setFontSize(10);
     pdf.setFont('helvetica', 'normal');
     course.implementation_steps.forEach((s, idx) => {
       checkPageBreak(12);
       pdf.text(`${s.step_number || idx + 1}. ${s.step_title || s.description}`, margin + 5, y);
-      y += 8;
+      y += 6; // Reduced from 8
     });
   }
 
   // Layer D: Hidden Patterns
   if (course.hidden_patterns && course.hidden_patterns.length > 0) {
     if (y > pageHeight - 60) addPageWithHeaders();
-    else y += 15;
+    else y += 8; // Reduced from 15
 
     onProgress?.(45, 'Adding Intelligence Layer D...');
     pdf.setFontSize(16);
     pdf.setFont('helvetica', 'bold');
     pdf.text('INTELLIGENCE LAYER D: HIDDEN PATTERNS & INSIGHTS', margin, y);
-    y += 12;
+    y += 10; // Reduced from 12
     course.hidden_patterns.forEach((p) => {
       checkPageBreak(15);
       pdf.setFontSize(10);
       pdf.setFont('helvetica', 'bold');
       pdf.text(`* ${p.title || 'Pattern'}`, margin + 5, y);
-      y += 6;
+      y += 5; // Reduced from 6
       pdf.setFont('helvetica', 'normal');
       pdf.setFontSize(9);
       const descLines = pdf.splitTextToSize(sanitizePdfText(p.description), contentWidth - 15);
@@ -960,9 +960,9 @@ export const generateChatGPTPDF = async (
           pdf.setFontSize(9);
         }
         pdf.text(line, margin + 10, y);
-        y += 5;
+        y += 4.5; // Reduced from 5
       });
-      y += 3;
+      y += 2; // Reduced from 3
     });
   }
   y += 10;
@@ -1143,7 +1143,7 @@ export const generateChatGPTPDF = async (
   pdf.setFont('helvetica', 'bold');
   pdf.setTextColor(0, 0, 0);
   pdf.text('Audio Events Timeline', margin, y);
-  y += 12;
+  y += 8; // Reduced from 12
 
   const audioEvents = course.audio_events || {};
   const prosodyData = course.prosody_annotations || {};
@@ -1173,7 +1173,7 @@ export const generateChatGPTPDF = async (
       pdf.setFont('helvetica', 'italic');
       const moodText = pdf.splitTextToSize(audioEvents.overall_audio_mood, contentWidth - 10);
       pdf.text(moodText.slice(0, 2), margin + 3, y);
-      y += 15;
+      y += 12; // Reduced from 15
     }
 
     // Music Cues Section
@@ -1210,7 +1210,7 @@ export const generateChatGPTPDF = async (
         pdf.text(`... and ${musicCues.length - 5} more music cues`, margin + 3, y);
         y += 6;
       }
-      y += 8;
+      y += 6; // Reduced from 8
     }
 
     // Reactions Section
@@ -1247,7 +1247,7 @@ export const generateChatGPTPDF = async (
         pdf.text(`... and ${reactions.length - 5} more reactions`, margin + 3, y);
         y += 5;
       }
-      y += 8;
+      y += 6; // Reduced from 8
     }
 
     // Meaningful Pauses Section
@@ -1283,7 +1283,7 @@ export const generateChatGPTPDF = async (
         pdf.text(`... and ${meaningfulPauses.length - 8} more pauses`, margin + 3, y);
         y += 5;
       }
-      y += 8;
+      y += 6; // Reduced from 8
     }
 
   } else {
@@ -1405,16 +1405,16 @@ export const generateChatGPTPDF = async (
       layers.forEach((layer, idx) => {
         pdf.setFillColor(255, 255, 255);
         pdf.setDrawColor(230, 230, 240);
-        pdf.rect(margin, y, contentWidth, 12, 'FD');
+        pdf.rect(margin, y, contentWidth, 9, 'FD'); // Reduced from 12
 
         pdf.setFont('helvetica', 'bold');
         pdf.setTextColor(layer.color[0], layer.color[1], layer.color[2]);
-        pdf.text(layer.name, margin + 5, y + 7.5);
+        pdf.text(layer.name, margin + 5, y + 6); // Adjusted from 7.5
 
         pdf.setFont('helvetica', 'normal');
         pdf.setTextColor(80, 80, 80);
-        pdf.text(layer.desc, margin + 50, y + 7.5);
-        y += 12;
+        pdf.text(layer.desc, margin + 50, y + 6); // Adjusted from 7.5
+        y += 9; // Reduced from 12
       });
 
       y += 10;
@@ -1479,19 +1479,19 @@ export const generateChatGPTPDF = async (
 
       // ===== STEP HEADER (STRICT LOGIC) =====
       const isAIFidelity = options.aiFidelityMode;
-      const headerHeight = isAIFidelity ? 45 : 38;
+      const headerHeight = isAIFidelity ? 36 : 32; // Reduced from 45/38
 
       pdf.setFillColor(245, 245, 250);
       pdf.setDrawColor(200, 200, 200);
       pdf.setLineWidth(0.3);
       pdf.roundedRect(margin, y, contentWidth, headerHeight, 1, 1, 'FD');
-      y += 6;
+      y += 5; // Reduced from 6
 
       pdf.setFontSize(11);
       pdf.setFont('helvetica', 'bold');
       pdf.setTextColor(50, 50, 50);
       pdf.text(`STEP ${i + 1}: ${formatTime(frameTime)} | UI/DOC`, margin + 4, y);
-      y += 7;
+      y += 6; // Reduced from 7
 
       pdf.setFontSize(9);
       pdf.setTextColor(100, 100, 100);
@@ -1499,13 +1499,13 @@ export const generateChatGPTPDF = async (
       const confidence = (frameAnalysis?.intentConfidence || 0.8) * 100;
       const instruction = confidence >= 80 ? 'Execute and verify.' : 'Verify with human if UI differs.';
       pdf.text(`[VALIDATION CHECKPOINT] (${action}, ${confidence.toFixed(0)}%, AI: ${instruction})`, margin + 4, y);
-      y += 6;
+      y += 5; // Reduced from 6
 
       pdf.setFont('helvetica', 'bold');
       pdf.text(`Instructor Intent [EXPLICIT/STRONG]:`, margin + 4, y);
       pdf.setFont('helvetica', 'normal');
       pdf.text(` (Why this step exists: ${frameAnalysis?.instructorIntent || 'Demonstrating UI flow'})`, margin + 52, y);
-      y += 6;
+      y += 5; // Reduced from 6
 
       pdf.setFont('helvetica', 'bold');
       pdf.text(`Prosody/Emphasis:`, margin + 4, y);
@@ -1513,7 +1513,7 @@ export const generateChatGPTPDF = async (
       const prosody = hasProsody ? frameAnalysis.prosody.parenthetical : 'Neutral';
       const emphasis = emphasisLabels.length > 0 ? `Focus: ${emphasisLabels.join(', ')}` : 'Screen capture focus';
       pdf.text(` (${prosody} | ${emphasis})`, margin + 30, y);
-      y += 13;
+      y += 10; // Reduced from 13
 
       // ===== FRAME IMAGE =====
       try {
@@ -2140,13 +2140,13 @@ export const generateMergedCoursePDF = async (
     // ========== VISUAL FRAMES SECTION ==========
     if (module.frame_urls && module.frame_urls.length > 0) {
       if (y > pageHeight - 80) addPageWithHeaders();
-      else y += 15;
+      else y += 8; // Reduced from 15
 
       pdf.setFontSize(14);
       pdf.setFont('helvetica', 'bold');
       pdf.setTextColor(0, 0, 0);
       pdf.text(safe('Visual Frames'), margin, y);
-      y += 10;
+      y += 8; // Reduced from 10
 
       if (aiFidelityMode && i === 0) {
         addPageWithHeaders();
@@ -2176,17 +2176,17 @@ export const generateMergedCoursePDF = async (
 
         aiPrompt.forEach(line => {
           pdf.text(line, margin, y);
-          y += 6;
+          y += 5; // Reduced from 6
         });
 
-        y += 10;
+        y += 6; // Reduced from 10
         pdf.setFillColor(240, 248, 255);
         pdf.setDrawColor(100, 150, 200);
-        pdf.roundedRect(margin, y, contentWidth, 20, 2, 2, 'FD');
-        y += 7;
+        pdf.roundedRect(margin, y, contentWidth, 18, 2, 2, 'FD'); // Shrunk from 20
+        y += 6; // Reduced from 7
         pdf.setFont('helvetica', 'bold');
         pdf.text('AI INSTRUCTION: Cross-reference frame timestamps with transcript segments to reconstruct the full intent.', margin + 5, y);
-        y += 20;
+        y += 12; // Reduced from 20
       }
 
       // Sample frames evenly
@@ -2239,7 +2239,7 @@ export const generateMergedCoursePDF = async (
         pdf.setFont('helvetica', 'bold');
         pdf.setTextColor(100, 100, 100);
         pdf.text(safe(`Frame ${frameIdx + 1} | ${formatTime(timestamp)}`), margin, y);
-        y += 5;
+        y += 4; // Reduced from 5
 
         try {
           const imgData = await imageToBase64WithRetry(frameUrl, moduleEffectiveQuality, 2, 8000);
