@@ -85,18 +85,20 @@ serve(async (req) => {
                                 prompt: `Analyze this image from a tutorial video.
                                 
                                 Extract:
-                                1. ALL visible text.
-                                2. Visual description of what's happening.
-                                3. Type of text (slide, document, ui, code, or other).
-                                4. Visual emphasis cues (highlights, bold, cursor focus, etc.).
-                                5. The instructor's intent (what should the user build or do?).
+                                1. ALL visible text (OCR).
+                                2. Detailed visual description: What is on screen? (UI, speaker, whiteboard, audience).
+                                3. Type of content: slide, document, ui, code, or other.
+                                4. Visual transitions/interactions: Cuts, screen switches, cursor movement, or whiteboard changes.
+                                5. Speaker Presence: Facial expressions, posture, gestures, and general 'vibe'.
+                                6. Visual emphasis cues: highlights, bold, cursor focus, zoom.
+                                7. The instructor's intent: what should the user build or do?
                                 
                                 ${transcriptContext ? `Context from transcript: "${transcriptContext}"` : ''}
                                 
                                 Return ONLY a JSON object in this format:
                                 {
                                   "text": "all text found",
-                                  "visualDescription": "description for caption",
+                                  "visualDescription": "High-fidelity description for AI reconstruction",
                                   "textType": "slide|document|ui|code|other",
                                   "emphasisFlags": {
                                     "highlight_detected": boolean,
@@ -107,13 +109,13 @@ serve(async (req) => {
                                     "bold_text": boolean,
                                     "underline_detected": boolean
                                   },
-                                  "keyElements": ["list", "of", "items"],
+                                  "keyElements": ["list", "of", "visual", "elements"],
                                   "instructorIntent": "actionable build instruction",
                                   "prosody": {
                                     "tone": "neutral|emphatic|etc",
                                     "pacing": "normal|etc",
                                     "volume": "normal|etc",
-                                    "parenthetical": "(note)"
+                                    "parenthetical": "(note about vibe/tone)"
                                   },
                                   "dependsOnPrevious": boolean
                                 }`,

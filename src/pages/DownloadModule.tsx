@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useParams, Link, useSearchParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
-import { Download as DownloadIcon, CheckCircle, Loader2, FileText, MessageSquare, AlertCircle, Package, Film } from "lucide-react";
+import { Download as DownloadIcon, CheckCircle, Loader2, FileText, MessageSquare, AlertCircle, Package, Film, Layers } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { generateChatGPTPDF } from "@/lib/pdfExporter";
 import { generateMemoryPackage, ExportMode } from "@/lib/memoryExporter";
@@ -38,6 +38,7 @@ const DownloadModulePage = () => {
   const [downloadComplete, setDownloadComplete] = useState(false);
   const [selectedFormat, setSelectedFormat] = useState<ExportFormat>('pdf');
   const [filmMode, setFilmMode] = useState(false);
+  const [aiVisionMode, setAiVisionMode] = useState(false);
   const [preloadProgress, setPreloadProgress] = useState(0);
   const [preloadComplete, setPreloadComplete] = useState(false);
   const hasAutoTriggered = useRef(false);
@@ -167,7 +168,10 @@ const DownloadModulePage = () => {
             setDownloadProgress(progress);
             setDownloadStatus(status);
           },
-          { fastMode: true } // OPTIMIZED: Skip OCR for faster generation
+          {
+            aiFidelityMode: aiVisionMode,
+            includeOCR: true // Always include OCR for AI Vision
+          }
         );
         filename = `OneDuo_${moduleTitle.replace(/[^a-zA-Z0-9]/g, "_")}.pdf`;
       } else {
@@ -349,15 +353,34 @@ const DownloadModulePage = () => {
                   <button
                     onClick={() => setSelectedFormat('pdf')}
                     className={`p-3 rounded-lg border text-left transition-all ${selectedFormat === 'pdf'
-                        ? 'border-primary bg-primary/5'
-                        : 'border-border hover:border-primary/50'
+                      ? 'border-primary bg-primary/5'
+                      : 'border-border hover:border-primary/50'
                       }`}
                   >
                     <div className="flex items-center gap-3">
                       <FileText className="h-5 w-5 text-primary" />
                       <div>
-                        <div className="font-medium">PDF Only</div>
-                        <div className="text-xs text-muted-foreground">Traditional document format</div>
+                        <div className="font-medium">Standard PDF</div>
+                        <div className="text-xs text-muted-foreground">High-quality document for human reading</div>
+                      </div>
+                    </div>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setSelectedFormat('pdf');
+                      setAiVisionMode(true);
+                    }}
+                    className={`p-3 rounded-lg border text-left transition-all ${selectedFormat === 'pdf' && aiVisionMode
+                      ? 'border-primary bg-primary/5'
+                      : 'border-border hover:border-primary/50'
+                      }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <Layers className="h-5 w-5 text-blue-500" />
+                      <div>
+                        <div className="font-medium">AI Vision Optimized PDF</div>
+                        <div className="text-xs text-muted-foreground">Large frames & sensory data for ChatGPT/AI</div>
                       </div>
                     </div>
                   </button>
@@ -365,8 +388,8 @@ const DownloadModulePage = () => {
                   <button
                     onClick={() => setSelectedFormat('memory-training')}
                     className={`p-3 rounded-lg border text-left transition-all ${selectedFormat === 'memory-training'
-                        ? 'border-primary bg-primary/5'
-                        : 'border-border hover:border-primary/50'
+                      ? 'border-primary bg-primary/5'
+                      : 'border-border hover:border-primary/50'
                       }`}
                   >
                     <div className="flex items-center gap-3">
@@ -381,8 +404,8 @@ const DownloadModulePage = () => {
                   <button
                     onClick={() => setSelectedFormat('memory-creative')}
                     className={`p-3 rounded-lg border text-left transition-all ${selectedFormat === 'memory-creative'
-                        ? 'border-primary bg-primary/5'
-                        : 'border-border hover:border-primary/50'
+                      ? 'border-primary bg-primary/5'
+                      : 'border-border hover:border-primary/50'
                       }`}
                   >
                     <div className="flex items-center gap-3">

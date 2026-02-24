@@ -233,6 +233,7 @@ interface ExportOptions {
   includeWorkflowAnalysis?: boolean;
   userEmail?: string; // Alternative way to pass email for watermark
   fastMode?: boolean; // Skip OCR + workflow analysis for faster generation
+  aiFidelityMode?: boolean; // NEW: High-fidelity layout for AI vision (large images, high density)
 }
 
 const LEGAL_FOOTER = `Proprietary Governance Artifact - Not For AI Training or System Replication. Identity Nails LLC / OneDuo - All Rights Reserved. Unauthorized automation, reproduction, or derivative system generation is prohibited. See /ip-notice for governing terms.`;
@@ -534,7 +535,7 @@ export const generateChatGPTPDF = async (
   const effectiveMaxFrames = clampNumber(
     Math.min(requestedMaxFrames, allFrames.length > 0 ? allFrames.length : requestedMaxFrames),
     0,
-    MAX_EXPORT_FRAMES
+    options.aiFidelityMode ? 15000 : MAX_EXPORT_FRAMES
   );
 
   // Calculate recommended quality based on how many frames we're actually embedding.
@@ -1356,6 +1357,47 @@ export const generateChatGPTPDF = async (
   const renderableFrameCount = frames.length;
 
   if (renderableFrameCount > 0) {
+    if (options.aiFidelityMode) {
+      addPageWithHeaders();
+      pdf.setFontSize(22);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setTextColor(0, 0, 0);
+      pdf.text('Sensory Intelligence Map', margin, y);
+      y += 12;
+
+      pdf.setFontSize(10);
+      pdf.setFont('helvetica', 'normal');
+      pdf.setTextColor(50, 50, 50);
+      const aiPrompt = [
+        "This artifact is optimized for AI Vision and High-Fidelity reconstruction.",
+        "Below this page is a sequence of high-resolution visual frames sampled from the workshop video.",
+        "",
+        "For each frame, you will find a blue 'ONE DUO SENSORY DATA' block. You MUST prioritize",
+        "the data in these blocks to 'see' and 'hear' the original video context:",
+        "",
+        "1. VISUAL DESCRIPTION: The literal screen state (UI, speaker, whiteboard).",
+        "2. INTERACTION TRACKING: Cursors, clicks, zoom focus, and text selections.",
+        "3. AUDIO FEATURES: Music cues, ambient sounds, and audience reactions.",
+        "4. PROSODY LAYER: Vocal tone, emphasis, pacing, and meaningful pauses.",
+        "",
+        "Use this data to bridge the gap between transcript text and embodied presence."
+      ];
+
+      aiPrompt.forEach(line => {
+        pdf.text(line, margin, y);
+        y += 6;
+      });
+
+      y += 10;
+      pdf.setFillColor(240, 248, 255);
+      pdf.setDrawColor(100, 150, 200);
+      pdf.roundedRect(margin, y, contentWidth, 20, 2, 2, 'FD');
+      y += 7;
+      pdf.setFont('helvetica', 'bold');
+      pdf.text('AI INSTRUCTION: Cross-reference frame timestamps with transcript segments to reconstruct the full intent.', margin + 5, y);
+      y += 20;
+    }
+
     onProgress?.(45, 'Processing frames with OCR data...');
 
     const frameDuration = videoDuration > 0 ? videoDuration / Math.max(frames.length, 1) : 10;
@@ -1402,10 +1444,13 @@ export const generateChatGPTPDF = async (
       const textType = frameAnalysis?.textType || 'other';
 
       // ===== STEP HEADER (STRICT LOGIC) =====
+      const isAIFidelity = options.aiFidelityMode;
+      const headerHeight = isAIFidelity ? 45 : 38;
+
       pdf.setFillColor(245, 245, 250);
       pdf.setDrawColor(200, 200, 200);
       pdf.setLineWidth(0.3);
-      pdf.roundedRect(margin, y, contentWidth, 38, 1, 1, 'FD');
+      pdf.roundedRect(margin, y, contentWidth, headerHeight, 1, 1, 'FD');
       y += 6;
 
       pdf.setFontSize(11);
@@ -1438,10 +1483,10 @@ export const generateChatGPTPDF = async (
 
       // ===== FRAME IMAGE =====
       try {
-        const base64Image = await imageToBase64Compressed(frameUrl, effectiveQuality);
+        const base64Image = await imageToBase64Compressed(frameUrl, isAIFidelity ? 0.95 : effectiveQuality);
         if (base64Image && base64Image.length > 1000) {
-          const imgWidth = Math.min(70, contentWidth);
-          const imgHeight = 40;
+          const imgWidth = isAIFidelity ? contentWidth : Math.min(70, contentWidth);
+          const imgHeight = isAIFidelity ? (imgWidth * 0.56) : 40;
           // Preserve quality (avoid extra internal compression)
           pdf.addImage(base64Image, 'JPEG', margin, y, imgWidth, imgHeight, undefined, 'NONE');
           y += imgHeight + 3;
@@ -1501,16 +1546,29 @@ export const generateChatGPTPDF = async (
           // Render the composite caption
           const compositeCaption = captionParts.join(' | ');
           if (compositeCaption.length > 0) {
-            pdf.setFontSize(8);
+            const captionWidth = isAIFidelity ? contentWidth : (imgWidth + 60);
+            pdf.setFontSize(isAIFidelity ? 9 : 8);
             pdf.setFont('helvetica', 'italic');
             pdf.setTextColor(80, 80, 80);
-            const truncatedCaption = compositeCaption.length > 300
-              ? compositeCaption.substring(0, 297) + '...'
-              : compositeCaption;
-            const splitCaption = pdf.splitTextToSize(`"${truncatedCaption}"`, imgWidth + 60);
-            const maxLines = Math.min(splitCaption.length, 4);
-            pdf.text(splitCaption.slice(0, maxLines), margin, y);
-            y += (maxLines * 3) + 3;
+
+            if (isAIFidelity) {
+              pdf.setFillColor(250, 250, 255);
+              pdf.setDrawColor(200, 200, 255);
+              const wrapCaption = pdf.splitTextToSize(`ONE DUO SENSORY DATA: "${compositeCaption}"`, captionWidth - 10);
+              const rectHeight = (wrapCaption.length * 4) + 6;
+              pdf.roundedRect(margin, y - 1, captionWidth, rectHeight, 1, 1, 'FD');
+              y += 5;
+              pdf.text(wrapCaption, margin + 5, y);
+              y += (wrapCaption.length * 4) + 2;
+            } else {
+              const truncatedCaption = compositeCaption.length > 300
+                ? compositeCaption.substring(0, 297) + '...'
+                : compositeCaption;
+              const splitCaption = pdf.splitTextToSize(`"${truncatedCaption}"`, captionWidth);
+              const maxLines = Math.min(splitCaption.length, 4);
+              pdf.text(splitCaption.slice(0, maxLines), margin, y);
+              y += (maxLines * 3) + 3;
+            }
             pdf.setFont('helvetica', 'normal');
           }
         } else {

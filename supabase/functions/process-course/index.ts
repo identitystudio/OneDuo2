@@ -3541,6 +3541,12 @@ async function processJobWithWorker(supabase: any, job: any, workerId: string) {
       case "extract_frames_module":
         await stepExtractFramesModule(supabase, courseId, fixMetadata.moduleNumber || 1, fixMetadata);
         break;
+      case "analyze_frames":
+        await stepAnalyzeFrames(supabase, courseId, fixMetadata);
+        break;
+      case "analyze_frames_module":
+        await stepAnalyzeFramesModule(supabase, courseId, fixMetadata.moduleNumber || 1, fixMetadata);
+        break;
       case "render_gifs":
         await stepRenderGifs(supabase, courseId, fixMetadata);
         break;
@@ -3639,19 +3645,19 @@ function getNextStep(current: string, metadata?: any): { step: string | null; me
   // Single video steps - check if we should skip frame extraction
   const skipFrameExtraction = metadata?.skipFrameExtraction || metadata?.hasPreExtractedFrames;
 
-  // PARALLEL PROCESSING: After transcribe_and_extract completes, go to analyze_audio
+  // PARALLEL PROCESSING: After transcribe_and_extract completes, go to analyze_frames
   if (current === "transcribe_and_extract") {
-    return { step: "analyze_audio", metadata };
+    return { step: "analyze_frames", metadata };
   }
 
-  // Legacy support: if transcribe completes and we have pre-extracted frames, skip to analyze_audio
+  // Legacy support: if transcribe completes and we have pre-extracted frames, skip to analyze_frames
   if (current === "transcribe" && skipFrameExtraction) {
-    return { step: "analyze_audio", metadata };
+    return { step: "analyze_frames", metadata };
   }
 
   // Legacy sequential pipeline (for backwards compatibility)
-  // transcribe -> extract_frames -> analyze_audio -> train_ai
-  const singleSteps = ["transcribe", "extract_frames", "analyze_audio", "train_ai"];
+  // transcribe -> extract_frames -> analyze_frames -> analyze_audio -> train_ai
+  const singleSteps = ["transcribe", "extract_frames", "analyze_frames", "analyze_audio", "train_ai"];
   const idx = singleSteps.indexOf(current);
   if (idx >= 0 && idx < singleSteps.length - 1) {
     return { step: singleSteps[idx + 1], metadata };
@@ -3659,11 +3665,12 @@ function getNextStep(current: string, metadata?: any): { step: string | null; me
 
   // Module steps - parallel processing
   if (current === "transcribe_and_extract_module") {
-    return { step: "analyze_audio_module", metadata };
+    return { step: "analyze_frames_module", metadata };
   }
 
   // Legacy module steps
-  const moduleSteps = ["transcribe_module", "extract_frames_module", "analyze_audio_module", "train_ai_module"];
+  // transcribe_module -> extract_frames_module -> analyze_frames_module -> analyze_audio_module -> train_ai_module
+  const moduleSteps = ["transcribe_module", "extract_frames_module", "analyze_frames_module", "analyze_audio_module", "train_ai_module"];
   const moduleIdx = moduleSteps.indexOf(current);
   if (moduleIdx >= 0) {
     if (moduleIdx < moduleSteps.length - 1) {
@@ -6212,4 +6219,165 @@ async function checkReplicateProgress(
     console.warn(`[checkReplicateProgress] Failed for ${id}:`, e);
     return null;
   }
+}
+
+// ============ FRAME ANALYSIS STEPS ============
+
+async function stepAnalyzeFrames(supabase: any, courseId: string, fixMetadata?: any) {
+  console.log(`[stepAnalyzeFrames] Starting analysis for course ${courseId}`);
+
+  const { data: course } = await supabase
+    .from("courses")
+    .select("frame_urls, video_duration_seconds, transcript")
+    .eq("id", courseId)
+    .single();
+
+  if (!course) throw new Error(`Course ${courseId} not found`);
+
+  const frameUrls = course.frame_urls || [];
+  if (frameUrls.length === 0) {
+    console.log(`[stepAnalyzeFrames] No frames to analyze for course ${courseId}, skipping.`);
+    return;
+  }
+
+  await supabase.from("courses").update({
+    status: "analyzing_frames",
+    progress_step: "analyzing_frames",
+    progress: 25,
+  }).eq("id", courseId);
+
+  // Extract transcript context if available
+  const transcriptText = Array.isArray(course.transcript)
+    ? course.transcript.map((s: any) => s.text).join(' ').substring(0, 1000)
+    : '';
+
+  const results = await runFrameAnalysisBatched(
+    frameUrls,
+    course.video_duration_seconds || 0,
+    transcriptText
+  );
+
+  await supabase.from("courses").update({
+    frame_analyses: results,
+    progress: 40,
+  }).eq("id", courseId);
+}
+
+async function stepAnalyzeFramesModule(supabase: any, courseId: string, moduleNumber: number, fixMetadata?: any) {
+  console.log(`[stepAnalyzeFramesModule] Starting analysis for course ${courseId}, module ${moduleNumber}`);
+
+  const { data: module } = await supabase
+    .from("course_modules")
+    .select("id, frame_urls, video_duration_seconds, transcript")
+    .eq("course_id", courseId)
+    .eq("module_number", moduleNumber)
+    .single();
+
+  if (!module) throw new Error(`Module ${moduleNumber} not found`);
+
+  const frameUrls = module.frame_urls || [];
+  if (frameUrls.length === 0) {
+    console.log(`[stepAnalyzeFramesModule] No frames to analyze for module ${moduleNumber}, skipping.`);
+    return;
+  }
+
+  await supabase.from("course_modules").update({
+    status: "analyzing_frames",
+    progress_step: "analyzing_frames_module",
+    progress: 25,
+  }).eq("id", module.id);
+
+  // Update parent course status
+  await supabase.from("courses").update({
+    status: `analyzing_frames_module_${moduleNumber}`,
+  }).eq("id", courseId);
+
+  // Extract transcript context if available
+  const transcriptText = Array.isArray(module.transcript)
+    ? module.transcript.map((s: any) => s.text).join(' ').substring(0, 1000)
+    : '';
+
+  const results = await runFrameAnalysisBatched(
+    frameUrls,
+    module.video_duration_seconds || 0,
+    transcriptText
+  );
+
+  await supabase.from("course_modules").update({
+    frame_analyses: results,
+    progress: 40,
+  }).eq("id", module.id);
+}
+
+async function runFrameAnalysisBatched(
+  frameUrls: string[],
+  videoDuration: number,
+  transcriptContext: string
+): Promise<any[]> {
+  const BATCH_SIZE = 5;
+  const allResults: any[] = [];
+  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+  const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+
+  console.log(`[runFrameAnalysisBatched] Analyzing ${frameUrls.length} frames in batches of ${BATCH_SIZE}`);
+
+  for (let i = 0; i < frameUrls.length; i += BATCH_SIZE) {
+    const batch = frameUrls.slice(i, i + BATCH_SIZE);
+    console.log(`[runFrameAnalysisBatched] Processing batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(frameUrls.length / BATCH_SIZE)}`);
+
+    try {
+      const response = await fetch(`${supabaseUrl}/functions/v1/extract-frame-text`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${serviceRoleKey}`,
+        },
+        body: JSON.stringify({
+          frameUrls: batch,
+          videoDuration,
+          startIndex: i,
+          totalFrameCount: frameUrls.length,
+          transcriptContext,
+          allowPartialResults: true
+        })
+      });
+
+      if (!response.ok) {
+        console.error(`[runFrameAnalysisBatched] Batch failed with status ${response.status}`);
+        // Add error placeholders to maintain alignment
+        batch.forEach((_, idx) => {
+          allResults.push({
+            frameIndex: i + idx,
+            timestamp: (i + idx) * (videoDuration / Math.max(frameUrls.length, 1)),
+            text: '[Batch error]',
+            visualDescription: 'Error during analysis'
+          });
+        });
+        continue;
+      }
+
+      const { results } = await response.json();
+      if (Array.isArray(results)) {
+        allResults.push(...results);
+      }
+    } catch (e) {
+      console.error(`[runFrameAnalysisBatched] Batch error:`, e);
+      // Add error placeholders
+      batch.forEach((_, idx) => {
+        allResults.push({
+          frameIndex: i + idx,
+          timestamp: (i + idx) * (videoDuration / Math.max(frameUrls.length, 1)),
+          text: '[Critical error]',
+          visualDescription: 'Critical error during analysis'
+        });
+      });
+    }
+
+    // Small delay between batches to respect Replicate rate limits
+    if (i + BATCH_SIZE < frameUrls.length) {
+      await new Promise(r => setTimeout(r, 500));
+    }
+  }
+
+  return allResults;
 }
