@@ -49,40 +49,42 @@ async function analyzeFramesWithReplicate(
                         input: {
                             image: frameUrl,
                             prompt: `Analyze this image from a tutorial video.
-              
-              Extract:
-              1. ALL visible text.
-              2. Visual description of what's happening.
-              3. Type of text (slide, document, ui, code, or other).
-              4. Visual emphasis cues (highlights, bold, cursor focus, etc.).
-              5. The instructor's intent (what should the user build or do?).
-              
-              ${transcriptContext ? `Context from transcript: "${transcriptContext.substring(0, 500)}"` : ''}
-              
-              Return ONLY a JSON object in this format:
-              {
-                "text": "all text found",
-                "visualDescription": "description for caption",
-                "textType": "slide|document|ui|code|other",
-                "emphasisFlags": {
-                  "highlight_detected": boolean,
-                  "cursor_pause": boolean,
-                  "zoom_focus": boolean,
-                  "text_selected": boolean,
-                  "lingering_frame": boolean,
-                  "bold_text": boolean,
-                  "underline_detected": boolean
-                },
-                "keyElements": ["list", "of", "items"],
-                "instructorIntent": "actionable build instruction",
-                "prosody": {
-                  "tone": "neutral|emphatic|etc",
-                  "pacing": "normal|etc",
-                  "volume": "normal|etc",
-                  "parenthetical": "(note)"
-                },
-                "dependsOnPrevious": boolean
-              }`,
+
+                                 Extract:
+                                 1. ALL visible text (OCR).
+                                 2. Detailed visual description: Focus on the layout, UI elements, and crucially, the embodied presence of the speaker (facial expressions, hand gestures, positioning).
+                                 3. Type of content: slide, document, ui, code, or other.
+                                 4. Visual transitions/interactions: Cuts, screen switches, cursor movement, or whiteboard changes. Address "where" the instructor is looking or pointing.
+                                 5. Speaker Presence: Detailed embodied state (posture, gestures, engagement level) and general 'vibe'.
+                                 6. Visual emphasis cues: highlights, bold, cursor focus, zoom.
+                                 7. The instructor's intent: what should the user build or do?
+
+                                 ${transcriptContext ? `Context from transcript: \"${transcriptContext.substring(0, 500)}\"` : ''}
+
+                                 Return ONLY a JSON object in this format:
+                                 {
+                                   "text": "all text found",
+                                   "visualDescription": "High-fidelity description for AI reconstruction, including speaker physical presence",
+                                   "textType": "slide|document|ui|code|other",
+                                   "emphasisFlags": {
+                                     "highlight_detected": boolean,
+                                     "cursor_pause": boolean,
+                                     "zoom_focus": boolean,
+                                     "text_selected": boolean,
+                                     "lingering_frame": boolean,
+                                     "bold_text": boolean,
+                                     "underline_detected": boolean
+                                   },
+                                   "keyElements": ["list", "of", "visual", "elements"],
+                                   "instructorIntent": "actionable build instruction",
+                                   "prosody": {
+                                     "tone": "neutral|emphatic|etc",
+                                     "pacing": "normal|etc",
+                                     "volume": "normal|etc",
+                                     "parenthetical": "(note about vibe/tone)"
+                                   },
+                                   "dependsOnPrevious": boolean
+                                 }`,
                             max_new_tokens: 1024,
                             history: []
                         }
