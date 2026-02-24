@@ -38,7 +38,7 @@ const DownloadModulePage = () => {
   const [downloadComplete, setDownloadComplete] = useState(false);
   const [selectedFormat, setSelectedFormat] = useState<ExportFormat>('pdf');
   const [filmMode, setFilmMode] = useState(false);
-  const [aiVisionMode, setAiVisionMode] = useState(false);
+  const [aiVisionMode, setAiVisionMode] = useState(true);
   const [preloadProgress, setPreloadProgress] = useState(0);
   const [preloadComplete, setPreloadComplete] = useState(false);
   const hasAutoTriggered = useRef(false);
@@ -362,25 +362,6 @@ const DownloadModulePage = () => {
                       <div>
                         <div className="font-medium">Standard PDF</div>
                         <div className="text-xs text-muted-foreground">High-quality document for human reading</div>
-                      </div>
-                    </div>
-                  </button>
-
-                  <button
-                    onClick={() => {
-                      setSelectedFormat('pdf');
-                      setAiVisionMode(true);
-                    }}
-                    className={`p-3 rounded-lg border text-left transition-all ${selectedFormat === 'pdf' && aiVisionMode
-                      ? 'border-primary bg-primary/5'
-                      : 'border-border hover:border-primary/50'
-                      }`}
-                  >
-                    <div className="flex items-center gap-3">
-                      <Layers className="h-5 w-5 text-blue-500" />
-                      <div>
-                        <div className="font-medium">AI Vision Optimized PDF</div>
-                        <div className="text-xs text-muted-foreground">Large frames & sensory data for ChatGPT/AI</div>
                       </div>
                     </div>
                   </button>

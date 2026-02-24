@@ -1389,7 +1389,7 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
   };
 
   // Export PDF for a single-module course (with salvage fallback for failed/stalled courses)
-  const handleExportPDF = async (course: Course, moduleNumber: number) => {
+  const handleExportPDF = async (course: Course, moduleNumber: number, aiFidelityMode: boolean = false) => {
     setGeneratingPDF(course.id);
     setPdfProgress({ progress: 0, status: 'Starting...', title: course.title });
 
@@ -1492,6 +1492,10 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
           },
           (progress, status) => {
             setPdfProgress(prev => ({ ...prev, progress: 25 + (progress / 100) * 75, status }));
+          },
+          {
+            aiFidelityMode,
+            includeOCR: true // Always include OCR for AI Vision parity
           }
         );
       } catch (pdfError) {
@@ -1535,7 +1539,7 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
   };
 
   // Export PDF for a specific module in a multi-module course
-  const handleExportModulePDF = async (moduleId: string, moduleTitle: string, courseTitle: string, isPartialSalvage: boolean = false) => {
+  const handleExportModulePDF = async (moduleId: string, moduleTitle: string, courseTitle: string, isPartialSalvage: boolean = false, aiFidelityMode: boolean = false) => {
     setGeneratingPDF(moduleId);
     setPdfProgress({ progress: 0, status: 'Starting...', title: `${courseTitle} - ${moduleTitle}` });
 
@@ -1645,6 +1649,10 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
           },
           (progress, status) => {
             setPdfProgress(prev => ({ ...prev, progress: 25 + (progress / 100) * 75, status }));
+          },
+          {
+            aiFidelityMode,
+            includeOCR: true
           }
         );
       } catch (pdfError) {
@@ -1688,7 +1696,7 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
   };
 
   // Export combined PDF for all modules in a training block (unified OneDuo)
-  const handleExportCombinedPDF = async (block: TrainingBlock) => {
+  const handleExportCombinedPDF = async (block: TrainingBlock, aiFidelityMode: boolean = false) => {
     const blockId = block.courses[0]?.id;
     if (!blockId) return;
 
@@ -1887,7 +1895,7 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
             const scaledProgress = 50 + (progress * 0.50);
             setPdfProgress(prev => ({ ...prev, progress: scaledProgress, status }));
           },
-          { maxFrames: 1000 } // Allow more frames per module for merged PDFs
+          { maxFrames: 1000, aiFidelityMode } // Allow more frames per module for merged PDFs
         );
 
         // ========== UPLOAD TO STORAGE & TRIGGER EMAIL ==========
@@ -2536,15 +2544,12 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                                 <>
                                   <Button
                                     size="sm"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      handleExportCombinedPDF(block);
-                                    }}
                                     disabled={generatingPDF === `block-${block.courses[0]?.id}`}
                                     className={`relative w-9 h-9 p-0 text-white ${block.courses[0]?.pdf_revision_pending
                                       ? 'bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700'
                                       : 'bg-gradient-to-r from-[#DC2626] to-[#B91C1C] hover:from-[#B91C1C] hover:to-[#991B1B]'
                                       }`}
+                                    onClick={() => handleExportCombinedPDF(block, true)}
                                     title={block.courses[0]?.pdf_revision_pending ? 'Download Updated OneDuo' : 'Download OneDuo'}
                                   >
                                     {generatingPDF === `block-${block.courses[0]?.id}` ? (
@@ -2839,7 +2844,7 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                                                         className={`shrink-0 ${item.status === 'completed'
                                                           ? 'border-white/20 text-white hover:bg-white/10'
                                                           : 'border-amber-500/30 text-amber-400 hover:bg-amber-500/10'}`}
-                                                        onClick={() => handleExportModulePDF(item.id, item.title, block.name, item.status !== 'completed')}
+                                                        onClick={() => handleExportModulePDF(item.id, item.title, block.name, item.status !== 'completed', true)}
                                                         disabled={generatingPDF === item.id}
                                                         title={item.status === 'completed' ? "Download PDF Manual" : "Salvage Partial PDF"}
                                                       >
@@ -2962,7 +2967,7 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                                                         size="sm"
                                                         variant="outline"
                                                         className="shrink-0 border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
-                                                        onClick={() => handleExportPDF(parentCourse, item.moduleNumber)}
+                                                        onClick={() => handleExportPDF(parentCourse, item.moduleNumber, true)}
                                                         disabled={generatingPDF === item.id}
                                                         title="Generate PDF using transcript only (no visual frames)"
                                                       >

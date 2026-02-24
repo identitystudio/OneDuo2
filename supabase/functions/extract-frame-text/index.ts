@@ -86,10 +86,10 @@ serve(async (req) => {
                                 
                                 Extract:
                                 1. ALL visible text (OCR).
-                                2. Detailed visual description: What is on screen? (UI, speaker, whiteboard, audience).
+                                2. Detailed visual description: Focus on the layout, UI elements, and crucially, the embodied presence of the speaker (facial expressions, hand gestures, positioning).
                                 3. Type of content: slide, document, ui, code, or other.
-                                4. Visual transitions/interactions: Cuts, screen switches, cursor movement, or whiteboard changes.
-                                5. Speaker Presence: Facial expressions, posture, gestures, and general 'vibe'.
+                                4. Visual transitions/interactions: Cuts, screen switches, cursor movement, or whiteboard changes. Address "where" the instructor is looking or pointing.
+                                5. Speaker Presence: Detailed embodied state (posture, gestures, engagement level) and general 'vibe'.
                                 6. Visual emphasis cues: highlights, bold, cursor focus, zoom.
                                 7. The instructor's intent: what should the user build or do?
                                 
@@ -98,7 +98,7 @@ serve(async (req) => {
                                 Return ONLY a JSON object in this format:
                                 {
                                   "text": "all text found",
-                                  "visualDescription": "High-fidelity description for AI reconstruction",
+                                  "visualDescription": "High-fidelity description for AI reconstruction, including speaker physical presence",
                                   "textType": "slide|document|ui|code|other",
                                   "emphasisFlags": {
                                     "highlight_detected": boolean,

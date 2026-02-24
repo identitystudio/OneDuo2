@@ -191,7 +191,8 @@ async function buildPDF(
     courseTitle: string,
     modules: any[],
     userEmail: string,
-    supplementalFiles?: any[]
+    supplementalFiles?: any[],
+    aiFidelityMode: boolean = false
 ): Promise<Uint8Array> {
     const pdfDoc = await PDFDocument.create();
     const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
@@ -443,6 +444,44 @@ async function buildPDF(
             });
             y -= 14;
 
+            if (aiFidelityMode && i === 0) {
+                newPage();
+                currentPage.drawText('Sensory Intelligence Map', {
+                    x: MARGIN, y, size: 20, font: boldFont, color: rgb(0, 0, 0),
+                });
+                y -= 25;
+
+                currentPage.drawText('This artifact is optimized for AI Vision and High-Fidelity reconstruction.', {
+                    x: MARGIN, y, size: 10, font: font, color: rgb(0.2, 0.2, 0.2),
+                });
+                y -= 15;
+
+                const aiPrompt = [
+                    "Below this page is a sequence of high-resolution visual frames sampled from the workshop video.",
+                    "For each frame, you will find a blue 'ONE DUO SENSORY DATA' block. You MUST prioritize",
+                    "the data in these blocks to 'see' and 'hear' the original video context:",
+                    "1. VISUAL DESCRIPTION: The literal screen state (UI, speaker, whiteboard).",
+                    "2. INTERACTION TRACKING: Cursors, clicks, zoom focus, and text selections.",
+                    "3. AUDIO FEATURES: Music cues, ambient sounds, and audience reactions.",
+                    "4. PROSODY LAYER: Vocal tone, emphasis, pacing, and meaningful pauses.",
+                    "Use this data to bridge the gap between transcript text and embodied presence."
+                ];
+
+                for (const line of aiPrompt) {
+                    drawWrappedText(line, { size: 9, color: rgb(0.3, 0.3, 0.3) });
+                }
+                y -= 10;
+
+                currentPage.drawRectangle({
+                    x: MARGIN, y: y - 5, width: CONTENT_WIDTH, height: 20,
+                    color: rgb(0.9, 0.95, 1),
+                });
+                currentPage.drawText('AI INSTRUCTION: Cross-reference frame timestamps with transcript segments to reconstruct the full intent.', {
+                    x: MARGIN + 5, y: y, size: 8, font: boldFont, color: rgb(0.1, 0.2, 0.4),
+                });
+                y -= 30;
+            }
+
             // Sample frames (max 50 for server-side to keep PDF size reasonable)
             const maxServerFrames = 50;
             const sampledFrameUrls = sampleFramesEvenly(frameUrls, maxServerFrames);
@@ -547,13 +586,60 @@ async function buildPDF(
 
                 const compositeCaption = captionParts.join(' | ');
                 if (compositeCaption) {
-                    const truncated = compositeCaption.length > 300
-                        ? compositeCaption.substring(0, 297) + '...'
-                        : compositeCaption;
-                    drawWrappedText(`Visual Transcription: ${truncated}`, {
-                        size: 7, usedFont: italicFont, color: rgb(0.3, 0.3, 0.3),
-                    });
-                    y -= 5;
+                    if (aiFidelityMode) {
+                        const truncated = compositeCaption.length > 500
+                            ? compositeCaption.substring(0, 497) + '...'
+                            : compositeCaption;
+
+                        const textToDraw = `ONE DUO SENSORY DATA: "${truncated}"`;
+                        const fontSize = 7;
+
+                        // Simple wrap logic to calculate box height
+                        const words = textToDraw.split(' ');
+                        let lines = 0;
+                        let line = '';
+                        for (const word of words) {
+                            const testLine = line ? `${line} ${word}` : word;
+                            if (font.widthOfTextAtSize(testLine, fontSize) > CONTENT_WIDTH - 10) {
+                                lines++;
+                                line = word;
+                            } else {
+                                line = testLine;
+                            }
+                        }
+                        if (line) lines++;
+
+                        const rectHeight = (lines * (fontSize * 1.3)) + 8;
+                        ensureSpace(rectHeight + 5);
+
+                        currentPage.drawRectangle({
+                            x: MARGIN,
+                            y: y - rectHeight,
+                            width: CONTENT_WIDTH,
+                            height: rectHeight,
+                            color: rgb(0.98, 0.98, 1),
+                            borderColor: rgb(0.8, 0.8, 1),
+                            borderWidth: 0.5,
+                        });
+
+                        y -= 2; // padding top
+                        drawWrappedText(textToDraw, {
+                            x: MARGIN + 5,
+                            size: fontSize,
+                            usedFont: italicFont,
+                            color: rgb(0.2, 0.2, 0.4),
+                            maxWidth: CONTENT_WIDTH - 10
+                        });
+                        y -= 4; // padding bottom
+                    } else {
+                        const truncated = compositeCaption.length > 300
+                            ? compositeCaption.substring(0, 297) + '...'
+                            : compositeCaption;
+                        drawWrappedText(`Visual Transcription: ${truncated}`, {
+                            size: 7, usedFont: italicFont, color: rgb(0.3, 0.3, 0.3),
+                        });
+                        y -= 5;
+                    }
                 }
             }
         }
@@ -647,7 +733,7 @@ serve(async (req) => {
     }
 
     try {
-        const { courseId, email } = await req.json();
+        const { courseId, email, aiFidelityMode = false } = await req.json();
 
         if (!courseId) {
             return new Response(
@@ -859,7 +945,8 @@ serve(async (req) => {
                     course.title,
                     modules,
                     userEmail,
-                    supplementalFiles.length > 0 ? supplementalFiles : undefined
+                    supplementalFiles.length > 0 ? supplementalFiles : undefined,
+                    aiFidelityMode
                 );
 
                 console.log(`[generate-pdf-backend] PDF built: ${pdfBytes.length} bytes`);

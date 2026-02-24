@@ -420,6 +420,58 @@ const getTargetExportFrames = (videoDurationSeconds: number): number => {
   return clampNumber(target, MIN_EXPORT_FRAMES, MAX_EXPORT_FRAMES);
 };
 
+// ========== HELPER: Get inline audio annotations for a timestamp ==========
+const getInlineAudioAnnotations = (
+  timestamp: number,
+  audioEvents: AudioEvents,
+  prosodyData: ProsodyData,
+  windowSeconds: number = 3
+): string[] => {
+  const annotations: string[] = [];
+  const musicCues = audioEvents.music_cues || [];
+  const ambientSounds = audioEvents.ambient_sounds || [];
+  const reactions = audioEvents.reactions || [];
+  const meaningfulPauses = audioEvents.meaningful_pauses || [];
+  const prosodyAnnotations = prosodyData.annotations || [];
+
+  musicCues.forEach(cue => {
+    if (timestamp >= cue.start && timestamp <= cue.end) {
+      if (Math.abs(timestamp - cue.start) < windowSeconds) {
+        annotations.push(`[MUSIC BEGINS: ${cue.mood}${cue.genre ? ` - ${cue.genre}` : ''} - ${cue.description}]`);
+      } else if (Math.abs(timestamp - cue.end) < windowSeconds) {
+        annotations.push(`[MUSIC FADES]`);
+      }
+    }
+  });
+
+  ambientSounds.forEach(ambient => {
+    if (Math.abs(ambient.timestamp - timestamp) < windowSeconds) {
+      annotations.push(`(${ambient.sound} - ${ambient.meaning})`);
+    }
+  });
+
+  reactions.forEach(reaction => {
+    if (Math.abs(reaction.timestamp - timestamp) < windowSeconds) {
+      const intensity = reaction.intensity === 'strong' ? ' - emphatic' : reaction.intensity === 'moderate' ? '' : ' - subtle';
+      annotations.push(`(${reaction.type}${intensity} - ${reaction.context})`);
+    }
+  });
+
+  meaningfulPauses.forEach(pause => {
+    if (Math.abs(pause.timestamp - timestamp) < windowSeconds) {
+      annotations.push(`${pause.screenplayNote}`);
+    }
+  });
+
+  prosodyAnnotations.forEach(prosody => {
+    if (Math.abs(prosody.timestamp - timestamp) < windowSeconds) {
+      annotations.push(`${prosody.annotation}`);
+    }
+  });
+
+  return annotations;
+};
+
 export const generateChatGPTPDF = async (
   course: CourseData,
   onProgress?: (progress: number, status: string) => void,
@@ -1310,48 +1362,6 @@ export const generateChatGPTPDF = async (
 
   y += 20;
 
-  // ========== HELPER: Get inline audio annotations for a timestamp ==========
-  const getInlineAudioAnnotations = (timestamp: number, windowSeconds: number = 3): string[] => {
-    const annotations: string[] = [];
-
-    musicCues.forEach(cue => {
-      if (timestamp >= cue.start && timestamp <= cue.end) {
-        if (Math.abs(timestamp - cue.start) < windowSeconds) {
-          annotations.push(`[MUSIC BEGINS: ${cue.mood}${cue.genre ? ` - ${cue.genre}` : ''} - ${cue.description}]`);
-        } else if (Math.abs(timestamp - cue.end) < windowSeconds) {
-          annotations.push(`[MUSIC FADES]`);
-        }
-      }
-    });
-
-    ambientSounds.forEach(ambient => {
-      if (Math.abs(ambient.timestamp - timestamp) < windowSeconds) {
-        annotations.push(`(${ambient.sound} - ${ambient.meaning})`);
-      }
-    });
-
-    reactions.forEach(reaction => {
-      if (Math.abs(reaction.timestamp - timestamp) < windowSeconds) {
-        const intensity = reaction.intensity === 'strong' ? ' - emphatic' : reaction.intensity === 'moderate' ? '' : ' - subtle';
-        annotations.push(`(${reaction.type}${intensity} - ${reaction.context})`);
-      }
-    });
-
-    meaningfulPauses.forEach(pause => {
-      if (Math.abs(pause.timestamp - timestamp) < windowSeconds) {
-        annotations.push(`${pause.screenplayNote}`);
-      }
-    });
-
-    prosodyAnnotations.forEach(prosody => {
-      if (Math.abs(prosody.timestamp - timestamp) < windowSeconds) {
-        annotations.push(`${prosody.annotation}`);
-      }
-    });
-
-    return annotations;
-  };
-
   // ========== PAGES 4+: TIMESTAMP BLOCKS ==========
   // Only render frame blocks if we have frames
   const renderableFrameCount = frames.length;
@@ -1429,7 +1439,7 @@ export const generateChatGPTPDF = async (
         }).join(' ')
         : '(No transcript for this segment)';
 
-      const inlineAudioAnnotations = getInlineAudioAnnotations(frameTime);
+      const inlineAudioAnnotations = getInlineAudioAnnotations(frameTime, audioEvents, prosodyData);
 
       const hasOCR = frameAnalysis && frameAnalysis.text.length > 0;
       const hasIntent = frameAnalysis && frameAnalysis.instructorIntent.length > 0;
@@ -1807,7 +1817,7 @@ export const generateMergedCoursePDF = async (
   const safe = (v: unknown) => sanitizePdfText(v);
 
   // IMPORTANT: default imageQuality must be high; we cap it per-module based on frame count.
-  const { maxFrames = 1000, imageQuality = 1.0 } = options;
+  const { maxFrames = 1000, imageQuality = 1.0, aiFidelityMode = false } = options;
 
   const watermarkEmail = safe(mergedCourse.userEmail || localStorage.getItem('courseagent_email') || '');
   const watermarkTimestamp = new Date().toISOString().replace('T', ' ').substring(0, 19) + ' UTC';
@@ -2093,6 +2103,47 @@ export const generateMergedCoursePDF = async (
       pdf.text(safe('Visual Frames'), margin, y);
       y += 10;
 
+      if (aiFidelityMode && i === 0) {
+        addPageWithHeaders();
+        pdf.setFontSize(22);
+        pdf.setFont('helvetica', 'bold');
+        pdf.setTextColor(0, 0, 0);
+        pdf.text('Sensory Intelligence Map', margin, y);
+        y += 12;
+
+        pdf.setFontSize(10);
+        pdf.setFont('helvetica', 'normal');
+        pdf.setTextColor(50, 50, 50);
+        const aiPrompt = [
+          "This artifact is optimized for AI Vision and High-Fidelity reconstruction.",
+          "Below this page is a sequence of high-resolution visual frames sampled from the workshop video.",
+          "",
+          "For each frame, you will find a blue 'ONE DUO SENSORY DATA' block. You MUST prioritize",
+          "the data in these blocks to 'see' and 'hear' the original video context:",
+          "",
+          "1. VISUAL DESCRIPTION: The literal screen state (UI, speaker, whiteboard).",
+          "2. INTERACTION TRACKING: Cursors, clicks, zoom focus, and text selections.",
+          "3. AUDIO FEATURES: Music cues, ambient sounds, and audience reactions.",
+          "4. PROSODY LAYER: Vocal tone, emphasis, pacing, and meaningful pauses.",
+          "",
+          "Use this data to bridge the gap between transcript text and embodied presence."
+        ];
+
+        aiPrompt.forEach(line => {
+          pdf.text(line, margin, y);
+          y += 6;
+        });
+
+        y += 10;
+        pdf.setFillColor(240, 248, 255);
+        pdf.setDrawColor(100, 150, 200);
+        pdf.roundedRect(margin, y, contentWidth, 20, 2, 2, 'FD');
+        y += 7;
+        pdf.setFont('helvetica', 'bold');
+        pdf.text('AI INSTRUCTION: Cross-reference frame timestamps with transcript segments to reconstruct the full intent.', margin + 5, y);
+        y += 20;
+      }
+
       // Sample frames evenly
       const sampledFrames = sampleFramesEvenly(module.frame_urls, Math.min(maxFrames, module.frame_urls.length));
 
@@ -2148,8 +2199,10 @@ export const generateMergedCoursePDF = async (
         try {
           const imgData = await imageToBase64WithRetry(frameUrl, moduleEffectiveQuality, 2, 8000);
           if (imgData.dataUrl) {
-            const imgWidth = Math.min(contentWidth, 160);
-            const imgHeight = imgWidth * 0.56; // 16:9 aspect ratio
+            const isAIFidelity = aiFidelityMode;
+            const effectiveQuality = isAIFidelity ? 0.95 : moduleEffectiveQuality;
+            const imgWidth = isAIFidelity ? contentWidth : Math.min(contentWidth, 160);
+            const imgHeight = isAIFidelity ? (imgWidth * 0.56) : (imgWidth * 0.56); // 16:9 aspect ratio
 
             if (y + imgHeight > pageHeight - 30) {
               addPageWithHeaders();
@@ -2159,7 +2212,7 @@ export const generateMergedCoursePDF = async (
             y += imgHeight + 3;
 
             // ===== COMPOSITE VISUAL TRANSCRIPTION CAPTION (Merged PDF) =====
-            // Same as single-course: synthesizes ALL OneDuo features
+            // Synthesizes ALL OneDuo features into one rich caption below the frame
             const captionParts: string[] = [];
             const fa = moduleAnalyses[frameIdx] || null;
 
@@ -2186,45 +2239,14 @@ export const generateMergedCoursePDF = async (
               }
             }
 
-            // FEATURE 4: Audio events for this timestamp
-            const modAudio = (module as any).audio_events || {};
-            const modProsody = (module as any).prosody_annotations || {};
-            const modMusicCues: any[] = modAudio.music_cues || [];
-            const modAmbient: any[] = modAudio.ambient_sounds || [];
-            const modReactions: any[] = modAudio.reactions || [];
-            const modPauses: any[] = modAudio.meaningful_pauses || [];
-            const modProsodyAnns: any[] = modProsody.annotations || [];
-            const audioNotes: string[] = [];
-            const windowSec = 5;
-            modMusicCues.forEach((cue: any) => {
-              if (timestamp >= cue.start && timestamp <= cue.end) {
-                if (Math.abs(timestamp - cue.start) < windowSec) {
-                  audioNotes.push(`[${cue.mood} music kicks in${cue.genre ? ` - ${cue.genre}` : ''}]`);
-                }
-              }
-            });
-            modAmbient.forEach((a: any) => {
-              if (Math.abs(a.timestamp - timestamp) < windowSec) {
-                audioNotes.push(`(${a.sound} - ${a.meaning})`);
-              }
-            });
-            modReactions.forEach((r: any) => {
-              if (Math.abs(r.timestamp - timestamp) < windowSec) {
-                audioNotes.push(`(${r.type}${r.intensity === 'strong' ? ' - emphatic' : ''} - ${r.context})`);
-              }
-            });
-            modPauses.forEach((p: any) => {
-              if (Math.abs(p.timestamp - timestamp) < windowSec) {
-                audioNotes.push(p.screenplayNote);
-              }
-            });
-            modProsodyAnns.forEach((p: any) => {
-              if (Math.abs(p.timestamp - timestamp) < windowSec) {
-                audioNotes.push(p.annotation);
-              }
-            });
-            if (audioNotes.length > 0) {
-              captionParts.push(audioNotes.slice(0, 3).join(' '));
+            // FEATURE 4: Audio events (Standardized via top-level helper)
+            const inlineAudio = getInlineAudioAnnotations(
+              timestamp,
+              (module as any).audio_events || {},
+              (module as any).prosody_annotations || {}
+            );
+            if (inlineAudio.length > 0) {
+              captionParts.push(inlineAudio.slice(0, 3).join(' '));
             }
 
             // FEATURE 5: Vocal tone/emphasis
@@ -2235,21 +2257,40 @@ export const generateMergedCoursePDF = async (
             // Render composite caption
             const compositeCaption = captionParts.join(' | ');
             if (compositeCaption.length > 0) {
-              pdf.setFontSize(7);
-              pdf.setFont('helvetica', 'italic');
-              pdf.setTextColor(80, 80, 80);
-              const truncatedCaption = compositeCaption.length > 300
-                ? compositeCaption.substring(0, 297) + '...'
-                : compositeCaption;
-              const splitCaption = pdf.splitTextToSize(safe(`"${truncatedCaption}"`), imgWidth);
-              const maxLines = Math.min(splitCaption.length, 4);
+              if (aiFidelityMode) {
+                pdf.setFontSize(9);
+                pdf.setFont('helvetica', 'italic');
+                pdf.setTextColor(80, 80, 80);
+                pdf.setFillColor(250, 250, 255);
+                pdf.setDrawColor(200, 200, 255);
+                const wrapCaption = pdf.splitTextToSize(`ONE DUO SENSORY DATA: "${compositeCaption}"`, contentWidth - 10);
+                const rectHeight = (wrapCaption.length * 4) + 6;
 
-              if (y + (maxLines * 3) > pageHeight - 20) {
-                addPageWithHeaders();
+                if (y + rectHeight > pageHeight - 20) {
+                  addPageWithHeaders();
+                }
+
+                pdf.roundedRect(margin, y - 1, contentWidth, rectHeight, 1, 1, 'FD');
+                y += 5;
+                pdf.text(wrapCaption, margin + 5, y);
+                y += (wrapCaption.length * 4) + 2;
+              } else {
+                pdf.setFontSize(7);
+                pdf.setFont('helvetica', 'italic');
+                pdf.setTextColor(80, 80, 80);
+                const truncatedCaption = compositeCaption.length > 300
+                  ? compositeCaption.substring(0, 297) + '...'
+                  : compositeCaption;
+                const splitCaption = pdf.splitTextToSize(safe(`"${truncatedCaption}"`), imgWidth);
+                const maxLines = Math.min(splitCaption.length, 4);
+
+                if (y + (maxLines * 3) > pageHeight - 20) {
+                  addPageWithHeaders();
+                }
+
+                pdf.text(splitCaption.slice(0, maxLines), margin, y);
+                y += (maxLines * 3) + 3;
               }
-
-              pdf.text(splitCaption.slice(0, maxLines), margin, y);
-              y += (maxLines * 3) + 3;
               pdf.setFont('helvetica', 'normal');
             } else {
               y += 5;
