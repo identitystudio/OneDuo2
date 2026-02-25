@@ -159,6 +159,18 @@ interface AudioEvents {
   overall_audio_mood?: string;
 }
 
+interface CliffhangerMoment {
+  peak_timestamp: number;
+  resolution_timestamp: number;
+  composite_confidence: number;
+  description: string;
+  signals?: {
+    audio_intensity: boolean;
+    visual_stasis: boolean;
+    verbal_hint: boolean;
+  };
+}
+
 interface ProsodyData {
   annotations?: Array<{
     timestamp: number;
@@ -169,6 +181,7 @@ interface ProsodyData {
   }>;
   overall_tone?: string;
   key_moments?: string[];
+  cliffhanger_moments?: CliffhangerMoment[];
 }
 
 // Supplemental file content for embedding in PDF
@@ -422,7 +435,9 @@ const renderAudioTimeline = (
   const checkPageBreakInternal = (neededHeight: number) => {
     if (y + neededHeight > pageHeight - 35) {
       addPageWithHeaders();
+      return true;
     }
+    return false;
   };
 
   pdf.setFontSize(18);
@@ -436,118 +451,186 @@ const renderAudioTimeline = (
   const reactions = audioEvents.reactions || [];
   const meaningfulPauses = audioEvents.meaningful_pauses || [];
   const prosodyAnnotations = prosodyData.annotations || [];
+  const cliffhangers = prosodyData.cliffhanger_moments || [];
 
   const hasAudioData = musicCues.length > 0 || ambientSounds.length > 0 ||
     reactions.length > 0 || meaningfulPauses.length > 0 ||
-    prosodyAnnotations.length > 0;
+    prosodyAnnotations.length > 0 || cliffhangers.length > 0 ||
+    audioEvents.overall_audio_mood || prosodyData.overall_tone;
 
   if (hasAudioData) {
-    // Overall Audio Mood
-    if (audioEvents.overall_audio_mood) {
+    // Overall Audio Mood & Tone
+    if (audioEvents.overall_audio_mood || prosodyData.overall_tone) {
+      const moodTextStr = audioEvents.overall_audio_mood ? `Mood: ${audioEvents.overall_audio_mood}` : '';
+      const toneTextStr = prosodyData.overall_tone ? `Tone: ${prosodyData.overall_tone}` : '';
+      const combinedMeta = [moodTextStr, toneTextStr].filter(Boolean).join(' | ');
+
       pdf.setFillColor(240, 248, 255);
       pdf.setDrawColor(100, 150, 200);
-      pdf.roundedRect(margin, y, contentWidth, 20, 2, 2, 'FD');
+
+      const splitMeta = pdf.splitTextToSize(combinedMeta, contentWidth - 10);
+      const boxHeight = 12 + (splitMeta.length * 5);
+
+      pdf.roundedRect(margin, y, contentWidth, boxHeight, 2, 2, 'FD');
       y += 6;
       pdf.setFontSize(10);
       pdf.setFont('helvetica', 'bold');
       pdf.setTextColor(50, 100, 150);
-      pdf.text('Overall Audio Mood:', margin + 3, y);
+      pdf.text('Audio Intelligence Summary:', margin + 3, y);
       y += 5;
       pdf.setFont('helvetica', 'italic');
-      const moodText = pdf.splitTextToSize(audioEvents.overall_audio_mood, contentWidth - 10);
-      pdf.text(moodText.slice(0, 2), margin + 3, y);
-      y += 12;
+      pdf.text(splitMeta, margin + 3, y);
+      y += (splitMeta.length * 5) + 5;
     }
 
     // Music Cues Section
     if (musicCues.length > 0) {
-      checkPageBreakInternal(30 + musicCues.length * 12);
+      checkPageBreakInternal(25 + Math.min(musicCues.length * 7, 40));
 
       pdf.setFillColor(255, 245, 230);
       pdf.setDrawColor(200, 150, 50);
-      const musicHeight = 18 + Math.min(musicCues.length * 12, 60);
+      const musicHeight = 15 + Math.min(musicCues.length * 7, 45);
       pdf.roundedRect(margin, y, contentWidth, musicHeight, 2, 2, 'FD');
 
-      y += 6;
-      pdf.setFontSize(11);
+      y += 5;
+      pdf.setFontSize(10);
       pdf.setFont('helvetica', 'bold');
       pdf.setTextColor(150, 100, 0);
       pdf.text('[MUSIC CUES]', margin + 3, y);
-      y += 7;
+      y += 6;
 
       pdf.setFontSize(9);
       pdf.setFont('helvetica', 'normal');
       pdf.setTextColor(80, 60, 20);
 
-      musicCues.slice(0, 5).forEach(cue => {
+      musicCues.slice(0, 6).forEach(cue => {
         const startTime = formatTime(cue.start);
         const endTime = formatTime(cue.end);
-        const cueText = `[${startTime} - ${endTime}] ${cue.mood.toUpperCase()}${cue.genre ? ` (${cue.genre})` : ''}: ${cue.description}`;
+        const cueText = `[${startTime}-${endTime}] ${cue.mood.toUpperCase()}: ${cue.description}`;
         const splitCue = pdf.splitTextToSize(cueText, contentWidth - 10);
         pdf.text(splitCue[0], margin + 3, y);
         y += 6;
       });
 
-      if (musicCues.length > 5) {
+      if (musicCues.length > 6) {
         pdf.setFont('helvetica', 'italic');
-        pdf.text(`... and ${musicCues.length - 5} more music cues`, margin + 3, y);
-        y += 6;
+        pdf.text(`... and ${musicCues.length - 6} more music cues`, margin + 3, y);
+        y += 5;
       }
+      y += 4;
+    }
+
+    // Ambient Sounds Section
+    if (ambientSounds.length > 0) {
+      checkPageBreakInternal(25 + Math.min(ambientSounds.length * 6, 35));
+
+      pdf.setFillColor(240, 255, 240);
+      pdf.setDrawColor(50, 150, 50);
+      const ambientHeight = 15 + Math.min(ambientSounds.length * 6, 40);
+      pdf.roundedRect(margin, y, contentWidth, ambientHeight, 2, 2, 'FD');
+
+      y += 5;
+      pdf.setFontSize(10);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setTextColor(30, 100, 30);
+      pdf.text('[AMBIENT / ENVIRONMENTAL]', margin + 3, y);
       y += 6;
+
+      pdf.setFontSize(9);
+      pdf.setFont('helvetica', 'normal');
+      pdf.setTextColor(20, 70, 20);
+
+      ambientSounds.slice(0, 6).forEach(sound => {
+        const time = formatTime(sound.timestamp);
+        const soundText = `[${time}] ${sound.sound} - ${sound.meaning}`;
+        const splitSound = pdf.splitTextToSize(soundText, contentWidth - 10);
+        pdf.text(splitSound[0], margin + 3, y);
+        y += 5;
+      });
+
+      if (ambientSounds.length > 6) {
+        pdf.setFont('helvetica', 'italic');
+        pdf.text(`... and ${ambientSounds.length - 6} more ambient sounds`, margin + 3, y);
+        y += 5;
+      }
+      y += 4;
     }
 
     // Reactions Section
     if (reactions.length > 0) {
-      checkPageBreakInternal(30 + reactions.length * 10);
+      checkPageBreakInternal(25 + Math.min(reactions.length * 6, 35));
 
       pdf.setFillColor(255, 240, 245);
       pdf.setDrawColor(180, 100, 120);
-      const reactionsHeight = 18 + Math.min(reactions.length * 10, 50);
+      const reactionsHeight = 15 + Math.min(reactions.length * 6, 40);
       pdf.roundedRect(margin, y, contentWidth, reactionsHeight, 2, 2, 'FD');
 
-      y += 6;
-      pdf.setFontSize(11);
+      y += 5;
+      pdf.setFontSize(10);
       pdf.setFont('helvetica', 'bold');
       pdf.setTextColor(150, 70, 90);
-      pdf.text('[AUDIENCE/PRESENTER REACTIONS]', margin + 3, y);
-      y += 7;
+      pdf.text('[AUDIENCE / PRESENTER REACTIONS]', margin + 3, y);
+      y += 6;
 
       pdf.setFontSize(9);
       pdf.setFont('helvetica', 'normal');
       pdf.setTextColor(100, 50, 60);
 
-      reactions.slice(0, 5).forEach(reaction => {
+      reactions.slice(0, 6).forEach(reaction => {
         const time = formatTime(reaction.timestamp);
-        const intensityLabel = reaction.intensity === 'strong' ? '***' : reaction.intensity === 'moderate' ? '**' : '*';
-        const reactionText = `[${time}] (${reaction.type}${intensityLabel}) - ${reaction.context}`;
+        const intensityLabel = reaction.intensity === 'strong' ? '!!!' : reaction.intensity === 'moderate' ? '!!' : '!';
+        const reactionText = `[${time}] (${reaction.type}${intensityLabel}) ${reaction.context}`;
         const splitReaction = pdf.splitTextToSize(reactionText, contentWidth - 10);
         pdf.text(splitReaction[0], margin + 3, y);
         y += 5;
       });
+      y += 4;
+    }
 
-      if (reactions.length > 5) {
-        pdf.setFont('helvetica', 'italic');
-        pdf.text(`... and ${reactions.length - 5} more reactions`, margin + 3, y);
-        y += 5;
-      }
+    // Prosody / Parentheticals Section
+    if (prosodyAnnotations.length > 0) {
+      checkPageBreakInternal(25 + Math.min(prosodyAnnotations.length * 6, 35));
+
+      pdf.setFillColor(245, 245, 250);
+      pdf.setDrawColor(100, 100, 150);
+      const prosodyHeight = 15 + Math.min(prosodyAnnotations.length * 6, 40);
+      pdf.roundedRect(margin, y, contentWidth, prosodyHeight, 2, 2, 'FD');
+
+      y += 5;
+      pdf.setFontSize(10);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setTextColor(60, 60, 120);
+      pdf.text('[SCREENPLAY PARENTHETICALS / PROSODY]', margin + 3, y);
       y += 6;
+
+      pdf.setFontSize(9);
+      pdf.setFont('helvetica', 'italic');
+      pdf.setTextColor(40, 40, 100);
+
+      prosodyAnnotations.slice(0, 8).forEach(ann => {
+        const time = formatTime(ann.timestamp);
+        const annText = `[${time}] (${ann.annotation})`;
+        pdf.text(annText, margin + 3, y);
+        y += 5;
+      });
+      y += 4;
     }
 
     // Meaningful Pauses Section
     if (meaningfulPauses.length > 0) {
-      checkPageBreakInternal(30 + meaningfulPauses.length * 10);
+      checkPageBreakInternal(25 + Math.min(meaningfulPauses.length * 6, 35));
 
       pdf.setFillColor(245, 240, 255);
       pdf.setDrawColor(120, 100, 180);
-      const pausesHeight = 18 + Math.min(meaningfulPauses.length * 10, 50);
+      const pausesHeight = 15 + Math.min(meaningfulPauses.length * 6, 40);
       pdf.roundedRect(margin, y, contentWidth, pausesHeight, 2, 2, 'FD');
 
-      y += 6;
-      pdf.setFontSize(11);
+      y += 5;
+      pdf.setFontSize(10);
       pdf.setFont('helvetica', 'bold');
       pdf.setTextColor(80, 60, 140);
-      pdf.text('[MEANINGFUL PAUSES/BEATS]', margin + 3, y);
-      y += 7;
+      pdf.text('[MEANINGFUL PAUSES / BEATS]', margin + 3, y);
+      y += 6;
 
       pdf.setFontSize(9);
       pdf.setFont('helvetica', 'normal');
@@ -560,13 +643,37 @@ const renderAudioTimeline = (
         pdf.text(splitPause[0], margin + 3, y);
         y += 5;
       });
+      y += 4;
+    }
 
-      if (meaningfulPauses.length > 8) {
-        pdf.setFont('helvetica', 'italic');
-        pdf.text(`... and ${meaningfulPauses.length - 8} more pauses`, margin + 3, y);
-        y += 5;
-      }
+    // Cliffhangers Section
+    if (cliffhangers.length > 0) {
+      checkPageBreakInternal(30);
+
+      pdf.setFillColor(255, 235, 235);
+      pdf.setDrawColor(200, 50, 50);
+      const cliffHeight = 15 + (cliffhangers.length * 10);
+      pdf.roundedRect(margin, y, contentWidth, cliffHeight, 2, 2, 'FD');
+
+      y += 5;
+      pdf.setFontSize(10);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setTextColor(180, 0, 0);
+      pdf.text('[CLIFFHANGER MOMENTS / TENSION]', margin + 3, y);
       y += 6;
+
+      pdf.setFontSize(9);
+      pdf.setFont('helvetica', 'normal');
+      pdf.setTextColor(120, 0, 0);
+
+      cliffhangers.slice(0, 3).forEach(cliff => {
+        const peakTime = formatTime(cliff.peak_timestamp);
+        const cliffText = `[${peakTime}] ${cliff.description}`;
+        const splitCliff = pdf.splitTextToSize(cliffText, contentWidth - 10);
+        pdf.text(splitCliff, margin + 3, y);
+        y += (splitCliff.length * 5) + 3;
+      });
+      y += 2;
     }
 
   } else {
@@ -577,8 +684,8 @@ const renderAudioTimeline = (
     pdf.setFontSize(10);
     pdf.setFont('helvetica', 'italic');
     pdf.setTextColor(150, 150, 150);
-    pdf.text('No audio events detected for this content.', margin + 5, y);
-    pdf.text('Audio analysis runs automatically during processing.', margin + 5, y + 6);
+    pdf.text('No specialized audio events detected for this content.', margin + 5, y);
+    pdf.text('The audio layer is processed automatically based on vocal and music signals.', margin + 5, y + 6);
     y += 25;
   }
 
