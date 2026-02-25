@@ -494,7 +494,44 @@ async function buildPDF(
             for (const segment of transcript) {
                 const speaker = segment.speaker ? `${segment.speaker}: ` : '';
                 const line = `[${formatTime(segment.start || 0)}] ${speaker}${segment.text || ''}`;
+
+                ensureSpace(30);
                 drawWrappedText(line, { size: 9 });
+
+                // ========== AUDIO PROFILE BLOCK ==========
+                // Find matching prosody annotation for this segment timestamp
+                const prosody = (mod.prosody_annotations || []).find((a: any) =>
+                    Math.abs(a.timestamp - (segment.start || 0)) < 2
+                );
+
+                if (prosody && prosody.profile) {
+                    const p = prosody.profile;
+                    ensureSpace(50);
+
+                    // Profile Box
+                    currentPage.drawRectangle({
+                        x: MARGIN + 10, y: y - 45, width: CONTENT_WIDTH - 20, height: 42,
+                        color: rgb(0.98, 0.98, 1),
+                        borderColor: rgb(0, 0.4, 0.8),
+                        borderWidth: 0.5
+                    });
+
+                    currentPage.drawText('[AUDIO PROFILE]', { x: MARGIN + 15, y: y - 10, size: 7, font: boldFont, color: rgb(0, 0.3, 0.6) });
+
+                    const leftCol = `Speaking Rate: ${p.speaking_rate || 'N/A'}\nEnergy Trend: ${p.energy_trend || 'Stable'}`;
+                    const rightCol = `Volume Variance: ${p.volume_variance || 'Normal'}\nPitch Variance: ${p.pitch_variance || 'Normal'}\nTone: ${p.tone_classification || 'Neutral'}`;
+
+                    currentPage.drawText(leftCol, { x: MARGIN + 20, y: y - 22, size: 7, font: font, color: rgb(0.2, 0.2, 0.2), lineBias: 10 });
+                    currentPage.drawText(rightCol, { x: MARGIN + 150, y: y - 22, size: 7, font: font, color: rgb(0.2, 0.2, 0.2), lineBias: 10 });
+
+                    y -= 52;
+                } else if (!prosody && !segment.text) {
+                    ensureSpace(20);
+                    currentPage.drawText('[AUDIO PROFILE] No vocal signal detected in this segment.', {
+                        x: MARGIN + 15, y: y - 10, size: 7, font: font, color: rgb(0.5, 0.5, 0.5)
+                    });
+                    y -= 15;
+                }
             }
             y -= 10;
         }
