@@ -500,7 +500,7 @@ async function buildPDF(
 
                 // ========== AUDIO PROFILE BLOCK ==========
                 // Find matching prosody annotation for this segment timestamp
-                const prosody = (mod.prosody_annotations || []).find((a: any) =>
+                const prosody = (mod.prosody_annotations?.annotations || []).find((a: any) =>
                     Math.abs(a.timestamp - (segment.start || 0)) < 2
                 );
 
@@ -675,7 +675,7 @@ async function buildPDF(
 
                 // FEATURE 4: Audio events for this timestamp
                 const modAudioEvt = mod.audio_events || {};
-                const modProsodyData = mod.prosody_annotations || {};
+                const modProsodyData = mod.prosody_annotations?.annotations || [];
                 const windowS = 5;
                 (modAudioEvt.music_cues || []).forEach((cue: any) => {
                     if (timestamp >= cue.start && timestamp <= cue.end && Math.abs(timestamp - cue.start) < windowS) {
@@ -788,7 +788,7 @@ async function buildPDF(
 
         // ========== AUDIO INTELLIGENCE TIMELINE ==========
         const audioEvents: AudioEvents = mod.audio_events || {};
-        const prosodyData: ProsodyData = mod.prosody_annotations || {};
+        const prosodyData: ProsodyData[] = mod.prosody_annotations?.annotations || [];
         const musicCues = audioEvents.music_cues || [];
         const ambientSounds = audioEvents.ambient_sounds || [];
         const reactions = audioEvents.reactions || [];

@@ -106,8 +106,10 @@ Rules:
 2. Normalize variance labels based on the metadata provided.
 3. If no speech, use 'No vocal signal detected'.`;
 
+    console.log(`[analyze-audio-prosody] Calling Replicate with model: meta/meta-llama-3-70b-instruct`);
+
     const output = await replicate.run(
-      "meta/llama-3-70b-instruct",
+      "meta/meta-llama-3-70b-instruct",
       {
         input: {
           system_prompt: systemPrompt,
@@ -117,6 +119,8 @@ Rules:
         }
       }
     ) as any;
+
+    console.log(`[analyze-audio-prosody] Replicate call successful. Output type: ${typeof output}`);
 
     const content = Array.isArray(output) ? output.join('') : String(output);
 

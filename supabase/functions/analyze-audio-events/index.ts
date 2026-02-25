@@ -106,8 +106,10 @@ Return valid JSON:
   "overall_audio_mood": "string"
 }`;
 
+    console.log(`[analyze-audio-events] Calling Replicate with model: meta/meta-llama-3-70b-instruct`);
+
     const output = await replicate.run(
-      "meta/llama-3-70b-instruct",
+      "meta/meta-llama-3-70b-instruct",
       {
         input: {
           system_prompt: systemPrompt,
@@ -117,6 +119,8 @@ Return valid JSON:
         }
       }
     ) as any;
+
+    console.log(`[analyze-audio-events] Replicate call successful. Output type: ${typeof output}`);
 
     const content = Array.isArray(output) ? output.join('') : String(output);
 
