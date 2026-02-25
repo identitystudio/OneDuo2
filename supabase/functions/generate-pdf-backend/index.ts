@@ -167,6 +167,70 @@ function safeText(text: unknown): string {
     return s;
 }
 
+// Audio Intelligence Types
+interface MusicCue {
+    start: number;
+    end: number;
+    mood: string;
+    genre?: string;
+    description: string;
+}
+
+interface AmbientSound {
+    timestamp: number;
+    duration: number;
+    sound: string;
+    meaning: string;
+}
+
+interface AudienceReaction {
+    timestamp: number;
+    duration: number;
+    type: string;
+    context: string;
+    intensity: string;
+}
+
+interface MeaningfulPause {
+    timestamp: number;
+    duration: number;
+    meaning: string;
+    screenplayNote: string;
+}
+
+interface AudioEvents {
+    music_cues?: MusicCue[];
+    ambient_sounds?: AmbientSound[];
+    reactions?: AudienceReaction[];
+    meaningful_pauses?: MeaningfulPause[];
+    overall_audio_mood?: string;
+}
+
+interface CliffhangerMoment {
+    peak_timestamp: number;
+    resolution_timestamp: number;
+    composite_confidence: number;
+    description: string;
+    signals?: {
+        audio_intensity: boolean;
+        visual_stasis: boolean;
+        verbal_hint: boolean;
+    };
+}
+
+interface ProsodyData {
+    annotations?: Array<{
+        timestamp: number;
+        duration: number;
+        annotation: string;
+        confidence: number;
+        type: string;
+    }>;
+    overall_tone?: string;
+    key_moments?: string[];
+    cliffhanger_moments?: CliffhangerMoment[];
+}
+
 function formatTime(seconds: number): string {
     if (!seconds || !isFinite(seconds)) return '0:00';
     const m = Math.floor(seconds / 60);
@@ -685,7 +749,115 @@ async function buildPDF(
             }
         }
 
-        // Chapter separator  
+        // ========== AUDIO INTELLIGENCE TIMELINE ==========
+        const audioEvents: AudioEvents = mod.audio_events || {};
+        const prosodyData: ProsodyData = mod.prosody_annotations || {};
+        const musicCues = audioEvents.music_cues || [];
+        const ambientSounds = audioEvents.ambient_sounds || [];
+        const reactions = audioEvents.reactions || [];
+        const pauses = audioEvents.meaningful_pauses || [];
+        const annotations = prosodyData.annotations || [];
+        const cliffhangers = prosodyData.cliffhanger_moments || [];
+
+        const hasAudioData = musicCues.length > 0 || ambientSounds.length > 0 ||
+            reactions.length > 0 || pauses.length > 0 ||
+            annotations.length > 0 || cliffhangers.length > 0 ||
+            audioEvents.overall_audio_mood || prosodyData.overall_tone;
+
+        if (hasAudioData) {
+            newPage();
+            currentPage.drawText('Audio Events Timeline', {
+                x: MARGIN, y, size: 18, font: boldFont, color: rgb(0, 0, 0),
+            });
+            y -= 25;
+
+            // Summary Box
+            if (audioEvents.overall_audio_mood || prosodyData.overall_tone) {
+                const moodTextStr = audioEvents.overall_audio_mood ? `Mood: ${audioEvents.overall_audio_mood}` : '';
+                const toneTextStr = prosodyData.overall_tone ? `Tone: ${prosodyData.overall_tone}` : '';
+                const combinedMeta = [moodTextStr, toneTextStr].filter(Boolean).join(' | ');
+
+                ensureSpace(40);
+                currentPage.drawRectangle({
+                    x: MARGIN, y: y - 25, width: CONTENT_WIDTH, height: 30,
+                    color: rgb(0.94, 0.97, 1),
+                    borderColor: rgb(0.4, 0.6, 0.8),
+                    borderWidth: 0.5
+                });
+                currentPage.drawText('Audio Intelligence Summary:', { x: MARGIN + 5, y: y - 8, size: 9, font: boldFont, color: rgb(0.2, 0.4, 0.6) });
+                currentPage.drawText(safeText(combinedMeta), { x: MARGIN + 5, y: y - 20, size: 8, font: italicFont, color: rgb(0.3, 0.3, 0.3) });
+                y -= 40;
+            }
+
+            // Music
+            if (musicCues.length > 0) {
+                ensureSpace(60);
+                currentPage.drawText('[MUSIC CUES]', { x: MARGIN, y, size: 10, font: boldFont, color: rgb(0.6, 0.4, 0) });
+                y -= 12;
+                for (const cue of musicCues.slice(0, 8)) {
+                    drawWrappedText(`[${formatTime(cue.start)}-${formatTime(cue.end)}] ${cue.mood.toUpperCase()}: ${cue.description}`, { size: 8, color: rgb(0.4, 0.3, 0.1) });
+                }
+                y -= 10;
+            }
+
+            // Ambient
+            if (ambientSounds.length > 0) {
+                ensureSpace(60);
+                currentPage.drawText('[AMBIENT / ENVIRONMENTAL]', { x: MARGIN, y, size: 10, font: boldFont, color: rgb(0.1, 0.4, 0.1) });
+                y -= 12;
+                for (const sound of ambientSounds.slice(0, 8)) {
+                    drawWrappedText(`[${formatTime(sound.timestamp)}] ${sound.sound} - ${sound.meaning}`, { size: 8, color: rgb(0.1, 0.3, 0.1) });
+                }
+                y -= 10;
+            }
+
+            // Reactions
+            if (reactions.length > 0) {
+                ensureSpace(60);
+                currentPage.drawText('[REACTIONS]', { x: MARGIN, y, size: 10, font: boldFont, color: rgb(0.6, 0.2, 0.4) });
+                y -= 12;
+                for (const r of reactions.slice(0, 8)) {
+                    const intensity = r.intensity === 'strong' ? '!!!' : r.intensity === 'moderate' ? '!!' : '!';
+                    drawWrappedText(`[${formatTime(r.timestamp)}] (${r.type}${intensity}) ${r.context}`, { size: 8, color: rgb(0.4, 0.2, 0.3) });
+                }
+                y -= 10;
+            }
+
+            // Prosody
+            if (annotations.length > 0) {
+                ensureSpace(60);
+                currentPage.drawText('[SCREENPLAY PARENTHETICALS / PROSODY]', { x: MARGIN, y, size: 10, font: boldFont, color: rgb(0.2, 0.2, 0.5) });
+                y -= 12;
+                for (const ann of annotations.slice(0, 10)) {
+                    drawWrappedText(`[${formatTime(ann.timestamp)}] (${ann.annotation})`, { size: 8, usedFont: italicFont, color: rgb(0.2, 0.2, 0.4) });
+                }
+                y -= 10;
+            }
+
+            // Pauses
+            if (pauses.length > 0) {
+                ensureSpace(60);
+                currentPage.drawText('[MEANINGFUL PAUSES]', { x: MARGIN, y, size: 10, font: boldFont, color: rgb(0.3, 0.2, 0.5) });
+                y -= 12;
+                for (const p of pauses.slice(0, 10)) {
+                    drawWrappedText(`[${formatTime(p.timestamp)}] ${p.screenplayNote} - ${p.meaning}`, { size: 8, color: rgb(0.2, 0.2, 0.4) });
+                }
+                y -= 10;
+            }
+
+            // Cliffhangers
+            if (cliffhangers.length > 0) {
+                ensureSpace(60);
+                currentPage.drawText('[CLIFFHANGER MOMENTS]', { x: MARGIN, y, size: 10, font: boldFont, color: rgb(0.7, 0, 0) });
+                y -= 12;
+                for (const c of cliffhangers.slice(0, 5)) {
+                    drawWrappedText(`[${formatTime(c.peak_timestamp)}] ${c.description}`, { size: 8, color: rgb(0.5, 0, 0) });
+                }
+                y -= 10;
+            }
+        }
+
+        // Chapter separator
         if (i < modules.length - 1) {
             ensureSpace(10);
             currentPage.drawLine({
@@ -801,7 +973,7 @@ serve(async (req) => {
 
                 const { data: course, error: courseError } = await supabase
                     .from("courses")
-                    .select("id, title, email, share_token, share_enabled, course_files, video_duration_seconds, transcript, frame_urls, frame_analyses")
+                    .select("id, title, email, share_token, share_enabled, course_files, video_duration_seconds, transcript, frame_urls, frame_analyses, audio_events, prosody_annotations")
                     .eq("id", courseId)
                     .single();
 
@@ -859,6 +1031,8 @@ serve(async (req) => {
                         transcript: course.transcript,
                         frame_urls: course.frame_urls || [],
                         frame_analyses: course.frame_analyses || [],
+                        audio_events: (course as any).audio_events,
+                        prosody_annotations: (course as any).prosody_annotations,
                         key_moments_index: keyMoments,
                         concepts_frameworks: concepts,
                         hidden_patterns: patterns,
