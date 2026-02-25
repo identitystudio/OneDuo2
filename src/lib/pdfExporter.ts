@@ -407,6 +407,185 @@ const FRAMES_PER_MINUTE_TARGET = 60; // 1 FPS * 60 seconds = Every single frame 
 const MIN_EXPORT_FRAMES = 250;
 const MAX_EXPORT_FRAMES = 15000;
 
+// ========== HELPER: Render Audio Events Timeline ==========
+const renderAudioTimeline = (
+  pdf: jsPDF,
+  margin: number,
+  pageHeight: number,
+  contentWidth: number,
+  y: number,
+  audioEvents: AudioEvents,
+  prosodyData: ProsodyData,
+  addPageWithHeaders: () => void,
+  formatTime: (s: number) => string
+): number => {
+  const checkPageBreakInternal = (neededHeight: number) => {
+    if (y + neededHeight > pageHeight - 35) {
+      addPageWithHeaders();
+    }
+  };
+
+  pdf.setFontSize(18);
+  pdf.setFont('helvetica', 'bold');
+  pdf.setTextColor(0, 0, 0);
+  pdf.text('Audio Events Timeline', margin, y);
+  y += 8;
+
+  const musicCues = audioEvents.music_cues || [];
+  const ambientSounds = audioEvents.ambient_sounds || [];
+  const reactions = audioEvents.reactions || [];
+  const meaningfulPauses = audioEvents.meaningful_pauses || [];
+  const prosodyAnnotations = prosodyData.annotations || [];
+
+  const hasAudioData = musicCues.length > 0 || ambientSounds.length > 0 ||
+    reactions.length > 0 || meaningfulPauses.length > 0 ||
+    prosodyAnnotations.length > 0;
+
+  if (hasAudioData) {
+    // Overall Audio Mood
+    if (audioEvents.overall_audio_mood) {
+      pdf.setFillColor(240, 248, 255);
+      pdf.setDrawColor(100, 150, 200);
+      pdf.roundedRect(margin, y, contentWidth, 20, 2, 2, 'FD');
+      y += 6;
+      pdf.setFontSize(10);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setTextColor(50, 100, 150);
+      pdf.text('Overall Audio Mood:', margin + 3, y);
+      y += 5;
+      pdf.setFont('helvetica', 'italic');
+      const moodText = pdf.splitTextToSize(audioEvents.overall_audio_mood, contentWidth - 10);
+      pdf.text(moodText.slice(0, 2), margin + 3, y);
+      y += 12;
+    }
+
+    // Music Cues Section
+    if (musicCues.length > 0) {
+      checkPageBreakInternal(30 + musicCues.length * 12);
+
+      pdf.setFillColor(255, 245, 230);
+      pdf.setDrawColor(200, 150, 50);
+      const musicHeight = 18 + Math.min(musicCues.length * 12, 60);
+      pdf.roundedRect(margin, y, contentWidth, musicHeight, 2, 2, 'FD');
+
+      y += 6;
+      pdf.setFontSize(11);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setTextColor(150, 100, 0);
+      pdf.text('[MUSIC CUES]', margin + 3, y);
+      y += 7;
+
+      pdf.setFontSize(9);
+      pdf.setFont('helvetica', 'normal');
+      pdf.setTextColor(80, 60, 20);
+
+      musicCues.slice(0, 5).forEach(cue => {
+        const startTime = formatTime(cue.start);
+        const endTime = formatTime(cue.end);
+        const cueText = `[${startTime} - ${endTime}] ${cue.mood.toUpperCase()}${cue.genre ? ` (${cue.genre})` : ''}: ${cue.description}`;
+        const splitCue = pdf.splitTextToSize(cueText, contentWidth - 10);
+        pdf.text(splitCue[0], margin + 3, y);
+        y += 6;
+      });
+
+      if (musicCues.length > 5) {
+        pdf.setFont('helvetica', 'italic');
+        pdf.text(`... and ${musicCues.length - 5} more music cues`, margin + 3, y);
+        y += 6;
+      }
+      y += 6;
+    }
+
+    // Reactions Section
+    if (reactions.length > 0) {
+      checkPageBreakInternal(30 + reactions.length * 10);
+
+      pdf.setFillColor(255, 240, 245);
+      pdf.setDrawColor(180, 100, 120);
+      const reactionsHeight = 18 + Math.min(reactions.length * 10, 50);
+      pdf.roundedRect(margin, y, contentWidth, reactionsHeight, 2, 2, 'FD');
+
+      y += 6;
+      pdf.setFontSize(11);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setTextColor(150, 70, 90);
+      pdf.text('[AUDIENCE/PRESENTER REACTIONS]', margin + 3, y);
+      y += 7;
+
+      pdf.setFontSize(9);
+      pdf.setFont('helvetica', 'normal');
+      pdf.setTextColor(100, 50, 60);
+
+      reactions.slice(0, 5).forEach(reaction => {
+        const time = formatTime(reaction.timestamp);
+        const intensityLabel = reaction.intensity === 'strong' ? '***' : reaction.intensity === 'moderate' ? '**' : '*';
+        const reactionText = `[${time}] (${reaction.type}${intensityLabel}) - ${reaction.context}`;
+        const splitReaction = pdf.splitTextToSize(reactionText, contentWidth - 10);
+        pdf.text(splitReaction[0], margin + 3, y);
+        y += 5;
+      });
+
+      if (reactions.length > 5) {
+        pdf.setFont('helvetica', 'italic');
+        pdf.text(`... and ${reactions.length - 5} more reactions`, margin + 3, y);
+        y += 5;
+      }
+      y += 6;
+    }
+
+    // Meaningful Pauses Section
+    if (meaningfulPauses.length > 0) {
+      checkPageBreakInternal(30 + meaningfulPauses.length * 10);
+
+      pdf.setFillColor(245, 240, 255);
+      pdf.setDrawColor(120, 100, 180);
+      const pausesHeight = 18 + Math.min(meaningfulPauses.length * 10, 50);
+      pdf.roundedRect(margin, y, contentWidth, pausesHeight, 2, 2, 'FD');
+
+      y += 6;
+      pdf.setFontSize(11);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setTextColor(80, 60, 140);
+      pdf.text('[MEANINGFUL PAUSES/BEATS]', margin + 3, y);
+      y += 7;
+
+      pdf.setFontSize(9);
+      pdf.setFont('helvetica', 'normal');
+      pdf.setTextColor(60, 40, 100);
+
+      meaningfulPauses.slice(0, 8).forEach(pause => {
+        const time = formatTime(pause.timestamp);
+        const pauseText = `[${time}] ${pause.screenplayNote} - ${pause.meaning}`;
+        const splitPause = pdf.splitTextToSize(pauseText, contentWidth - 10);
+        pdf.text(splitPause[0], margin + 3, y);
+        y += 5;
+      });
+
+      if (meaningfulPauses.length > 8) {
+        pdf.setFont('helvetica', 'italic');
+        pdf.text(`... and ${meaningfulPauses.length - 8} more pauses`, margin + 3, y);
+        y += 5;
+      }
+      y += 6;
+    }
+
+  } else {
+    pdf.setFillColor(250, 250, 250);
+    pdf.setDrawColor(200, 200, 200);
+    pdf.roundedRect(margin, y, contentWidth, 25, 2, 2, 'FD');
+    y += 10;
+    pdf.setFontSize(10);
+    pdf.setFont('helvetica', 'italic');
+    pdf.setTextColor(150, 150, 150);
+    pdf.text('No audio events detected for this content.', margin + 5, y);
+    pdf.text('Audio analysis runs automatically during processing.', margin + 5, y + 6);
+    y += 25;
+  }
+
+  return y;
+};
+
+
 const clampNumber = (value: number, min: number, max: number) =>
   Math.max(min, Math.min(max, value));
 
@@ -1135,169 +1314,28 @@ export const generateChatGPTPDF = async (
     y += 25;
   }
 
-  // ========== PAGE 3: AUDIO EVENTS TIMELINE ==========
-  addPageWithHeaders();
-  onProgress?.(41, 'Adding audio events timeline...');
-
-  pdf.setFontSize(18);
-  pdf.setFont('helvetica', 'bold');
-  pdf.setTextColor(0, 0, 0);
-  pdf.text('Audio Events Timeline', margin, y);
-  y += 8; // Reduced from 12
-
+  // ========== AUDIO DATA EXTRACTION ==========
   const audioEvents = course.audio_events || {};
   const prosodyData = course.prosody_annotations || {};
-
   const musicCues = audioEvents.music_cues || [];
   const ambientSounds = audioEvents.ambient_sounds || [];
   const reactions = audioEvents.reactions || [];
   const meaningfulPauses = audioEvents.meaningful_pauses || [];
-  const prosodyAnnotations = prosodyData.annotations || [];
 
-  const hasAudioData = musicCues.length > 0 || ambientSounds.length > 0 ||
-    reactions.length > 0 || meaningfulPauses.length > 0 ||
-    prosodyAnnotations.length > 0;
-
-  if (hasAudioData) {
-    // Overall Audio Mood
-    if (audioEvents.overall_audio_mood) {
-      pdf.setFillColor(240, 248, 255);
-      pdf.setDrawColor(100, 150, 200);
-      pdf.roundedRect(margin, y, contentWidth, 20, 2, 2, 'FD');
-      y += 6;
-      pdf.setFontSize(10);
-      pdf.setFont('helvetica', 'bold');
-      pdf.setTextColor(50, 100, 150);
-      pdf.text('Overall Audio Mood:', margin + 3, y);
-      y += 5;
-      pdf.setFont('helvetica', 'italic');
-      const moodText = pdf.splitTextToSize(audioEvents.overall_audio_mood, contentWidth - 10);
-      pdf.text(moodText.slice(0, 2), margin + 3, y);
-      y += 12; // Reduced from 15
-    }
-
-    // Music Cues Section
-    if (musicCues.length > 0) {
-      checkPageBreak(30 + musicCues.length * 12);
-
-      pdf.setFillColor(255, 245, 230);
-      pdf.setDrawColor(200, 150, 50);
-      const musicHeight = 18 + Math.min(musicCues.length * 12, 60);
-      pdf.roundedRect(margin, y, contentWidth, musicHeight, 2, 2, 'FD');
-
-      y += 6;
-      pdf.setFontSize(11);
-      pdf.setFont('helvetica', 'bold');
-      pdf.setTextColor(150, 100, 0);
-      pdf.text('[MUSIC CUES]', margin + 3, y);
-      y += 7;
-
-      pdf.setFontSize(9);
-      pdf.setFont('helvetica', 'normal');
-      pdf.setTextColor(80, 60, 20);
-
-      musicCues.slice(0, 5).forEach(cue => {
-        const startTime = formatTime(cue.start);
-        const endTime = formatTime(cue.end);
-        const cueText = `[${startTime} - ${endTime}] ${cue.mood.toUpperCase()}${cue.genre ? ` (${cue.genre})` : ''}: ${cue.description}`;
-        const splitCue = pdf.splitTextToSize(cueText, contentWidth - 10);
-        pdf.text(splitCue[0], margin + 3, y);
-        y += 6;
-      });
-
-      if (musicCues.length > 5) {
-        pdf.setFont('helvetica', 'italic');
-        pdf.text(`... and ${musicCues.length - 5} more music cues`, margin + 3, y);
-        y += 6;
-      }
-      y += 6; // Reduced from 8
-    }
-
-    // Reactions Section
-    if (reactions.length > 0) {
-      checkPageBreak(30 + reactions.length * 10);
-
-      pdf.setFillColor(255, 240, 245);
-      pdf.setDrawColor(180, 100, 120);
-      const reactionsHeight = 18 + Math.min(reactions.length * 10, 50);
-      pdf.roundedRect(margin, y, contentWidth, reactionsHeight, 2, 2, 'FD');
-
-      y += 6;
-      pdf.setFontSize(11);
-      pdf.setFont('helvetica', 'bold');
-      pdf.setTextColor(150, 70, 90);
-      pdf.text('[AUDIENCE/PRESENTER REACTIONS]', margin + 3, y);
-      y += 7;
-
-      pdf.setFontSize(9);
-      pdf.setFont('helvetica', 'normal');
-      pdf.setTextColor(100, 50, 60);
-
-      reactions.slice(0, 5).forEach(reaction => {
-        const time = formatTime(reaction.timestamp);
-        const intensityLabel = reaction.intensity === 'strong' ? '***' : reaction.intensity === 'moderate' ? '**' : '*';
-        const reactionText = `[${time}] (${reaction.type}${intensityLabel}) - ${reaction.context}`;
-        const splitReaction = pdf.splitTextToSize(reactionText, contentWidth - 10);
-        pdf.text(splitReaction[0], margin + 3, y);
-        y += 5;
-      });
-
-      if (reactions.length > 5) {
-        pdf.setFont('helvetica', 'italic');
-        pdf.text(`... and ${reactions.length - 5} more reactions`, margin + 3, y);
-        y += 5;
-      }
-      y += 6; // Reduced from 8
-    }
-
-    // Meaningful Pauses Section
-    if (meaningfulPauses.length > 0) {
-      checkPageBreak(30 + meaningfulPauses.length * 10);
-
-      pdf.setFillColor(245, 240, 255);
-      pdf.setDrawColor(120, 100, 180);
-      const pausesHeight = 18 + Math.min(meaningfulPauses.length * 10, 50);
-      pdf.roundedRect(margin, y, contentWidth, pausesHeight, 2, 2, 'FD');
-
-      y += 6;
-      pdf.setFontSize(11);
-      pdf.setFont('helvetica', 'bold');
-      pdf.setTextColor(80, 60, 140);
-      pdf.text('[MEANINGFUL PAUSES/BEATS]', margin + 3, y);
-      y += 7;
-
-      pdf.setFontSize(9);
-      pdf.setFont('helvetica', 'normal');
-      pdf.setTextColor(60, 40, 100);
-
-      meaningfulPauses.slice(0, 8).forEach(pause => {
-        const time = formatTime(pause.timestamp);
-        const pauseText = `[${time}] ${pause.screenplayNote} - ${pause.meaning}`;
-        const splitPause = pdf.splitTextToSize(pauseText, contentWidth - 10);
-        pdf.text(splitPause[0], margin + 3, y);
-        y += 5;
-      });
-
-      if (meaningfulPauses.length > 8) {
-        pdf.setFont('helvetica', 'italic');
-        pdf.text(`... and ${meaningfulPauses.length - 8} more pauses`, margin + 3, y);
-        y += 5;
-      }
-      y += 6; // Reduced from 8
-    }
-
-  } else {
-    pdf.setFillColor(250, 250, 250);
-    pdf.setDrawColor(200, 200, 200);
-    pdf.roundedRect(margin, y, contentWidth, 25, 2, 2, 'FD');
-    y += 10;
-    pdf.setFontSize(10);
-    pdf.setFont('helvetica', 'italic');
-    pdf.setTextColor(150, 150, 150);
-    pdf.text('No audio events detected for this content.', margin + 5, y);
-    pdf.text('Audio analysis runs automatically during processing.', margin + 5, y + 6);
-    y += 25;
-  }
+  // ========== PAGE 3: AUDIO EVENTS TIMELINE ==========
+  addPageWithHeaders();
+  onProgress?.(41, 'Adding audio events timeline...');
+  y = renderAudioTimeline(
+    pdf,
+    margin,
+    pageHeight,
+    contentWidth,
+    y,
+    audioEvents,
+    prosodyData,
+    addPageWithHeaders,
+    formatTime
+  );
 
   // ========== PAGE 4: MODULE METADATA ==========
   addPageWithHeaders();
@@ -2137,57 +2175,29 @@ export const generateMergedCoursePDF = async (
       y += 10;
     }
 
+    // ========== AUDIO EVENTS SECTION ==========
+    addPageWithHeaders();
+    y = renderAudioTimeline(
+      pdf,
+      margin,
+      pageHeight,
+      contentWidth,
+      y,
+      module.audio_events || {},
+      module.prosody_annotations || {},
+      addPageWithHeaders,
+      formatTime
+    );
+
     // ========== VISUAL FRAMES SECTION ==========
     if (module.frame_urls && module.frame_urls.length > 0) {
-      if (y > pageHeight - 80) addPageWithHeaders();
-      else y += 8; // Reduced from 15
-
+      addPageWithHeaders();
       pdf.setFontSize(14);
       pdf.setFont('helvetica', 'bold');
       pdf.setTextColor(0, 0, 0);
       pdf.text(safe('Visual Frames'), margin, y);
-      y += 8; // Reduced from 10
+      y += 8;
 
-      if (aiFidelityMode && i === 0) {
-        addPageWithHeaders();
-        pdf.setFontSize(22);
-        pdf.setFont('helvetica', 'bold');
-        pdf.setTextColor(0, 0, 0);
-        pdf.text('Sensory Intelligence Map', margin, y);
-        y += 12;
-
-        pdf.setFontSize(10);
-        pdf.setFont('helvetica', 'normal');
-        pdf.setTextColor(50, 50, 50);
-        const aiPrompt = [
-          "This artifact is optimized for AI Vision and High-Fidelity reconstruction.",
-          "Below this page is a sequence of high-resolution visual frames sampled from the workshop video.",
-          "",
-          "For each frame, you will find a blue 'ONE DUO SENSORY DATA' block. You MUST prioritize",
-          "the data in these blocks to 'see' and 'hear' the original video context:",
-          "",
-          "1. VISUAL DESCRIPTION: The literal screen state (UI, speaker, whiteboard).",
-          "2. INTERACTION TRACKING: Cursors, clicks, zoom focus, and text selections.",
-          "3. AUDIO FEATURES: Music cues, ambient sounds, and audience reactions.",
-          "4. PROSODY LAYER: Vocal tone, emphasis, pacing, and meaningful pauses.",
-          "",
-          "Use this data to bridge the gap between transcript text and embodied presence."
-        ];
-
-        aiPrompt.forEach(line => {
-          pdf.text(line, margin, y);
-          y += 5; // Reduced from 6
-        });
-
-        y += 6; // Reduced from 10
-        pdf.setFillColor(240, 248, 255);
-        pdf.setDrawColor(100, 150, 200);
-        pdf.roundedRect(margin, y, contentWidth, 18, 2, 2, 'FD'); // Shrunk from 20
-        y += 6; // Reduced from 7
-        pdf.setFont('helvetica', 'bold');
-        pdf.text('AI INSTRUCTION: Cross-reference frame timestamps with transcript segments to reconstruct the full intent.', margin + 5, y);
-        y += 12; // Reduced from 20
-      }
 
       // Sample frames evenly
       const sampledFrames = sampleFramesEvenly(module.frame_urls, Math.min(maxFrames, module.frame_urls.length));
