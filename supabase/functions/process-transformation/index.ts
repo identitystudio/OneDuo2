@@ -113,6 +113,20 @@ interface FrameAnalysis {
     hasHighlightedRegion?: boolean;
     dominantColors?: string[];
   };
+  psychologicalLayer?: {
+    socialPosture: string;
+    cognitiveLoad: string;
+    engagementIntent: string;
+    confidenceLevel: number;
+  };
+  instructorIntent?: string;
+  keyElements?: string[];
+  prosody?: {
+    tone: string;
+    pacing: string;
+    volume: string;
+    parenthetical: string;
+  };
 }
 
 /**
@@ -308,19 +322,45 @@ async function analyzeFrameWithVision(
         messages: [
           {
             role: 'system',
-            content: `You are analyzing a screen capture frame for human intent signals.
-Detect these emphasis indicators:
-1. TEXT SELECTION: Look for highlighted/selected text regions (blue/colored background overlays on text)
-2. CURSOR POSITION: Look for mouse cursor near text or UI elements
-3. ZOOM/FOCUS: Check if content appears magnified or focused
-4. UI INTERACTIONS: Detect clicks, buttons in pressed state, form inputs with focus
+            content: `You are an expert observer watching a masterclass. Describe this moment exactly as a human expert would, focusing on what matters most.
+
+                                 PSYCHOLOGICAL LAYERED PERCEPTION:
+                                 1. Social Posture: Interpret the instructor's "stance" towards the audience. Are they open/inviting, authoritative/closed, or guarded?
+                                 2. Focus Intensity: Distinguish between "effortless flow" (mastery) vs. "cognitive load" (searching for words or solving a problem live).
+                                 3. Temporal Weight & Narrative Role: Does this moment feel like a "Casual Intro," a "Heavy Transition," or the "Thematic Crux" (the peak complexity or most important point)?
+                                 4. Subconscious Signals: Note subtle cues like microscopic hesitations, micro-expressions, or specific hand placements that suggest comfort or tension.
 
 Return JSON only:
 {
+  "text": "all OCR text relevant to this moment",
+  "visualDescription": "High-fidelity psychological narrative. Example: 'The speaker appears relaxed... posture and pacing suggest comfort... introductory moment rather than key emphasis.'",
+  "textType": "slide|document|ui|code|other",
+  "emphasisFlags": {
+    "highlight_detected": boolean,
+    "cursor_pause": boolean,
+    "zoom_focus": boolean,
+    "text_selected": boolean,
+    "lingering_frame": boolean,
+    "bold_text": boolean,
+    "underline_detected": boolean
+  },
+  "psychologicalLayer": {
+    "socialPosture": "open|authoritative|guarded|neutral",
+    "cognitiveLoad": "low|moderate|high",
+    "engagementIntent": "explaining|waiting|transitioning|demonstrating",
+    "confidenceLevel": 0-1
+  },
+  "keyElements": ["list", "of", "the", "3-5", "most", "critical", "elements"],
+  "instructorIntent": "The deeper 'why' and actionable build instruction",
+  "prosody": {
+    "tone": "string",
+    "pacing": "string",
+    "volume": "string",
+    "parenthetical": "(screenplay note reflecting the mood and weight)"
+  },
   "hasTextSelection": boolean,
   "hasHighlightedRegion": boolean, 
-  "boundingBoxes": [{"x": number, "y": number, "width": number, "height": number, "text": string, "isHighlighted": boolean}],
-  "dominantAction": "selection" | "navigation" | "input" | "idle"
+  "boundingBoxes": [{"x": number, "y": number, "width": number, "height": number, "text": string, "isHighlighted": boolean}]
 }`
           },
           {
@@ -380,7 +420,11 @@ Return JSON only:
         hasTextSelection: analysis.hasTextSelection || false,
         hasHighlightedRegion: analysis.hasHighlightedRegion || false,
         dominantColors: ['#ffffff', '#333333', analysis.hasTextSelection ? '#3b82f6' : '#000000']
-      }
+      },
+      psychologicalLayer: analysis.psychologicalLayer,
+      instructorIntent: analysis.instructorIntent,
+      keyElements: analysis.keyElements,
+      prosody: analysis.prosody
     };
   } catch (error) {
     console.warn(`[Vision] Analysis failed for frame ${frameIndex}:`, error);
@@ -468,7 +512,7 @@ serve(async (req) => {
   }
 
   try {
-    const { artifactId } = await req.json();
+    const { artifactId, aiFidelityMode = false } = await req.json();
 
     if (!artifactId) {
       return new Response(
@@ -512,7 +556,19 @@ serve(async (req) => {
       .eq("artifact_id", artifactId);
 
     if (countError) console.warn("[OneDuo] Could not check existing frames:", countError);
-    const startFrom = existingFrameCount || 0;
+    const startFrom = aiFidelityMode ? 0 : (existingFrameCount || 0);
+
+    if (aiFidelityMode && existingFrameCount > 0) {
+      console.log(`[OneDuo] PEAK MODE: Bypassing ${existingFrameCount} cached frames for ${artifactId}`);
+      // Option to delete existing frames here, or just overwrite with upsert logic if we had unique constraints
+      // For now, we'll just delete them to avoid duplicates in this simple schema
+      const { error: deleteError } = await supabase
+        .from("artifact_frames")
+        .delete()
+        .eq("artifact_id", artifactId);
+
+      if (deleteError) console.error("[OneDuo] Failed to clear frames for re-analysis:", deleteError);
+    }
 
     console.log(`[OneDuo] Processing frames ${startFrom} to ${framesToProcess} for artifact ${artifactId}`);
 
@@ -570,6 +626,11 @@ serve(async (req) => {
         confidence_score: parseFloat(score.toFixed(2)),
         confidence_level: confidenceLevel,
         is_critical: isCritical,
+        // NEW Psychological / Prosody fields for Artifacts
+        psychological_layer: currentAnalysis.psychologicalLayer,
+        instructor_intent: currentAnalysis.instructorIntent,
+        key_elements: currentAnalysis.keyElements,
+        prosody_annotations: currentAnalysis.prosody,
       };
 
       batchFrames.push(frameData);

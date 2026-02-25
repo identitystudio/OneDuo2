@@ -88,22 +88,22 @@ serve(async (req) => {
       ? `${Math.floor(videoDuration / 60)}m ${Math.floor(videoDuration % 60)}s`
       : 'Unknown duration';
 
-    const systemPrompt = `You are an expert audio analyst for film and video production, specializing in screenplay-style audio annotation. Analyze non-speech audio events (Music Cues, Ambient Sounds, Reactions, Meaningful Pauses). Return valid JSON.`;
+    const systemPrompt = `You are an expert atmospheric audio analyst specializing in high-fidelity situational awareness. You are writing the "audio screenplay" for this video. You notice not just what is heard, but what it *means* in terms of tension, release, and environment. Return valid JSON.`;
 
-    const userPrompt = `Analyze the audio events for this video:
+    const userPrompt = `Map the atmosphere of this video:
 Video: ${courseTitle || 'Untitled'}
 URL: ${videoUrl}
 Duration: ${durationInfo}
-Transcript Context (use this to infer timing):
+Transcript Context (use this to infer the "weight" of events):
 ${transcriptContext}
 
 Return valid JSON:
 {
-  "music_cues": [{ "start": number, "end": number, "mood": "string", "genre": "string", "description": "string" }],
-  "ambient_sounds": [{ "timestamp": number, "duration": number, "sound": "string", "meaning": "string" }],
-  "reactions": [{ "timestamp": number, "duration": number, "type": "string", "context": "string", "intensity": "string" }],
-  "meaningful_pauses": [{ "timestamp": number, "duration": number, "meaning": "string", "screenplayNote": "string" }],
-  "overall_audio_mood": "string"
+  "music_cues": [{ "start": number, "end": number, "mood": "tension|triumph|contemplative|steady", "narrativeWeight": "low|high", "description": "psychological role of the music" }],
+  "ambient_sounds": [{ "timestamp": number, "sound": "string", "psychologicalMeaning": "what this sound communicates subconsciously (e.g. frustration, finality, relief)" }],
+  "social_dynamics": [{ "timestamp": number, "description": "implied interaction with audience or environment" }],
+  "situational_headspace": [{ "timestamp": number, "description": "The instructor's likely mental state: searching, flow, exhaustion, or playful" }],
+  "overall_audio_mood": "The deep psychological resonance of the audio environment"
 }`;
 
     console.log(`[analyze-audio-events] Calling Replicate with model: meta/meta-llama-3-70b-instruct`);

@@ -67,44 +67,44 @@ serve(async (req) => {
       console.warn("[analyze-audio-prosody] WARNING: Received empty transcript. Prosody mapping will be limited.");
     }
 
-    const systemPrompt = `You are ONEDUO — an execution intelligence system with expert audio prosody analysis capabilities. Extract vocal prosody, emotional delivery, and energy trends from transcripts enriched with trait metadata. Return valid JSON only.`;
+    const systemPrompt = `You are an empathic vocal analyst. You don't just hear audio; you hear the soul and intent behind the voice.
+Analyze the speaker's vocal delivery (prosody) for each segment of this video transcript as if you were a psychologist or an expert drama coach.
 
-    const userPrompt = `Analyze the prosody, emotional delivery, and energy dynamics for this video:
-URL: ${videoUrl}
-Duration: ${videoDuration ? `${Math.floor(videoDuration / 60)}m ${videoDuration % 60}s` : 'Unknown'}
-
-Input Segments with Meta-Traits:
-${transcriptContext}
-
-Return JSON with this structure:
+Return valid JSON in this format:
 {
   "annotations": [
-    { 
-      "timestamp": number, 
-      "duration": number, 
-      "annotation": "string", 
-      "confidence": number, 
-      "type": "emphasis|pause|emotion|pacing|tone|cliffhanger",
+    {
+      "timestamp": number,
+      "text": "string",
       "profile": {
-        "speaking_rate": "string", // e.g. "158 WPM"
-        "volume_variance": "Low|Moderate|High",
-        "pitch_variance": "Low|Moderate|High",
-        "energy_trend": "Rising|Stable|Declining",
-        "tone_classification": "string"
+        "speakingRate": "measured|fast|dynamic",
+        "energyTrend": "rising|stable|subsiding",
+        "volumeVariance": "whisper|normal|emphatic",
+        "pitchVariance": "monotone|varied|musical",
+        "toneClassification": "enthusiastic|cautious|instructive|uncertain|determined",
+        "confidenceScore": 0-1,
+        "engagementLevel": "passive|active|passionate",
+        "authenticity": "scripted|spontaneous",
+        "emotionalNote": "string (psychological interpretation of this specific segment)"
       }
     }
   ],
-  "cliffhanger_moments": [
-    { "peak_timestamp": number, "resolution_timestamp": number, "composite_confidence": number, "signals": { "audio_intensity": boolean, "visual_stasis": boolean, "verbal_hint": boolean }, "description": "string" }
-  ],
-  "overall_tone": "string",
-  "key_moments": ["string"]
-}
+  "overall_tone": "The psychological 'weight' of the module",
+  "breakthrough_moments": [number],
+  "cliffhanger_moments": [number]
+}`;
 
-Rules:
-1. Ensure 'profile' exists for every segment annotation.
-2. Normalize variance labels based on the metadata provided.
-3. If no speech, use 'No vocal signal detected'.`;
+    const userPrompt = `Listen to the layers of this vocal performance.
+Video URL: ${videoUrl}
+Duration: ${videoDuration ? `${Math.floor(videoDuration / 60)}m ${videoDuration % 60}s` : 'Unknown'}
+Transcript Context:
+${transcriptContext}
+
+ULTIMATE PEAK RULES:
+1. Confidence & Engagement Matrix: Correlate pitch/volume rhythm to detect "searching for words" vs. "mastery".
+2. Breakthrough Sensitivity: Identify when the voice shifts from technical to "Aha!" or "Eureka!" energy.
+3. Authenticity Detection: Does the speaker sound like they are reading a script or teaching from living experience?
+4. Narrative Weight: Distinguish between "routine setup" and "thematic crux" based on vocal intensity.`;
 
     console.log(`[analyze-audio-prosody] Calling Replicate with model: meta/meta-llama-3-70b-instruct`);
 
@@ -120,7 +120,7 @@ Rules:
       }
     ) as any;
 
-    console.log(`[analyze-audio-prosody] Replicate call successful. Output type: ${typeof output}`);
+    console.log(`[analyze - audio - prosody] Replicate call successful.Output type: ${typeof output} `);
 
     const content = Array.isArray(output) ? output.join('') : String(output);
 

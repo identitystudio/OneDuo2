@@ -168,10 +168,12 @@ export default function TransformReview() {
     }
   };
 
+
+
   const handleApproveAll = async () => {
     // Get all frames that need verification
     const pendingFrames = frames?.filter(needsVerification) || [];
-    
+
     if (pendingFrames.length === 0) {
       toast.info("No frames need verification");
       return;
@@ -341,8 +343,8 @@ export default function TransformReview() {
             {/* Batch Actions */}
             {stats.needsVerification > 0 && (
               <div className="flex justify-end mb-4">
-                <Button 
-                  onClick={handleApproveAll} 
+                <Button
+                  onClick={handleApproveAll}
                   disabled={approvingAll}
                   className="bg-green-600 hover:bg-green-700 text-white"
                 >

@@ -48,23 +48,20 @@ async function analyzeFramesWithReplicate(
                     {
                         input: {
                             image: frameUrl,
-                            prompt: `Analyze this image from a tutorial video.
+                            prompt: `You are an expert observer watching a masterclass. Describe this moment exactly as a human expert would, focusing on what matters most.
 
-                                 Extract:
-                                 1. ALL visible text (OCR).
-                                 2. Detailed visual description: Focus on the layout, UI elements, and crucially, the embodied presence of the speaker (facial expressions, hand gestures, positioning).
-                                 3. Type of content: slide, document, ui, code, or other.
-                                 4. Visual transitions/interactions: Cuts, screen switches, cursor movement, or whiteboard changes. Address "where" the instructor is looking or pointing.
-                                 5. Speaker Presence: Detailed embodied state (posture, gestures, engagement level) and general 'vibe'.
-                                 6. Visual emphasis cues: highlights, bold, cursor focus, zoom.
-                                 7. The instructor's intent: what should the user build or do?
+                                 PSYCHOLOGICAL LAYERED PERCEPTION:
+                                 1. Social Posture: Interpret the instructor's "stance" towards the audience. Are they open/inviting, authoritative/closed, or guarded?
+                                 2. Focus Intensity: Distinguish between "effortless flow" (mastery) vs. "cognitive load" (searching for words or solving a problem live).
+                                 3. Temporal Weight & Narrative Role: Does this moment feel like a "Casual Intro," a "Heavy Transition," or the "Thematic Crux" (the peak complexity or most important point)?
+                                 4. Subconscious Signals: Note subtle cues like microscopic hesitations, micro-expressions, or specific hand placements that suggest comfort or tension.
 
-                                 ${transcriptContext ? `Context from transcript: \"${transcriptContext.substring(0, 500)}\"` : ''}
+                                 ${transcriptContext ? `Context from transcript: "${transcriptContext.substring(0, 500)}"` : ''}
 
                                  Return ONLY a JSON object in this format:
                                  {
-                                   "text": "all text found",
-                                   "visualDescription": "High-fidelity description for AI reconstruction, including speaker physical presence",
+                                   "text": "all OCR text relevant to this moment",
+                                   "visualDescription": "High-fidelity psychological narrative. Example: 'The speaker appears relaxed... posture and pacing suggest comfort... introductory moment rather than key emphasis.'",
                                    "textType": "slide|document|ui|code|other",
                                    "emphasisFlags": {
                                      "highlight_detected": boolean,
@@ -75,13 +72,19 @@ async function analyzeFramesWithReplicate(
                                      "bold_text": boolean,
                                      "underline_detected": boolean
                                    },
-                                   "keyElements": ["list", "of", "visual", "elements"],
-                                   "instructorIntent": "actionable build instruction",
+                                   "psychologicalLayer": {
+                                     "socialPosture": "open|authoritative|guarded|neutral",
+                                     "cognitiveLoad": "low|moderate|high",
+                                     "engagementIntent": "explaining|waiting|transitioning|demonstrating",
+                                     "confidenceLevel": 0-1
+                                   },
+                                   "keyElements": ["list", "of", "the", "3-5", "most", "critical", "elements"],
+                                   "instructorIntent": "The deeper 'why' and actionable build instruction",
                                    "prosody": {
-                                     "tone": "neutral|emphatic|etc",
-                                     "pacing": "normal|etc",
-                                     "volume": "normal|etc",
-                                     "parenthetical": "(note about vibe/tone)"
+                                     "tone": "string",
+                                     "pacing": "string",
+                                     "volume": "string",
+                                     "parenthetical": "(screenplay note reflecting the mood and weight)"
                                    },
                                    "dependsOnPrevious": boolean
                                  }`,
@@ -1106,51 +1109,76 @@ serve(async (req) => {
                 for (const mod of modules) {
                     const frameUrls = mod.frame_urls || [];
                     const existingAnalyses = mod.frame_analyses || [];
+                    const isPeakMode = aiFidelityMode === 'peak' || aiFidelityMode === true;
 
-                    // Skip OCR if already cached
-                    if (existingAnalyses.length > 0) {
+                    // Skip OCR if already cached (unless Peak/High-Fidelity mode is requested)
+                    if (existingAnalyses.length > 0 && !isPeakMode) {
                         console.log(`[generate-pdf-backend] Module "${mod.title}": using ${existingAnalyses.length} cached frame analyses`);
-                        continue;
-                    }
-
-                    if (frameUrls.length === 0 || !replicate) {
-                        console.log(`[generate-pdf-backend] Module "${mod.title}": no frames or no Replicate API key, skipping OCR`);
-                        continue;
-                    }
-
-                    // Sample frames for OCR (max 50 to keep within timeout)
-                    const maxOcrFrames = 50;
-                    const sampledForOcr = sampleFramesEvenly(frameUrls, maxOcrFrames);
-
-                    const transcriptContext = (mod.transcript || [])
-                        .slice(0, 50)
-                        .map((t: any) => t.text || '')
-                        .join(' ')
-                        .substring(0, 2000);
-
-                    console.log(`[generate-pdf-backend] Module "${mod.title}": running OCR on ${sampledForOcr.length} frames...`);
-
-                    const analyses = await analyzeFramesWithReplicate(
-                        sampledForOcr,
-                        sanitizeDuration(mod.video_duration_seconds || 0, sampledForOcr.length),
-                        transcriptContext,
-                        replicate,
-                        5 // batch size
-                    );
-
-                    mod.frame_analyses = analyses;
-
-                    // Cache results in DB for future use
-                    const table = isSingleModule ? "courses" : "course_modules";
-                    const { error: cacheError } = await supabase
-                        .from(table)
-                        .update({ frame_analyses: analyses })
-                        .eq("id", mod.id);
-
-                    if (cacheError) {
-                        console.error(`[generate-pdf-backend] Failed to cache frame analyses:`, cacheError);
                     } else {
-                        console.log(`[generate-pdf-backend] Cached ${analyses.length} frame analyses for module "${mod.title}"`);
+                        if (existingAnalyses.length > 0 && isPeakMode) {
+                            console.log(`[generate-pdf-backend] Module "${mod.title}": bypassing ${existingAnalyses.length} cached analyses for PEAK mode re-analysis`);
+                        }
+
+                        if (frameUrls.length > 0 && replicate) {
+                            // Sample frames for OCR (max 50 to keep within timeout)
+                            const maxOcrFrames = 50;
+                            const sampledForOcr = sampleFramesEvenly(frameUrls, maxOcrFrames);
+
+                            const transcriptContext = (mod.transcript || [])
+                                .slice(0, 50)
+                                .map((t: any) => t.text || '')
+                                .join(' ')
+                                .substring(0, 2000);
+
+                            console.log(`[generate-pdf-backend] Module "${mod.title}": running OCR on ${sampledForOcr.length} frames...`);
+
+                            const analyses = await analyzeFramesWithReplicate(
+                                sampledForOcr,
+                                sanitizeDuration(mod.video_duration_seconds || 0, sampledForOcr.length),
+                                transcriptContext,
+                                replicate,
+                                5 // batch size
+                            );
+
+                            mod.frame_analyses = analyses;
+
+                            // Cache results in DB for future use
+                            const table = isSingleModule ? "courses" : "course_modules";
+                            await supabase
+                                .from(table)
+                                .update({ frame_analyses: analyses })
+                                .eq("id", mod.id);
+                        }
+                    }
+
+                    // AUDIO RE-ANALYSIS FOR PEAK MODE
+                    if (isPeakMode && mod.transcript?.length > 0 && replicate) {
+                        console.log(`[generate-pdf-backend] Module "${mod.title}": re-analyzing audio for PEAK fidelity...`);
+                        try {
+                            const [prosodyResp, eventsResp] = await Promise.all([
+                                supabase.functions.invoke('analyze-audio-prosody', {
+                                    body: { videoUrl: mod.frame_urls?.[0]?.replace('frame_0000.jpg', 'video.mp4'), transcript: mod.transcript, videoDuration: mod.video_duration_seconds, courseTitle: mod.title }
+                                }),
+                                supabase.functions.invoke('analyze-audio-events', {
+                                    body: { videoUrl: mod.frame_urls?.[0]?.replace('frame_0000.jpg', 'video.mp4'), transcript: mod.transcript, videoDuration: mod.video_duration_seconds, courseTitle: mod.title }
+                                })
+                            ]);
+
+                            if (prosodyResp.data) mod.prosody_annotations = prosodyResp.data;
+                            if (eventsResp.data) mod.audio_events = eventsResp.data;
+
+                            // Cache audio results
+                            const table = isSingleModule ? "courses" : "course_modules";
+                            await supabase
+                                .from(table)
+                                .update({
+                                    prosody_annotations: prosodyResp.data,
+                                    audio_events: eventsResp.data
+                                })
+                                .eq("id", mod.id);
+                        } catch (ae) {
+                            console.error(`[generate-pdf-backend] Audio re-analysis failed:`, ae);
+                        }
                     }
                 }
 
