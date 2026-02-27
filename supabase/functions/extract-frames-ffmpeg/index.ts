@@ -25,10 +25,10 @@ serve(async (req) => {
   const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
   try {
-    const { videoUrl, courseId, fps = 3, tableName = 'courses', recordId }: ExtractionRequest = await req.json();
+    const { videoUrl, courseId, fps: requestedFps, tableName = 'courses', recordId }: ExtractionRequest = await req.json();
     const targetId = recordId || courseId;
 
-    console.log(`[extract-frames-ffmpeg] Starting extraction for ${targetId}, fps: ${fps}`);
+    console.log(`[extract-frames-ffmpeg] Starting extraction for ${targetId}, requested fps: ${requestedFps}`);
 
     if (!videoUrl) {
       return new Response(JSON.stringify({ error: "Missing videoUrl" }), {
@@ -48,51 +48,31 @@ serve(async (req) => {
     const duration = await getVideoDuration(videoUrl);
     console.log(`[extract-frames-ffmpeg] Video duration: ${duration}s`);
 
-    // Calculate expected frames
+    // STABLE SAMPLING: Lock FPS and resolution to ensure repeatable outputs (Moat #2)
+    const fps = 2; // Locked at 2 FPS for deterministic output
     const expectedFrames = Math.floor(duration * fps);
-    console.log(`[extract-frames-ffmpeg] Expected frames: ${expectedFrames} at ${fps} fps`);
 
-    // LONG VIDEO HARDENING:
-    // For 2+ hour videos (7200s+), we use a more aggressive sampling strategy
-    // to prevent timeouts and memory issues
-    const isLongVideo = duration > 7200;
-    const isVeryLongVideo = duration > 14400; // 4+ hours
-    const isExtremelyLongVideo = duration > 25200; // 7+ hours
-    
-    // Use ffmpeg.wasm in streaming mode to extract frames
-    // We'll use a frame extraction service approach - fetch frames at specific timestamps
-    const frameUrls: string[] = [];
-    
-    // Frame limits based on video length:
-    // - Short videos (< 2 hours): up to 10800 frames (1 hour at 3fps)
-    // - Long videos (2-4 hours): up to 7200 frames (use 1fps equivalent)
-    // - Very long videos (4+ hours): up to 5400 frames (more aggressive sampling)
-    let maxFrames: number;
-    if (isVeryLongVideo) {
-      maxFrames = 5400;
-      console.log(`[extract-frames-ffmpeg] Very long video (${Math.round(duration/3600)}h), limiting to ${maxFrames} frames`);
-    } else if (isLongVideo) {
-      maxFrames = 7200;
-      console.log(`[extract-frames-ffmpeg] Long video (${Math.round(duration/3600)}h), limiting to ${maxFrames} frames`);
-    } else {
-      maxFrames = 10800;
-    }
-    
+    console.log(`[extract-frames-ffmpeg] Deterministic extraction for ${targetId}, fixed fps: ${fps}`);
+
+    // STABLE RESOLUTION: Always use 720p for consistent OCR inputs
+    const resolution = 720;
+
+    // Calculate frames based on video length with hard limits
+    let maxFrames = 5400; // Hard limit for any video (45 mins at 2fps)
+    if (duration > 7200) maxFrames = 3600; // 1 hour at 1fps equiv
+
     const framesToExtract = Math.min(expectedFrames, maxFrames);
-    
-    // For very long videos, we sample instead of extracting all frames
-    const sampleInterval = expectedFrames > framesToExtract 
-      ? Math.ceil(expectedFrames / framesToExtract) 
+    const sampleInterval = expectedFrames > framesToExtract
+      ? (expectedFrames / framesToExtract) // Floating point for precision
       : 1;
-    
-    const actualFramesToExtract = Math.ceil(expectedFrames / sampleInterval);
-    console.log(`[extract-frames-ffmpeg] Extracting ${actualFramesToExtract} frames (sample every ${sampleInterval}, isLongVideo: ${isLongVideo})`);
 
-    // For long videos, use reduced FPS to help Replicate process faster
-    const effectiveFps = isVeryLongVideo ? Math.min(fps, 1) : (isLongVideo ? Math.min(fps, 2) : fps);
-    if (effectiveFps !== fps) {
-      console.log(`[extract-frames-ffmpeg] Adjusted FPS from ${fps} to ${effectiveFps} for long video`);
-    }
+    const actualFramesToExtract = Math.floor(expectedFrames / sampleInterval);
+    console.log(`[extract-frames-ffmpeg] Extracting ${actualFramesToExtract} deterministic frames`);
+
+    // STABLE VARIABLES FOR LOGGING AND REPLICATE (Moat #2)
+    const isLongVideo = duration > 7200;
+    const isVeryLongVideo = duration > 14400;
+    const effectiveFps = 2; // Locked for determinism
 
     // Update progress
     await supabase.from(tableName).update({
@@ -103,18 +83,18 @@ serve(async (req) => {
     // Extract frames using ffmpeg via a remote service
     // We'll use replicate but with a more optimized approach, or fall back to direct extraction
     const REPLICATE_API_KEY = Deno.env.get("REPLICATE_API_KEY");
-    
+
     if (REPLICATE_API_KEY) {
       // Use Replicate with optimized settings based on video length
       const frames = await extractWithReplicate(
-        videoUrl, 
-        effectiveFps, 
-        REPLICATE_API_KEY, 
+        videoUrl,
+        effectiveFps,
+        REPLICATE_API_KEY,
         duration,
         isLongVideo,
         isVeryLongVideo
       );
-      
+
       if (frames && frames.length > 0) {
         // Store frame URLs with metadata about sampling
         await supabase.from(tableName).update({
@@ -125,10 +105,10 @@ serve(async (req) => {
           video_duration_seconds: duration,
         }).eq("id", targetId);
 
-        console.log(`[extract-frames-ffmpeg] Success: ${frames.length} frames extracted from ${Math.round(duration/60)}min video`);
-        
-        return new Response(JSON.stringify({ 
-          success: true, 
+        console.log(`[extract-frames-ffmpeg] Success: ${frames.length} frames extracted from ${Math.round(duration / 60)}min video`);
+
+        return new Response(JSON.stringify({
+          success: true,
           frameCount: frames.length,
           duration,
           isLongVideo,
@@ -155,9 +135,9 @@ serve(async (req) => {
 // SSRF Protection
 function isAllowedVideoUrl(url: string): boolean {
   if (!url || typeof url !== 'string') return false;
-  
+
   const trimmed = url.trim().toLowerCase();
-  
+
   // Block internal/private network URLs
   const blockedPatterns = [
     /^https?:\/\/localhost/i,
@@ -170,23 +150,23 @@ function isAllowedVideoUrl(url: string): boolean {
     /^file:/,
     /^ftp:/,
   ];
-  
+
   for (const pattern of blockedPatterns) {
     if (pattern.test(trimmed)) return false;
   }
-  
+
   // Allow our Supabase storage
   const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
   if (supabaseUrl && trimmed.includes(supabaseUrl.toLowerCase().replace('https://', '')) && trimmed.includes('/storage/')) {
     return true;
   }
-  
+
   // Allow known video platforms
   return trimmed.includes('loom.com/share/') ||
-         trimmed.includes('vimeo.com/') ||
-         trimmed.includes('player.vimeo.com/') ||
-         trimmed.includes('zoom.us/rec/') ||
-         trimmed.includes('zoom.us/recording/');
+    trimmed.includes('vimeo.com/') ||
+    trimmed.includes('player.vimeo.com/') ||
+    trimmed.includes('zoom.us/rec/') ||
+    trimmed.includes('zoom.us/recording/');
 }
 
 // Get video duration using HEAD request or probe
@@ -195,7 +175,7 @@ async function getVideoDuration(videoUrl: string): Promise<number> {
     // Try to get duration from video metadata via HEAD request
     const headResponse = await fetch(videoUrl, { method: 'HEAD' });
     const contentLength = headResponse.headers.get('content-length');
-    
+
     // Estimate duration based on file size if content-length available
     // Average bitrate assumption: 2Mbps for video
     if (contentLength) {
@@ -205,7 +185,7 @@ async function getVideoDuration(videoUrl: string): Promise<number> {
         return Math.max(30, estimatedDuration); // Minimum 30 seconds
       }
     }
-    
+
     // Default fallback
     return 300; // 5 minutes default
   } catch (error) {
@@ -216,8 +196,8 @@ async function getVideoDuration(videoUrl: string): Promise<number> {
 
 // Extract frames using Replicate with optimized settings for long videos
 async function extractWithReplicate(
-  videoUrl: string, 
-  fps: number, 
+  videoUrl: string,
+  fps: number,
   apiKey: string,
   duration: number,
   isLongVideo: boolean = false,
@@ -230,7 +210,7 @@ async function extractWithReplicate(
   const modelResponse = await fetch("https://api.replicate.com/v1/models/fofr/video-to-frames", {
     headers: { "Authorization": `Bearer ${apiKey}` },
   });
-  
+
   if (!modelResponse.ok) throw new Error(`Failed to fetch model info: ${modelResponse.status}`);
   const modelData = await modelResponse.json();
   const latestVersionId = modelData.latest_version?.id;
@@ -242,20 +222,20 @@ async function extractWithReplicate(
   // Long videos: 720px (still HD, text readable)
   // Very long videos: 540px (reduced but still legible)
   const resolution = isVeryLongVideo ? 540 : (isLongVideo ? 720 : 1080);
-  
-  console.log(`[extractWithReplicate] Starting extraction: fps=${fps}, resolution=${resolution}, duration=${Math.round(duration/60)}min`);
+
+  console.log(`[extractWithReplicate] Starting extraction: fps=${fps}, resolution=${resolution}, duration=${Math.round(duration / 60)}min`);
 
   // Create prediction with optimized settings
   let prediction = null;
   let retryAttempts = 0;
   const maxRetries = isLongVideo ? 15 : 10; // More retries for long videos
-  
+
   while (!prediction && retryAttempts < maxRetries) {
     try {
       prediction = await replicate.predictions.create({
         version: latestVersionId,
-        input: { 
-          video: videoUrl, 
+        input: {
+          video: videoUrl,
           fps: fps,
           width: resolution,
         },
@@ -278,7 +258,7 @@ async function extractWithReplicate(
 
   // Poll for completion with generous timeout for long videos (2+ hours)
   let result = prediction;
-  
+
   // LONG VIDEO TIMEOUT SCALING:
   // - Short videos (< 2h): 30 minutes max
   // - Long videos (2-4h): 60 minutes max  
@@ -295,24 +275,24 @@ async function extractWithReplicate(
   } else {
     maxWaitTime = Math.max(duration * 3000, 1800000); // At least 30 min, or 3x duration
   }
-  
+
   const startTime = Date.now();
   let lastLogTime = startTime;
-  
+
   while (result.status !== "succeeded" && result.status !== "failed") {
     const elapsed = Date.now() - startTime;
     if (elapsed > maxWaitTime) {
-      console.warn(`[extractWithReplicate] Timeout after ${Math.round(elapsed/60000)} minutes for ${Math.round(duration/60)}min video`);
-      throw new Error(`Frame extraction timeout after ${Math.round(elapsed/60000)} minutes`);
+      console.warn(`[extractWithReplicate] Timeout after ${Math.round(elapsed / 60000)} minutes for ${Math.round(duration / 60)}min video`);
+      throw new Error(`Frame extraction timeout after ${Math.round(elapsed / 60000)} minutes`);
     }
-    
+
     // Poll every 5 seconds for short videos, 10 seconds for long videos
     await new Promise((r) => setTimeout(r, isLongVideo ? 10000 : 5000));
     result = await replicate.predictions.get(prediction.id);
-    
+
     // Log progress every minute
     if (Date.now() - lastLogTime > 60000) {
-      console.log(`[extractWithReplicate] Status: ${result.status}, elapsed: ${Math.round(elapsed/60000)}min/${Math.round(maxWaitTime/60000)}min`);
+      console.log(`[extractWithReplicate] Status: ${result.status}, elapsed: ${Math.round(elapsed / 60000)}min/${Math.round(maxWaitTime / 60000)}min`);
       lastLogTime = Date.now();
     }
   }

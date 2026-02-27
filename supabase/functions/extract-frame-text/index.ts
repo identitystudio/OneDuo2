@@ -10,6 +10,8 @@ interface FrameAnalysis {
     frameIndex: number;
     timestamp: number;
     text: string;
+    ocr_confidence: number;
+    ui_state: string;
     textType: 'slide' | 'document' | 'ui' | 'code' | 'other';
     emphasisFlags: {
         highlight_detected: boolean;
@@ -82,43 +84,37 @@ serve(async (req) => {
                         {
                             input: {
                                 image: frameUrl,
-                                prompt: `Analyze this image from a tutorial video.
-                                
-                                Extract:
-                                1. ALL visible text (OCR).
-                                2. Detailed visual description: Focus on the layout, UI elements, and crucially, the embodied presence of the speaker (facial expressions, hand gestures, positioning).
-                                3. Type of content: slide, document, ui, code, or other.
-                                4. Visual transitions/interactions: Cuts, screen switches, cursor movement, or whiteboard changes. Address "where" the instructor is looking or pointing.
-                                5. Speaker Presence: Detailed embodied state (posture, gestures, engagement level) and general 'vibe'.
-                                6. Visual emphasis cues: highlights, bold, cursor focus, zoom.
-                                7. The instructor's intent: what should the user build or do?
-                                
-                                ${transcriptContext ? `Context from transcript: "${transcriptContext}"` : ''}
-                                
-                                Return ONLY a JSON object in this format:
-                                {
-                                  "text": "all text found",
-                                  "visualDescription": "High-fidelity description for AI reconstruction, including speaker physical presence",
-                                  "textType": "slide|document|ui|code|other",
-                                  "emphasisFlags": {
-                                    "highlight_detected": boolean,
-                                    "cursor_pause": boolean,
-                                    "zoom_focus": boolean,
-                                    "text_selected": boolean,
-                                    "lingering_frame": boolean,
-                                    "bold_text": boolean,
-                                    "underline_detected": boolean
-                                  },
-                                  "keyElements": ["list", "of", "visual", "elements"],
-                                  "instructorIntent": "actionable build instruction",
-                                  "prosody": {
-                                    "tone": "neutral|emphatic|etc",
-                                    "pacing": "normal|etc",
-                                    "volume": "normal|etc",
-                                    "parenthetical": "(note about vibe/tone)"
-                                  },
-                                  "dependsOnPrevious": boolean
-                                }`,
+                                prompt: `You are an expert observer watching a masterclass. Describe this moment exactly as a human expert would.
+
+                                 PSYCHOLOGICAL & ARCHITECTURAL PERCEPTION:
+                                 1. Cognitive & Visual State: Identify if this is a "Static UI" (slide/document), "Dynamic UI" (tool/code interaction), or "Talking Head".
+                                 2. Social Posture: Interpret the instructor's "stance" towards the audience. 
+                                 3. FOCUS INTENSITY: Capture cursor placement, text highlights, and specific UI elements being discussed.
+                                 4. OCR QUALITY: Assess the readability of the text on screen. 
+
+                                 CRITICAL: Detect whenever the UI state changes (e.g. from slide to code).
+                                 
+                                 ${transcriptContext ? `Context from transcript: "${transcriptContext.substring(0, 500)}"` : ''}
+
+                                 Return ONLY a JSON object in this format:
+                                 {
+                                   "text": "all OCR text relevant to this moment",
+                                   "ocr_confidence": 0-1,
+                                   "ui_state": "slide|code|ui|walking|demonstration",
+                                   "visualDescription": "High-fidelity psychological narrative.",
+                                   "emphasisFlags": {
+                                     "highlight_detected": boolean,
+                                     "cursor_pause": boolean,
+                                     "zoom_focus": boolean,
+                                     "text_selected": boolean,
+                                     "lingering_frame": boolean,
+                                     "bold_text": boolean,
+                                     "underline_detected": boolean
+                                   },
+                                   "keyElements": ["list", "of", "critical", "elements"],
+                                   "instructorIntent": "The deeper 'why' and actionable build instruction",
+                                   "dependsOnPrevious": boolean
+                                 }`,
                                 max_new_tokens: 1024,
                                 history: []
                             }
@@ -139,19 +135,21 @@ serve(async (req) => {
                         frameIndex,
                         timestamp,
                         text: parsed.text || '',
-                        visualDescription: parsed.visualDescription || '',
-                        textType: parsed.textType || 'other',
+                        ocr_confidence: parsed.ocr_confidence || 0.8,
+                        ui_state: parsed.ui_state || 'unknown',
+                        visualDescription: parsed.visualDescription || parsed.visual_description || '',
+                        textType: parsed.ui_state || 'other',
                         emphasisFlags: {
-                            highlight_detected: !!parsed.emphasisFlags?.highlight_detected,
-                            cursor_pause: !!parsed.emphasisFlags?.cursor_pause,
-                            zoom_focus: !!parsed.emphasisFlags?.zoom_focus,
-                            text_selected: !!parsed.emphasisFlags?.text_selected,
-                            lingering_frame: !!parsed.emphasisFlags?.lingering_frame,
-                            bold_text: !!parsed.emphasisFlags?.bold_text,
-                            underline_detected: !!parsed.emphasisFlags?.underline_detected,
+                            highlight_detected: !!(parsed.emphasisFlags?.highlight_detected || parsed.emphasisFlags?.highlightDetected),
+                            cursor_pause: !!(parsed.emphasisFlags?.cursor_pause || parsed.emphasisFlags?.cursorPause),
+                            zoom_focus: !!(parsed.emphasisFlags?.zoom_focus || parsed.emphasisFlags?.zoomFocus),
+                            text_selected: !!(parsed.emphasisFlags?.text_selected || parsed.emphasisFlags?.textSelected),
+                            lingering_frame: !!(parsed.emphasisFlags?.lingering_frame || parsed.emphasisFlags?.lingeringFrame),
+                            bold_text: !!(parsed.emphasisFlags?.bold_text || parsed.emphasisFlags?.boldText),
+                            underline_detected: !!(parsed.emphasisFlags?.underline_detected || parsed.emphasisFlags?.underlineDetected),
                         },
-                        keyElements: parsed.keyElements || [],
-                        instructorIntent: parsed.instructorIntent || '',
+                        keyElements: parsed.keyElements || parsed.key_elements || [],
+                        instructorIntent: parsed.instructorIntent || parsed.instructor_intent || '',
                         prosody: parsed.prosody || { tone: 'neutral', pacing: 'normal', volume: 'normal', parenthetical: '' },
                         dependsOnPrevious: !!parsed.dependsOnPrevious
                     };
@@ -169,6 +167,8 @@ serve(async (req) => {
                     frameIndex,
                     timestamp,
                     text: '[Analysis failed]',
+                    ocr_confidence: 0,
+                    ui_state: 'error',
                     textType: 'other',
                     emphasisFlags: { highlight_detected: false, cursor_pause: false, zoom_focus: false, text_selected: false, lingering_frame: false, bold_text: false, underline_detected: false },
                     keyElements: [],

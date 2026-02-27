@@ -50,19 +50,22 @@ async function analyzeFramesWithReplicate(
                             image: frameUrl,
                             prompt: `You are an expert observer watching a masterclass. Describe this moment exactly as a human expert would, focusing on what matters most.
 
-                                 PSYCHOLOGICAL LAYERED PERCEPTION:
-                                 1. Social Posture: Interpret the instructor's "stance" towards the audience. Are they open/inviting, authoritative/closed, or guarded?
-                                 2. Focus Intensity: Distinguish between "effortless flow" (mastery) vs. "cognitive load" (searching for words or solving a problem live).
-                                 3. Temporal Weight & Narrative Role: Does this moment feel like a "Casual Intro," a "Heavy Transition," or the "Thematic Crux" (the peak complexity or most important point)?
-                                 4. Subconscious Signals: Note subtle cues like microscopic hesitations, micro-expressions, or specific hand placements that suggest comfort or tension.
+                                 PSYCHOLOGICAL & ARCHITECTURAL PERCEPTION:
+                                 1. Cognitive & Visual State: Identify if this is a "Static UI" (slide/document), "Dynamic UI" (tool/code interaction), or "Talking Head".
+                                 2. Social Posture: Interpret the instructor's "stance" towards the audience. 
+                                 3. FOCUS INTENSITY: Capture cursor placement, text highlights, and specific UI elements being discussed.
+                                 4. OCR QUALITY: Assess the readability of the text on screen. 
 
+                                 CRITICAL: Detect whenever the UI state changes (e.g. from slide to code).
+                                 
                                  ${transcriptContext ? `Context from transcript: "${transcriptContext.substring(0, 500)}"` : ''}
 
                                  Return ONLY a JSON object in this format:
                                  {
                                    "text": "all OCR text relevant to this moment",
-                                   "visualDescription": "High-fidelity psychological narrative. Example: 'The speaker appears relaxed... posture and pacing suggest comfort... introductory moment rather than key emphasis.'",
-                                   "textType": "slide|document|ui|code|other",
+                                   "ocr_confidence": 0-1,
+                                   "ui_state": "slide|code|ui|walking|demonstration",
+                                   "visualDescription": "High-fidelity psychological narrative.",
                                    "emphasisFlags": {
                                      "highlight_detected": boolean,
                                      "cursor_pause": boolean,
@@ -72,20 +75,8 @@ async function analyzeFramesWithReplicate(
                                      "bold_text": boolean,
                                      "underline_detected": boolean
                                    },
-                                   "psychologicalLayer": {
-                                     "socialPosture": "open|authoritative|guarded|neutral",
-                                     "cognitiveLoad": "low|moderate|high",
-                                     "engagementIntent": "explaining|waiting|transitioning|demonstrating",
-                                     "confidenceLevel": 0-1
-                                   },
-                                   "keyElements": ["list", "of", "the", "3-5", "most", "critical", "elements"],
+                                   "keyElements": ["list", "of", "critical", "elements"],
                                    "instructorIntent": "The deeper 'why' and actionable build instruction",
-                                   "prosody": {
-                                     "tone": "string",
-                                     "pacing": "string",
-                                     "volume": "string",
-                                     "parenthetical": "(screenplay note reflecting the mood and weight)"
-                                   },
                                    "dependsOnPrevious": boolean
                                  }`,
                             max_new_tokens: 1024,
@@ -483,6 +474,53 @@ async function buildPDF(
                 y -= 4;
             }
             y -= 8;
+        }
+
+        // Layer E: Internal Self-Diagnostic Report (Award-Grade Cognition)
+        const qualityReport = mod.quality_report || {};
+        if (qualityReport.quality_score !== undefined) {
+            ensureSpace(50);
+            currentPage.drawRectangle({
+                x: MARGIN, y: y - 60, width: CONTENT_WIDTH, height: 55,
+                color: rgb(0.95, 0.95, 0.95),
+                borderColor: rgb(0.8, 0.2, 0.2),
+                borderWidth: 1
+            });
+
+            currentPage.drawText('Layer E: Internal Self-Diagnostic Report', {
+                x: MARGIN + 5, y: y - 10, size: 10, font: boldFont, color: rgb(0.6, 0.1, 0.1)
+            });
+
+            const scoreText = `Quality Score: ${qualityReport.quality_score}/100 | OCR Coverage: ${(qualityReport.ocr_coverage * 100).toFixed(0)}% | Visual Clarity: ${(qualityReport.visual_clarity * 100).toFixed(0)}%`;
+            currentPage.drawText(scoreText, { x: MARGIN + 10, y: y - 22, size: 8, font: boldFont, color: rgb(0, 0, 0) });
+
+            if (qualityReport.gaps && qualityReport.gaps.length > 0) {
+                const gapsText = `Identified Gaps: ${qualityReport.gaps.join(', ')}`;
+                drawWrappedText(gapsText, { x: MARGIN + 10, size: 7, color: rgb(0.4, 0.4, 0.4) });
+            }
+            y -= 65;
+        }
+
+        // Action SOPs
+        const sops = mod.action_sops || [];
+        if (sops.length > 0) {
+            ensureSpace(30);
+            currentPage.drawText('Action SOPs (Repeatable Procedures)', {
+                x: MARGIN, y, size: 12, font: boldFont, color: rgb(0, 0.4, 0),
+            });
+            y -= 14;
+
+            for (const sop of sops) {
+                ensureSpace(18);
+                drawWrappedText(`[SOP] ${sop.title}`, { x: MARGIN + 5, size: 9, usedFont: boldFont, color: rgb(0, 0.3, 0) });
+                if (sop.procedure) {
+                    for (const pStep of sop.procedure) {
+                        drawWrappedText(`- ${pStep}`, { x: MARGIN + 15, size: 8 });
+                    }
+                }
+                y -= 4;
+            }
+            y -= 10;
         }
 
         // ========== TRANSCRIPT ==========
@@ -1031,7 +1069,8 @@ serve(async (req) => {
             transformation_artifact_id,
             transformation_artifacts(
               key_moments_index, concepts_frameworks,
-              hidden_patterns, implementation_steps
+              hidden_patterns, implementation_steps,
+              quality_report, action_sops
             )
           `)
                     .eq("course_id", courseId)
@@ -1046,11 +1085,12 @@ serve(async (req) => {
                     // Single-module: use course data directly
                     // Fetch transformation_artifacts for the course
                     let keyMoments: any = null, concepts: any = null, patterns: any = null, implSteps: any = null;
+                    let qualityReport: any = null, actionSops: any = null;
 
                     if ((course as any).transformation_artifact_id) {
                         const { data: artifact } = await supabase
                             .from("transformation_artifacts")
-                            .select("key_moments_index, concepts_frameworks, hidden_patterns, implementation_steps")
+                            .select("key_moments_index, concepts_frameworks, hidden_patterns, implementation_steps, quality_report, action_sops")
                             .eq("id", (course as any).transformation_artifact_id)
                             .single();
 
@@ -1059,6 +1099,8 @@ serve(async (req) => {
                             concepts = artifact.concepts_frameworks;
                             patterns = artifact.hidden_patterns;
                             implSteps = artifact.implementation_steps;
+                            qualityReport = artifact.quality_report;
+                            actionSops = artifact.action_sops;
                         }
                     }
 
@@ -1077,6 +1119,8 @@ serve(async (req) => {
                         concepts_frameworks: concepts,
                         hidden_patterns: patterns,
                         implementation_steps: implSteps,
+                        quality_report: qualityReport,
+                        action_sops: actionSops,
                     }];
                 } else {
                     // Multi-module
@@ -1093,6 +1137,8 @@ serve(async (req) => {
                         concepts_frameworks: (m.transformation_artifacts as any)?.concepts_frameworks,
                         hidden_patterns: (m.transformation_artifacts as any)?.hidden_patterns,
                         implementation_steps: (m.transformation_artifacts as any)?.implementation_steps,
+                        quality_report: (m.transformation_artifacts as any)?.quality_report,
+                        action_sops: (m.transformation_artifacts as any)?.action_sops,
                     }));
                 }
 

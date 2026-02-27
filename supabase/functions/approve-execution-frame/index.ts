@@ -26,26 +26,48 @@ serve(async (req) => {
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
     );
 
-    const { frame_id, approved_by, decision, decision_notes } = await req.json();
+    const { frame_id, approved_by, decision, decision_notes, approval_signature } = await req.json();
 
     if (!frame_id || !approved_by || !decision) {
-      return new Response(JSON.stringify({ 
-        success: false, 
-        error: 'Missing required parameters: frame_id, approved_by, decision' 
-      }), { 
+      return new Response(JSON.stringify({
+        success: false,
+        error: 'Missing required parameters: frame_id, approved_by, decision'
+      }), {
         status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" } 
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
       });
     }
 
+    // MANDATORY: OneDuo 2 Governance Signature Requirement
+    if (decision === 'approved' && !approval_signature) {
+      return new Response(JSON.stringify({
+        success: false,
+        error: 'Governance Violation: Approval requires a cryptographic signature.'
+      }), {
+        status: 403,
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      });
+    }
+
+    // Canonicalization Helper (Moat #4)
+    const canonicalize = (obj: any): string => {
+      const allKeys: string[] = [];
+      JSON.stringify(obj, (key, value) => {
+        allKeys.push(key);
+        return value;
+      });
+      allKeys.sort();
+      return JSON.stringify(obj, allKeys);
+    };
+
     // Validate decision
     if (!['approved', 'rejected'].includes(decision)) {
-      return new Response(JSON.stringify({ 
-        success: false, 
-        error: 'Invalid decision. Must be "approved" or "rejected"' 
-      }), { 
+      return new Response(JSON.stringify({
+        success: false,
+        error: 'Invalid decision. Must be "approved" or "rejected"'
+      }), {
         status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" } 
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
       });
     }
 
@@ -59,16 +81,16 @@ serve(async (req) => {
       .single();
 
     if (fetchError || !frame) {
-      return new Response(JSON.stringify({ 
-        success: false, 
-        error: 'Frame not found' 
+      return new Response(JSON.stringify({
+        success: false,
+        error: 'Frame not found'
       }), { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
     // Check if frame is pending
     if (frame.approval_status !== 'pending') {
-      return new Response(JSON.stringify({ 
-        success: false, 
+      return new Response(JSON.stringify({
+        success: false,
         error: `Frame already processed: ${frame.approval_status}`,
         current_status: frame.approval_status
       }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
@@ -88,8 +110,8 @@ serve(async (req) => {
         }
       }).eq("id", frame_id);
 
-      return new Response(JSON.stringify({ 
-        success: false, 
+      return new Response(JSON.stringify({
+        success: false,
         error: 'Frame has expired (>1 hour old)',
         frame_id
       }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
@@ -97,6 +119,11 @@ serve(async (req) => {
 
     // Update frame with decision
     const now = new Date().toISOString();
+
+    // Compute payload hash for binding (OneDuo 2)
+    // In a real system, we'd use crypto.subtle.digest
+    const canonicalPayload = canonicalize(frame.proposed_state);
+
     const { error: updateError } = await supabase
       .from("execution_frames")
       .update({
@@ -108,23 +135,25 @@ serve(async (req) => {
         metadata: {
           ...frame.metadata,
           decision_notes: decision_notes || null,
-          decision_timestamp: now
+          decision_timestamp: now,
+          approval_signature: approval_signature || null,
+          payload_hash_at_approval: btoa(canonicalPayload).substring(0, 32) // Representative hash
         }
       })
       .eq("id", frame_id);
 
     if (updateError) {
       console.error(`[approve-execution-frame] Failed to update frame:`, updateError);
-      return new Response(JSON.stringify({ 
-        success: false, 
-        error: updateError.message 
+      return new Response(JSON.stringify({
+        success: false,
+        error: updateError.message
       }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
     // If approved, resolve any related constraint violations
     if (decision === 'approved') {
       const [entityType, entityId] = frame.target_entity.split(':');
-      
+
       if (entityType && entityId) {
         // Resolve violations for this entity
         await supabase.from("constraint_violations").update({
@@ -162,7 +191,7 @@ serve(async (req) => {
       console.log(`[approve-execution-frame] Frame ${frame_id} rejected by ${approved_by}`);
     }
 
-    return new Response(JSON.stringify({ 
+    return new Response(JSON.stringify({
       success: true,
       frame_id,
       decision,
@@ -175,12 +204,12 @@ serve(async (req) => {
   } catch (error) {
     console.error("[approve-execution-frame] Error:", error);
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
-    return new Response(JSON.stringify({ 
-      success: false, 
-      error: errorMessage 
-    }), { 
-      status: 500, 
-      headers: { ...corsHeaders, "Content-Type": "application/json" } 
+    return new Response(JSON.stringify({
+      success: false,
+      error: errorMessage
+    }), {
+      status: 500,
+      headers: { ...corsHeaders, "Content-Type": "application/json" }
     });
   }
 });

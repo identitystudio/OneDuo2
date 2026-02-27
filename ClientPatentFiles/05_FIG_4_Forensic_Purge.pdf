@@ -1,0 +1,625 @@
+%PDF-1.3
+%ºß¬à
+3 0 obj
+<</Type /Page
+/Parent 1 0 R
+/Resources 2 0 R
+/MediaBox [0 0 792. 612.]
+/Contents 4 0 R
+>>
+endobj
+4 0 obj
+<<
+/Length 3960
+>>
+stream
+14.4018000000000015 w
+0 G
+q
+72. 0. 0. -72. 0. 612. cm
+q
+1. 0. 0. 1. 1. 0.875 cm
+1. w
+0. g
+q
+1. 0. 0. 1. 0. 0. cm
+0. 0. 9. 6.75 re
+W
+n
+q
+q
+q
+BT
+/F9 14 Tf
+16.0999999999999979 TL
+0 g
+0.01125 0. 0. -0.01125 4.2943579101562497 0.3375 Tm
+(FIG. 4) Tj
+ET
+Q
+Q
+q
+1.5 w
+0. G
+0.01125 0. 0. 0.01125 0. 0. cm
+80. 80. m
+240. 80. l
+240. 160. l
+80. 160. l
+h
+S
+Q
+q
+q
+BT
+/F9 11 Tf
+12.6499999999999986 TL
+0 g
+0.01125 0. 0. -0.01125 1.0687499999999999 1.1812499999999999 Tm
+(400) Tj
+ET
+Q
+Q
+q
+q
+BT
+/F9 10 Tf
+11.5 TL
+0 g
+0.01125 0. 0. -0.01125 1.578076171875 1.40625 Tm
+(SOURCE) Tj
+ET
+Q
+Q
+q
+q
+BT
+/F9 10 Tf
+11.5 TL
+0 g
+0.01125 0. 0. -0.01125 1.5156463623046874 1.575 Tm
+(MATERIAL) Tj
+ET
+Q
+Q
+q
+1.5 w
+0. G
+0.01125 0. 0. 0.01125 0. 0. cm
+240. 120. m
+300. 120. l
+S
+Q
+q
+0. g
+0.01125 0. 0. 0.01125 0. 0. cm
+300. 120. m
+290. 115. l
+290. 125. l
+h
+f
+Q
+q
+1.5 w
+0. G
+0.01125 0. 0. 0.01125 0. 0. cm
+300. 80. m
+460. 80. l
+460. 160. l
+300. 160. l
+h
+S
+Q
+q
+q
+BT
+/F9 11 Tf
+12.6499999999999986 TL
+0 g
+0.01125 0. 0. -0.01125 3.5437499999999997 1.1812499999999999 Tm
+(402) Tj
+ET
+Q
+Q
+q
+q
+BT
+/F9 10 Tf
+11.5 TL
+0 g
+0.01125 0. 0. -0.01125 3.8563110351562497 1.40625 Tm
+(CANONICALIZE) Tj
+ET
+Q
+Q
+q
+1.5 w
+0. G
+0.01125 0. 0. 0.01125 0. 0. cm
+460. 120. m
+520. 120. l
+S
+Q
+q
+0. g
+0.01125 0. 0. 0.01125 0. 0. cm
+520. 120. m
+510. 115. l
+510. 125. l
+h
+f
+Q
+q
+2. w
+0. G
+0.01125 0. 0. 0.01125 0. 0. cm
+520. 80. m
+700. 80. l
+700. 160. l
+520. 160. l
+h
+S
+Q
+q
+q
+BT
+/F9 11 Tf
+12.6499999999999986 TL
+0 g
+0.01125 0. 0. -0.01125 6.0187499999999998 1.1812499999999999 Tm
+(404) Tj
+ET
+Q
+Q
+q
+q
+BT
+/F9 10 Tf
+11.5 TL
+0 g
+0.01125 0. 0. -0.01125 6.3977233886718752 1.40625 Tm
+(CRYPTOGRAPHIC) Tj
+ET
+Q
+Q
+q
+q
+BT
+/F9 10 Tf
+11.5 TL
+0 g
+0.01125 0. 0. -0.01125 6.496847534179687 1.575 Tm
+(FINGERPRINT) Tj
+ET
+Q
+Q
+q
+1.5 w
+0. G
+0.01125 0. 0. 0.01125 0. 0. cm
+160. 160. m
+160. 280. l
+S
+Q
+q
+0. g
+0.01125 0. 0. 0.01125 0. 0. cm
+160. 280. m
+155. 270. l
+165. 270. l
+h
+f
+Q
+q
+1.5 w
+0. G
+0.01125 0. 0. 0.01125 0. 0. cm
+80. 280. m
+240. 280. l
+240. 360. l
+80. 360. l
+h
+S
+Q
+q
+q
+BT
+/F9 11 Tf
+12.6499999999999986 TL
+0 g
+0.01125 0. 0. -0.01125 1.0687499999999999 3.4312499999999999 Tm
+(406) Tj
+ET
+Q
+Q
+q
+q
+BT
+/F9 10 Tf
+11.5 TL
+0 g
+0.01125 0. 0. -0.01125 1.5219635009765624 3.65625 Tm
+(DELETION) Tj
+ET
+Q
+Q
+q
+q
+BT
+/F9 10 Tf
+11.5 TL
+0 g
+0.01125 0. 0. -0.01125 1.6156768798828125 3.8249999999999997 Tm
+(EVENT) Tj
+ET
+Q
+Q
+q
+q
+BT
+/F9 9 Tf
+10.3499999999999996 TL
+0 g
+0.01125 0. 0. -0.01125 4.890921020507812 2.1374999999999997 Tm
+(1st) Tj
+ET
+Q
+Q
+q
+q
+BT
+/F9 9 Tf
+10.3499999999999996 TL
+0 g
+0.01125 0. 0. -0.01125 1.3865624999999999 2.4750000000000001 Tm
+(2nd) Tj
+ET
+Q
+Q
+q
+1.5 w
+0. G
+0.01125 0. 0. 0.01125 0. 0. cm
+610. 160. m
+610. 220. l
+S
+Q
+q
+0. g
+0.01125 0. 0. 0.01125 0. 0. cm
+610. 220. m
+605. 210. l
+615. 210. l
+h
+f
+Q
+q
+1.5 w
+0. G
+0.01125 0. 0. 0.01125 0. 0. cm
+240. 320. m
+380. 320. l
+S
+Q
+q
+0. g
+0.01125 0. 0. 0.01125 0. 0. cm
+380. 320. m
+370. 315. l
+370. 325. l
+h
+f
+Q
+q
+2.5 w
+0. G
+0.01125 0. 0. 0.01125 0. 0. cm
+380. 220. m
+700. 220. l
+700. 360. l
+380. 360. l
+h
+S
+Q
+q
+q
+BT
+/F9 11 Tf
+12.6499999999999986 TL
+0 g
+0.01125 0. 0. -0.01125 4.4437499999999996 2.7562500000000001 Tm
+(408) Tj
+ET
+Q
+Q
+q
+q
+BT
+/F9 10 Tf
+11.5 TL
+0 g
+0.01125 0. 0. -0.01125 5.5404052734375 3.09375 Tm
+(IMMUTABLE PURGE) Tj
+ET
+Q
+Q
+q
+q
+BT
+/F9 10 Tf
+11.5 TL
+0 g
+0.01125 0. 0. -0.01125 5.770376586914062 3.2624999999999997 Tm
+(AUDIT LOG) Tj
+ET
+Q
+Q
+q
+0.5 w
+0. G
+0.01125 0. 0. 0.01125 0. 0. cm
+400. 310. m
+680. 310. l
+S
+Q
+q
+q
+BT
+/F9 8 Tf
+9.1999999999999993 TL
+0 g
+0.01125 0. 0. -0.01125 4.6124999999999998 3.6899999999999999 Tm
+(artifact_id | file_hash | purged_at) Tj
+ET
+Q
+Q
+q
+0.5 w
+0. G
+0.01125 0. 0. 0.01125 0. 0. cm
+400. 340. m
+680. 340. l
+S
+Q
+q
+q
+BT
+/F9 8 Tf
+9.1999999999999993 TL
+0 g
+0.01125 0. 0. -0.01125 4.6124999999999998 3.9937499999999999 Tm
+([bound to artifact]) Tj
+ET
+Q
+Q
+q
+q
+BT
+/F11 11 Tf
+12.6499999999999986 TL
+0 g
+0.01125 0. 0. -0.01125 2.3140420532226562 4.7249999999999996 Tm
+(FIG. 4 illustrates an embodiment of forensic purge certification with hash-before-delete.) Tj
+ET
+Q
+Q
+Q
+Q
+Q
+Q
+endstream
+endobj
+1 0 obj
+<</Type /Pages
+/Kids [3 0 R ]
+/Count 1
+>>
+endobj
+5 0 obj
+<<
+/Type /Font
+/BaseFont /Helvetica
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+6 0 obj
+<<
+/Type /Font
+/BaseFont /Helvetica-Bold
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+7 0 obj
+<<
+/Type /Font
+/BaseFont /Helvetica-Oblique
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+8 0 obj
+<<
+/Type /Font
+/BaseFont /Helvetica-BoldOblique
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+9 0 obj
+<<
+/Type /Font
+/BaseFont /Courier
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+10 0 obj
+<<
+/Type /Font
+/BaseFont /Courier-Bold
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+11 0 obj
+<<
+/Type /Font
+/BaseFont /Courier-Oblique
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+12 0 obj
+<<
+/Type /Font
+/BaseFont /Courier-BoldOblique
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+13 0 obj
+<<
+/Type /Font
+/BaseFont /Times-Roman
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+14 0 obj
+<<
+/Type /Font
+/BaseFont /Times-Bold
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+15 0 obj
+<<
+/Type /Font
+/BaseFont /Times-Italic
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+16 0 obj
+<<
+/Type /Font
+/BaseFont /Times-BoldItalic
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+17 0 obj
+<<
+/Type /Font
+/BaseFont /ZapfDingbats
+/Subtype /Type1
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+18 0 obj
+<<
+/Type /Font
+/BaseFont /Symbol
+/Subtype /Type1
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+2 0 obj
+<<
+/ProcSet [/PDF /Text /ImageB /ImageC /ImageI]
+/Font <<
+/F1 5 0 R
+/F2 6 0 R
+/F3 7 0 R
+/F4 8 0 R
+/F5 9 0 R
+/F6 10 0 R
+/F7 11 0 R
+/F8 12 0 R
+/F9 13 0 R
+/F10 14 0 R
+/F11 15 0 R
+/F12 16 0 R
+/F13 17 0 R
+/F14 18 0 R
+>>
+/XObject <<
+>>
+>>
+endobj
+19 0 obj
+<<
+/Producer (jsPDF 3.0.4)
+/CreationDate (D:20260104113532+08'00')
+>>
+endobj
+20 0 obj
+<<
+/Type /Catalog
+/Pages 1 0 R
+/OpenAction [3 0 R /FitH null]
+/PageLayout /OneColumn
+>>
+endobj
+xref
+0 21
+0000000000 65535 f 
+0000004132 00000 n 
+0000005949 00000 n 
+0000000015 00000 n 
+0000000120 00000 n 
+0000004189 00000 n 
+0000004314 00000 n 
+0000004444 00000 n 
+0000004577 00000 n 
+0000004714 00000 n 
+0000004837 00000 n 
+0000004966 00000 n 
+0000005098 00000 n 
+0000005234 00000 n 
+0000005362 00000 n 
+0000005489 00000 n 
+0000005618 00000 n 
+0000005751 00000 n 
+0000005853 00000 n 
+0000006197 00000 n 
+0000006283 00000 n 
+trailer
+<<
+/Size 21
+/Root 20 0 R
+/Info 19 0 R
+/ID [ <69A806BAA889CF12087174DE6797365A> <69A806BAA889CF12087174DE6797365A> ]
+>>
+startxref
+6387
+%%EOF

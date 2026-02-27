@@ -1,0 +1,648 @@
+%PDF-1.3
+%ºß¬à
+3 0 obj
+<</Type /Page
+/Parent 1 0 R
+/Resources 2 0 R
+/MediaBox [0 0 792. 612.]
+/Contents 4 0 R
+>>
+endobj
+4 0 obj
+<<
+/Length 4637
+>>
+stream
+14.4018000000000015 w
+0 G
+q
+72. 0. 0. -72. 0. 612. cm
+q
+1. 0. 0. 1. 1. 0.875 cm
+1. w
+0. g
+q
+1. 0. 0. 1. 0. 0. cm
+0. 0. 9. 6.75 re
+W
+n
+q
+q
+q
+BT
+/F9 14 Tf
+16.0999999999999979 TL
+0 g
+0.01125 0. 0. -0.01125 4.2943579101562497 0.3375 Tm
+(FIG. 3) Tj
+ET
+Q
+Q
+q
+1.5 w
+0. G
+[5. 3.] 0. d
+0.01125 0. 0. 0.01125 0. 0. cm
+300. 60. m
+500. 60. l
+500. 130. l
+300. 130. l
+h
+S
+Q
+q
+q
+BT
+/F9 11 Tf
+12.6499999999999986 TL
+0 g
+0.01125 0. 0. -0.01125 3.5437499999999997 0.9562499999999999 Tm
+(300) Tj
+ET
+Q
+Q
+q
+q
+BT
+/F9 10 Tf
+11.5 TL
+0 g
+0.01125 0. 0. -0.01125 4.203176879882812 1.125 Tm
+(EXTERNAL) Tj
+ET
+Q
+Q
+q
+q
+BT
+/F9 10 Tf
+11.5 TL
+0 g
+0.01125 0. 0. -0.01125 3.9743865966796874 1.29375 Tm
+(REQUEST PAYLOAD) Tj
+ET
+Q
+Q
+q
+1.5 w
+0. G
+0.01125 0. 0. 0.01125 0. 0. cm
+400. 130. m
+400. 180. l
+S
+Q
+q
+0. g
+0.01125 0. 0. 0.01125 0. 0. cm
+400. 180. m
+395. 170. l
+405. 170. l
+h
+f
+Q
+q
+1.5 w
+0. G
+0.01125 0. 0. 0.01125 0. 0. cm
+300. 180. m
+500. 180. l
+500. 250. l
+300. 250. l
+h
+S
+Q
+q
+q
+BT
+/F9 11 Tf
+12.6499999999999986 TL
+0 g
+0.01125 0. 0. -0.01125 3.5437499999999997 2.3062499999999999 Tm
+(302) Tj
+ET
+Q
+Q
+q
+q
+BT
+/F9 10 Tf
+11.5 TL
+0 g
+0.01125 0. 0. -0.01125 3.9469482421874997 2.4750000000000001 Tm
+(CANONICALIZATION) Tj
+ET
+Q
+Q
+q
+q
+BT
+/F9 10 Tf
+11.5 TL
+0 g
+0.01125 0. 0. -0.01125 4.2593994140625 2.6437499999999998 Tm
+(MODULE) Tj
+ET
+Q
+Q
+q
+1.5 w
+0. G
+0.01125 0. 0. 0.01125 0. 0. cm
+400. 250. m
+400. 300. l
+S
+Q
+q
+0. g
+0.01125 0. 0. 0.01125 0. 0. cm
+400. 300. m
+395. 290. l
+405. 290. l
+h
+f
+Q
+q
+1.5 w
+0. G
+0.01125 0. 0. 0.01125 0. 0. cm
+400. 300. m
+320. 360. l
+400. 420. l
+480. 360. l
+h
+S
+Q
+q
+q
+BT
+/F9 11 Tf
+12.6499999999999986 TL
+0 g
+0.01125 0. 0. -0.01125 4.1062500000000002 3.8812499999999996 Tm
+(304) Tj
+ET
+Q
+Q
+q
+q
+BT
+/F9 9 Tf
+10.3499999999999996 TL
+0 g
+0.01125 0. 0. -0.01125 4.2187445068359377 4.1062500000000002 Tm
+(SIGNATURE) Tj
+ET
+Q
+Q
+q
+q
+BT
+/F9 9 Tf
+10.3499999999999996 TL
+0 g
+0.01125 0. 0. -0.01125 4.3171765136718747 4.2524999999999995 Tm
+(VERIFY) Tj
+ET
+Q
+Q
+q
+1.5 w
+0. G
+0.01125 0. 0. 0.01125 0. 0. cm
+320. 360. m
+150. 360. l
+S
+Q
+q
+0. g
+0.01125 0. 0. 0.01125 0. 0. cm
+150. 360. m
+160. 355. l
+160. 365. l
+h
+f
+Q
+q
+q
+BT
+/F9 9 Tf
+10.3499999999999996 TL
+0 g
+0.01125 0. 0. -0.01125 2.6437499999999998 3.9375 Tm
+(FAIL) Tj
+ET
+Q
+Q
+q
+1.5 w
+0. G
+0.01125 0. 0. 0.01125 0. 0. cm
+50. 330. m
+150. 330. l
+150. 390. l
+50. 390. l
+h
+S
+Q
+q
+q
+BT
+/F9 11 Tf
+12.6499999999999986 TL
+0 g
+0.01125 0. 0. -0.01125 0.73125 3.9375 Tm
+(306) Tj
+ET
+Q
+Q
+q
+q
+BT
+/F9 9 Tf
+10.3499999999999996 TL
+0 g
+0.01125 0. 0. -0.01125 0.877510986328125 4.1062500000000002 Tm
+(REJECTED) Tj
+ET
+Q
+Q
+q
+q
+BT
+/F9 9 Tf
+10.3499999999999996 TL
+0 g
+0.01125 0. 0. -0.01125 0.8924166870117187 4.2524999999999995 Tm
+(PAYLOAD) Tj
+ET
+Q
+Q
+q
+1.5 w
+0. G
+0.01125 0. 0. 0.01125 0. 0. cm
+480. 360. m
+600. 360. l
+S
+Q
+q
+0. g
+0.01125 0. 0. 0.01125 0. 0. cm
+600. 360. m
+590. 355. l
+590. 365. l
+h
+f
+Q
+q
+q
+BT
+/F9 9 Tf
+10.3499999999999996 TL
+0 g
+0.01125 0. 0. -0.01125 6.0750000000000002 3.9375 Tm
+(PASS) Tj
+ET
+Q
+Q
+q
+2. w
+0. G
+0.01125 0. 0. 0.01125 0. 0. cm
+600. 320. m
+740. 320. l
+740. 400. l
+600. 400. l
+h
+S
+Q
+q
+q
+BT
+/F9 11 Tf
+12.6499999999999986 TL
+0 g
+0.01125 0. 0. -0.01125 6.9187500000000002 3.8812499999999996 Tm
+(308) Tj
+ET
+Q
+Q
+q
+q
+BT
+/F9 9 Tf
+10.3499999999999996 TL
+0 g
+0.01125 0. 0. -0.01125 7.2393859863281245 4.1062500000000002 Tm
+(CANONICAL) Tj
+ET
+Q
+Q
+q
+q
+BT
+/F9 9 Tf
+10.3499999999999996 TL
+0 g
+0.01125 0. 0. -0.01125 7.4165240478515626 4.2749999999999995 Tm
+(JSON) Tj
+ET
+Q
+Q
+q
+1.5 w
+0. G
+0.01125 0. 0. 0.01125 0. 0. cm
+670. 400. m
+670. 470. l
+S
+Q
+q
+0. g
+0.01125 0. 0. 0.01125 0. 0. cm
+670. 470. m
+665. 460. l
+675. 460. l
+h
+f
+Q
+q
+1.5 w
+0. G
+0.01125 0. 0. 0.01125 0. 0. cm
+710. 485. m
+710. 478.372583002030467 692.0913899932317008 473. 670. 473. c
+647.9086100067682992 473. 630. 478.372583002030467 630. 485. c
+630. 491.627416997969533 647.9086100067682992 497. 670. 497. c
+692.0913899932317008 497. 710. 491.627416997969533 710. 485. c
+S
+Q
+q
+1.5 w
+0. G
+0.01125 0. 0. 0.01125 0. 0. cm
+630. 485. m
+630. 535. l
+S
+Q
+q
+1.5 w
+0. G
+0.01125 0. 0. 0.01125 0. 0. cm
+710. 485. m
+710. 535. l
+S
+Q
+q
+1.5 w
+0. G
+0.01125 0. 0. 0.01125 0. 0. cm
+710. 535. m
+710. 528.3725830020305239 692.0913899932317008 523. 670. 523. c
+647.9086100067682992 523. 630. 528.3725830020305239 630. 535. c
+630. 541.6274169979694761 647.9086100067682992 547. 670. 547. c
+692.0913899932317008 547. 710. 541.6274169979694761 710. 535. c
+S
+Q
+q
+q
+BT
+/F9 9 Tf
+10.3499999999999996 TL
+0 g
+0.01125 0. 0. -0.01125 7.467173767089843 5.8274999999999997 Tm
+(DB) Tj
+ET
+Q
+Q
+q
+q
+BT
+/F11 11 Tf
+12.6499999999999986 TL
+0 g
+0.01125 0. 0. -0.01125 2.388364562988281 6.5249999999999995 Tm
+(FIG. 3 illustrates an embodiment of JSON canonicalization and signature validation.) Tj
+ET
+Q
+Q
+Q
+Q
+Q
+Q
+endstream
+endobj
+1 0 obj
+<</Type /Pages
+/Kids [3 0 R ]
+/Count 1
+>>
+endobj
+5 0 obj
+<<
+/Type /Font
+/BaseFont /Helvetica
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+6 0 obj
+<<
+/Type /Font
+/BaseFont /Helvetica-Bold
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+7 0 obj
+<<
+/Type /Font
+/BaseFont /Helvetica-Oblique
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+8 0 obj
+<<
+/Type /Font
+/BaseFont /Helvetica-BoldOblique
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+9 0 obj
+<<
+/Type /Font
+/BaseFont /Courier
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+10 0 obj
+<<
+/Type /Font
+/BaseFont /Courier-Bold
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+11 0 obj
+<<
+/Type /Font
+/BaseFont /Courier-Oblique
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+12 0 obj
+<<
+/Type /Font
+/BaseFont /Courier-BoldOblique
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+13 0 obj
+<<
+/Type /Font
+/BaseFont /Times-Roman
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+14 0 obj
+<<
+/Type /Font
+/BaseFont /Times-Bold
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+15 0 obj
+<<
+/Type /Font
+/BaseFont /Times-Italic
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+16 0 obj
+<<
+/Type /Font
+/BaseFont /Times-BoldItalic
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+17 0 obj
+<<
+/Type /Font
+/BaseFont /ZapfDingbats
+/Subtype /Type1
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+18 0 obj
+<<
+/Type /Font
+/BaseFont /Symbol
+/Subtype /Type1
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+2 0 obj
+<<
+/ProcSet [/PDF /Text /ImageB /ImageC /ImageI]
+/Font <<
+/F1 5 0 R
+/F2 6 0 R
+/F3 7 0 R
+/F4 8 0 R
+/F5 9 0 R
+/F6 10 0 R
+/F7 11 0 R
+/F8 12 0 R
+/F9 13 0 R
+/F10 14 0 R
+/F11 15 0 R
+/F12 16 0 R
+/F13 17 0 R
+/F14 18 0 R
+>>
+/XObject <<
+>>
+>>
+endobj
+19 0 obj
+<<
+/Producer (jsPDF 3.0.4)
+/CreationDate (D:20260104113530+08'00')
+>>
+endobj
+20 0 obj
+<<
+/Type /Catalog
+/Pages 1 0 R
+/OpenAction [3 0 R /FitH null]
+/PageLayout /OneColumn
+>>
+endobj
+xref
+0 21
+0000000000 65535 f 
+0000004809 00000 n 
+0000006626 00000 n 
+0000000015 00000 n 
+0000000120 00000 n 
+0000004866 00000 n 
+0000004991 00000 n 
+0000005121 00000 n 
+0000005254 00000 n 
+0000005391 00000 n 
+0000005514 00000 n 
+0000005643 00000 n 
+0000005775 00000 n 
+0000005911 00000 n 
+0000006039 00000 n 
+0000006166 00000 n 
+0000006295 00000 n 
+0000006428 00000 n 
+0000006530 00000 n 
+0000006874 00000 n 
+0000006960 00000 n 
+trailer
+<<
+/Size 21
+/Root 20 0 R
+/Info 19 0 R
+/ID [ <8FA5D565818DB096C07D0B0C5F8E8855> <8FA5D565818DB096C07D0B0C5F8E8855> ]
+>>
+startxref
+7064
+%%EOF
