@@ -450,7 +450,7 @@ async function handleProcessingFailedEvent(supabase: any, event: any): Promise<v
     console.warn('[api-callback] Error checking for API job:', e);
   }
 
-  await sendFailureEmail(email, courseTitle, courseId, errorMessage, errorAnalysis);
+  await sendFailureEmail(email, courseTitle, courseId, errorMessage, errorAnalysis, supabase);
 }
 
 // Check if module email was already sent (idempotent)
@@ -2405,6 +2405,66 @@ serve(async (req) => {
         const VISIBILITY_SECONDS = 900; // 15 minutes
         let claimedCount = 0;
 
+        // ---- ZOMBIE CLEANUP: Reset stale processing jobs BEFORE claiming ----
+        // This prevents constraint violations where a zombie "processing" row blocks
+        // claiming a pending job for the same (course_id, step).
+        const ZOMBIE_THRESHOLD_MINUTES = 3;
+        const zombieThreshold = new Date(Date.now() - ZOMBIE_THRESHOLD_MINUTES * 60 * 1000).toISOString();
+        const { data: zombieJobs } = await supabase
+          .from("processing_queue")
+          .select("id, course_id, step, attempt_count, max_attempts")
+          .eq("status", "processing")
+          .eq("purged", false)
+          .lt("started_at", zombieThreshold)
+          .limit(10);
+
+        if (zombieJobs?.length) {
+          console.log(`[poll] Found ${zombieJobs.length} zombie processing jobs, cleaning up...`);
+          for (const zombie of zombieJobs) {
+            const attempts = zombie.attempt_count || 0;
+            const maxAttempts = zombie.max_attempts || 5;
+
+            if (attempts >= maxAttempts) {
+              // Max retries reached — mark as failed so it stops blocking
+              await supabase.from("processing_queue").update({
+                status: "failed",
+                completed_at: new Date().toISOString(),
+                error_message: `Zombie job failed after ${maxAttempts} attempts (stale ${ZOMBIE_THRESHOLD_MINUTES}+ min)`,
+              }).eq("id", zombie.id);
+              console.log(`[poll] Zombie job ${zombie.id} (${zombie.step}) marked as failed (max attempts)`);
+            } else {
+              // Reset to pending for retry
+              await supabase.from("processing_queue").update({
+                status: "pending",
+                started_at: null,
+                visibility_timeout: null,
+                claimed_by: null,
+                error_message: `Reset from zombie state (stale ${ZOMBIE_THRESHOLD_MINUTES}+ min)`,
+              }).eq("id", zombie.id);
+              console.log(`[poll] Reset zombie job ${zombie.id} (${zombie.step}) to pending`);
+            }
+
+            // Deduplicate: purge extra pending jobs for the same (course_id, step)
+            // so the claim loop doesn't hit constraint violations from duplicates
+            const { data: dupes } = await supabase
+              .from("processing_queue")
+              .select("id")
+              .eq("course_id", zombie.course_id)
+              .eq("step", zombie.step)
+              .eq("status", "pending")
+              .eq("purged", false)
+              .order("created_at", { ascending: true });
+
+            if (dupes && dupes.length > 1) {
+              for (let d = 1; d < dupes.length; d++) {
+                await supabase.from("processing_queue").update({ purged: true, error_message: "Duplicate purged during zombie cleanup" }).eq("id", dupes[d].id);
+              }
+              console.log(`[poll] Purged ${dupes.length - 1} duplicate pending jobs for (${zombie.course_id}, ${zombie.step})`);
+            }
+          }
+        }
+
+        // ---- CLAIM LOOP ----
         // Claim up to 5 jobs atomically using the database function
         for (let i = 0; i < 5; i++) {
           const { data: claimedJob, error: claimError } = await supabase.rpc('claim_processing_job', {
@@ -2413,6 +2473,12 @@ serve(async (req) => {
           });
 
           if (claimError) {
+            // Handle constraint violation (zombie still blocking) — skip and continue
+            const isDuplicateKey = claimError.code === '23505' || claimError.message?.includes('duplicate key');
+            if (isDuplicateKey) {
+              console.warn(`[poll] Constraint violation during claim (zombie likely), skipping this round`);
+              break;
+            }
             console.error(`[poll] claim_processing_job RPC failed:`, claimError);
             break; // RPC error - log and stop
           }
@@ -2626,9 +2692,11 @@ serve(async (req) => {
               }
 
               // Reset job to pending for retry
+              // CRITICAL FIX: Increment attempt_count to prevent infinite recovery loops
               await supabase.from("processing_queue").update({
                 status: "pending",
                 started_at: null,
+                attempt_count: attempts + 1,
                 error_message: `Auto-recovered from stuck state after ${STUCK_THRESHOLD_MINUTES} minutes`,
               }).eq("id", job.id);
 
@@ -2706,6 +2774,7 @@ serve(async (req) => {
                     job.course_id,
                     "Processing timed out. Long videos may need to be split into smaller segments.",
                     errorAnalysis,
+                    supabase,
                   );
                 }
               }
@@ -5610,6 +5679,22 @@ function formatDuration(seconds: number): string {
 }
 
 async function sendCompletionEmail(supabase: any, email: string, courseTitle: string, courseId: string) {
+  // IDEMPOTENCY GUARD: Atomically check if completion email was already sent
+  // Prevents duplicate emails when multiple systems (watchdog, cron, outbox) process the same course
+  const { data: shouldSend, error: markError } = await supabase.rpc('mark_course_email_sent', {
+    p_course_id: courseId
+  });
+
+  if (markError) {
+    console.warn(`[sendCompletionEmail] Failed to check idempotency for course ${courseId}:`, markError);
+    return; // Don't send on error (safe side - no spam)
+  }
+
+  if (!shouldSend) {
+    console.log(`[sendCompletionEmail] Course ${courseId} completion email already sent, skipping (idempotent)`);
+    return;
+  }
+
   const resendApiKey = Deno.env.get("RESEND_API_KEY");
   if (!resendApiKey) {
     console.log("[sendCompletionEmail] No RESEND_API_KEY configured");
@@ -6119,7 +6204,23 @@ async function sendModuleCompleteEmail(email: string, courseTitle: string, modul
   }
 }
 
-async function sendFailureEmail(email: string, courseTitle: string, courseId: string, errorMessage: string, errorAnalysis: ErrorAnalysis) {
+async function sendFailureEmail(email: string, courseTitle: string, courseId: string, errorMessage: string, errorAnalysis: ErrorAnalysis, supabase?: any) {
+  // IDEMPOTENCY GUARD: Prevent duplicate failure emails
+  if (supabase && courseId) {
+    try {
+      const { data: shouldSend } = await supabase.rpc('mark_course_failure_email_sent', {
+        p_course_id: courseId
+      });
+      if (shouldSend === false) {
+        console.log(`[sendFailureEmail] Course ${courseId} failure email already sent, skipping (idempotent)`);
+        return;
+      }
+    } catch (e) {
+      console.warn(`[sendFailureEmail] Idempotency check failed, proceeding cautiously:`, e);
+      // Fall through - better to risk one duplicate than miss the notification entirely
+    }
+  }
+
   const resendApiKey = Deno.env.get("RESEND_API_KEY");
   if (!resendApiKey) return;
 

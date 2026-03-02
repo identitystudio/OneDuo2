@@ -237,6 +237,7 @@ serve(async (req) => {
               
               if (attempts < maxAttempts) {
                 // Reset to pending for retry
+                // CRITICAL FIX: Must increment attempt_count to prevent infinite recovery loops
                 const { error: resetError } = await supabase
                   .from("processing_queue")
                   .update({
@@ -244,6 +245,7 @@ serve(async (req) => {
                     started_at: null,
                     visibility_timeout: null,
                     claimed_by: null,
+                    attempt_count: attempts + 1,
                     error_message: `Visibility timeout expired (worker ${job.claimed_by || 'unknown'} died), attempt ${attempts + 1}`
                   })
                   .eq("id", job.id);
