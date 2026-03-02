@@ -2499,10 +2499,28 @@ serve(async (req) => {
             .single();
 
           if (fullJob) {
-            // Process in background, passing the worker ID for proper completion
-            (globalThis as any).EdgeRuntime?.waitUntil?.(
-              processJobWithWorker(supabase, fullJob, workerId)
-            );
+            // CRITICAL FIX: Dispatch to process-job via HTTP instead of waitUntil.
+            // waitUntil silently fails if EdgeRuntime doesn't exist, causing the
+            // function to shut down and leave the job as a zombie in "processing" status.
+            // Dispatching via HTTP gives each job its own edge function invocation that
+            // properly awaits processJobWithWorker.
+            const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+            fetch(`${supabaseUrl}/functions/v1/process-course`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${serviceRoleKey}`,
+              },
+              body: JSON.stringify({
+                action: 'process-job',
+                jobId: fullJob.id,
+                courseId: fullJob.course_id,
+                step: fullJob.step,
+                metadata: fullJob.metadata,
+                workerId: workerId
+              })
+            }).catch(err => console.error(`[poll] Failed to dispatch job ${fullJob.id}:`, err));
+
             claimedCount++;
           }
         }
@@ -2513,7 +2531,7 @@ serve(async (req) => {
           });
         }
 
-        return new Response(JSON.stringify({ processing: claimedCount, workerId }), {
+        return new Response(JSON.stringify({ dispatched: claimedCount, workerId }), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
