@@ -344,18 +344,18 @@ export default function Dashboard() {
           const actualProgress = item.progress;
           const isQueued = item.status === 'queued' || item.progress_step === 'queued';
 
-          // Calculate a reasonable target based on step - allow more headroom for visible increments
+          // Calculate a reasonable target based on step - wider headroom to prevent visible freezing
           let targetMax = 99;
-          if (isQueued) targetMax = 12; // Allow more room for queued items
-          else if (actualProgress < 40) targetMax = Math.min(actualProgress + 4, 42);
-          else if (actualProgress < 60) targetMax = Math.min(actualProgress + 3, 63);
-          else if (actualProgress < 80) targetMax = Math.min(actualProgress + 2, 82);
-          else targetMax = Math.min(actualProgress + 1, 99);
+          if (isQueued) targetMax = 25; // Wider room so queued items don't freeze at 12%
+          else if (actualProgress < 40) targetMax = Math.min(actualProgress + 8, 48);
+          else if (actualProgress < 60) targetMax = Math.min(actualProgress + 6, 66);
+          else if (actualProgress < 80) targetMax = Math.min(actualProgress + 4, 84);
+          else targetMax = Math.min(actualProgress + 2, 99);
 
           if (current < targetMax) {
-            // Minimum 0.1 increment ensures visible decimal changes (8.0 -> 8.1 -> 8.2)
+            // Slower increments to spread ceiling over more time (prevents abrupt freeze)
             const distanceToTarget = targetMax - current;
-            const microIncrement = Math.min(0.4, distanceToTarget * 0.08);
+            const microIncrement = Math.min(0.2, distanceToTarget * 0.04);
             updated[item.id] = Math.min(current + Math.max(0.1, microIncrement), targetMax);
           }
         });
@@ -395,11 +395,13 @@ export default function Dashboard() {
 
       setCourses(newCourses);
 
-      // Self-recovery: if we see a course in an intermediate status but its queue is missing,
+      // Self-recovery: if we see a course in any non-terminal status for 3+ minutes,
       // trigger the backend watchdog to repair it (throttled).
       const hasPotentialStuck = newCourses.some((c: Course) => {
-        const s = String(c.status || '');
-        return s.includes('extracting_frames') || s.includes('analyzing_audio') || s.includes('training_ai');
+        if (['completed', 'failed', 'manual_review'].includes(c.status)) return false;
+        const updatedAt = c.updated_at || c.created_at;
+        if (!updatedAt) return false;
+        return (Date.now() - new Date(updatedAt).getTime()) > 3 * 60 * 1000;
       });
 
       const now = Date.now();
@@ -953,9 +955,13 @@ export default function Dashboard() {
   // Get sync status message (on-brand naming instead of "heartbeat")
   const getSyncStatus = (course: Course): { isStale: boolean; message: string; isStarting: boolean } => {
     const lastActivity = course.last_heartbeat_at;
-    // If no heartbeat yet and status is queued/transcribing, it's starting up
+    // If no heartbeat yet, check how long since creation
     if (!lastActivity) {
       const isJustStarting = ['queued', 'transcribing'].includes(course.status);
+      // If no heartbeat ever but created > 3 min ago, mark as stale (worker likely never started)
+      if (course.created_at && (Date.now() - new Date(course.created_at).getTime()) > 3 * 60 * 1000) {
+        return { isStale: true, message: 'Reconnecting...', isStarting: false };
+      }
       return { isStale: false, message: isJustStarting ? 'Starting...' : 'Initializing...', isStarting: true };
     }
 
@@ -1016,10 +1022,16 @@ export default function Dashboard() {
     return `~${mins}m remaining`;
   };
 
-  // Count stalled courses for Nedu
+  // Count stalled courses (includes module-level and no-heartbeat detection)
   const stalledCourseCount = courses.filter(c => {
     if (['completed', 'failed'].includes(c.status)) return false;
-    return isActivityStale(c.last_heartbeat_at);
+    // Course-level heartbeat staleness
+    if (isActivityStale(c.last_heartbeat_at)) return true;
+    // Module-level heartbeat staleness
+    if (c.modules?.some(m => !['completed', 'failed'].includes(m.status) && isActivityStale(m.heartbeat_at))) return true;
+    // No heartbeat ever + created > 3 minutes ago (worker likely never started)
+    if (!c.last_heartbeat_at && c.created_at && (Date.now() - new Date(c.created_at).getTime()) > 3 * 60 * 1000) return true;
+    return false;
   }).length;
 
   // Save block name (rename all courses in the block) - uses edge function to bypass RLS

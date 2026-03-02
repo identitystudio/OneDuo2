@@ -271,13 +271,24 @@ export function ProcessingProgressCard({
           </div>
         </div>
 
-        {/* Time remaining - prominent */}
-        <div className={`flex items-center justify-center gap-3 py-3 rounded-xl ${colors.bg}/10`}>
-          <Clock className={`w-5 h-5 ${colors.text}`} />
-          <span className={`text-lg font-semibold ${colors.text}`}>
-            {estimatedTimeRemaining}
-          </span>
-          <span className="text-sm text-white/40">remaining</span>
+        {/* Time remaining - prominent (show reconnecting when stale) */}
+        <div className={`flex items-center justify-center gap-3 py-3 rounded-xl ${syncStatus.isStale ? 'bg-amber-500/10' : `${colors.bg}/10`}`}>
+          {syncStatus.isStale ? (
+            <>
+              <Loader2 className="w-5 h-5 text-amber-400 animate-spin" />
+              <span className="text-lg font-semibold text-amber-400">
+                Reconnecting...
+              </span>
+            </>
+          ) : (
+            <>
+              <Clock className={`w-5 h-5 ${colors.text}`} />
+              <span className={`text-lg font-semibold ${colors.text}`}>
+                {estimatedTimeRemaining}
+              </span>
+              <span className="text-sm text-white/40">remaining</span>
+            </>
+          )}
         </div>
 
         {/* Milestone message */}

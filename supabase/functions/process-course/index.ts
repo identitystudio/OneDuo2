@@ -2574,7 +2574,7 @@ serve(async (req) => {
 
       // ============ WATCHDOG - DETECT AND RECOVER STUCK JOBS ============
       case "watchdog": {
-        const STUCK_THRESHOLD_MINUTES = 10;
+        const STUCK_THRESHOLD_MINUTES = 3;
         const stuckThreshold = new Date(Date.now() - STUCK_THRESHOLD_MINUTES * 60 * 1000).toISOString();
 
         let recoveredQueueJobs = 0;
@@ -2778,16 +2778,15 @@ serve(async (req) => {
           console.warn('[watchdog] Lease cleanup failed:', e);
         }
 
-        // 5) Detect courses stuck in "queued" or "processing" status with progress but no active queue job
-        // This catches courses that got stuck at intermediate progress (like 26%)
+        // 5) Detect courses stuck in any non-terminal status with no active queue job
+        // Catches courses at any progress level (including 0%) that have no worker
         let recoveredStuckProgress = 0;
         const { data: stuckProgressCourses } = await supabase
           .from("courses")
           .select("id, status, progress, title, is_multi_module")
           .eq("purged", false)
-          .in("status", ["queued", "processing"])
-          .gte("progress", 10)
-          .lt("updated_at", new Date(Date.now() - 5 * 60 * 1000).toISOString())
+          .in("status", ["queued", "processing", "transcribing", "extracting_frames", "analyzing", "generating_artifact"])
+          .lt("updated_at", new Date(Date.now() - 3 * 60 * 1000).toISOString())
           .limit(10);
 
         if (stuckProgressCourses?.length) {
