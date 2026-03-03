@@ -139,7 +139,7 @@ export default function Transform() {
 
       // Call processing edge function
       const { error: processError } = await supabase.functions.invoke("process-transformation", {
-        body: { artifactId: artifact.id, aiFidelityMode: true }, // Default to true for "Silent Integration"
+        body: { artifactId: artifact.id, aiFidelityMode: true },
       });
 
       if (processError) throw processError;

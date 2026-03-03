@@ -11,10 +11,21 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { Shield, AlertTriangle, CheckCircle, XCircle } from "lucide-react";
+import { Shield, AlertTriangle, CheckCircle, XCircle, Copy } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
+
+async function generateApprovalSignature(frameId: string, artifactId: string, userId: string): Promise<string> {
+  const timestamp = Date.now().toString();
+  const payload = `${frameId}:${artifactId}:${userId}:${timestamp}`;
+  const encoder = new TextEncoder();
+  const data = encoder.encode(payload);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  const hashHex = hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
+  return `GOV-${hashHex.substring(0, 40).toUpperCase()}`;
+}
 
 interface ArtifactFrame {
   id: string;
@@ -40,6 +51,7 @@ interface VerificationGateProps {
 export function VerificationGate({ frame, open, onOpenChange }: VerificationGateProps) {
   const [rejectionReason, setRejectionReason] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [approvedSignature, setApprovedSignature] = useState<string | null>(null);
   const queryClient = useQueryClient();
 
   const formatTimestamp = (ms: number) => {
@@ -55,18 +67,20 @@ export function VerificationGate({ frame, open, onOpenChange }: VerificationGate
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("Not authenticated");
 
+      const signature = await generateApprovalSignature(frame.id, frame.artifact_id, user.id);
+
       const { error } = await supabase.from("verification_approvals").insert({
         artifact_id: frame.artifact_id,
         frame_id: frame.id,
         user_id: user.id,
         action: "APPROVED",
+        approval_signature: signature,
       });
 
       if (error) throw error;
 
       queryClient.invalidateQueries({ queryKey: ["artifact-frames", frame.artifact_id] });
-      toast.success("Step approved and blessed");
-      onOpenChange(false);
+      setApprovedSignature(signature);
     } catch (error) {
       console.error("Approve error:", error);
       toast.error("Failed to approve step");
@@ -102,128 +116,191 @@ export function VerificationGate({ frame, open, onOpenChange }: VerificationGate
     }
   };
 
+  const handleClose = () => {
+    setApprovedSignature(null);
+    setRejectionReason("");
+    onOpenChange(false);
+  };
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2 text-red-600">
-            <Shield className="h-5 w-5" />
-            VERIFICATION GATE ACTIVATED
-          </DialogTitle>
-          <DialogDescription className="sr-only">
-            Human verification required for this step
-          </DialogDescription>
-        </DialogHeader>
+        {approvedSignature ? (
+          <>
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2 text-green-600">
+                <CheckCircle className="h-5 w-5" />
+                Step Approved & Blessed
+              </DialogTitle>
+              <DialogDescription className="sr-only">
+                Approval signature generated
+              </DialogDescription>
+            </DialogHeader>
 
-        <div className="space-y-4 py-4">
-          {/* Alert Banner */}
-          <div className="flex items-start gap-3 p-3 bg-red-500/10 border border-red-500/30 rounded-lg">
-            <AlertTriangle className="h-5 w-5 text-red-500 mt-0.5 shrink-0" />
-            <div>
-              <p className="font-medium text-red-600 dark:text-red-400">
-                This step requires Human-Origin Approval
-              </p>
-              <p className="text-sm text-muted-foreground mt-1">
-                AI execution cannot proceed without your explicit authorization.
-              </p>
+            <div className="space-y-4 py-4">
+              <div className="flex items-start gap-3 p-3 bg-green-500/10 border border-green-500/30 rounded-lg">
+                <Shield className="h-5 w-5 text-green-500 mt-0.5 shrink-0" />
+                <div>
+                  <p className="font-medium text-green-600 dark:text-green-400">
+                    Human-Origin Approval Recorded
+                  </p>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Frame #{frame.frame_index} has been authorized and signed.
+                  </p>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <p className="text-sm font-medium">Approval Signature</p>
+                <div className="flex items-center gap-2 p-3 bg-muted rounded-lg font-mono text-xs break-all">
+                  <span className="flex-1 text-green-500">{approvedSignature}</span>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-6 w-6 p-0 shrink-0"
+                    onClick={() => {
+                      navigator.clipboard.writeText(approvedSignature);
+                      toast.success("Signature copied");
+                    }}
+                  >
+                    <Copy className="h-3 w-3" />
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  This signature is stored with the approval record as proof of human authorization.
+                </p>
+              </div>
             </div>
-          </div>
 
-          <Separator />
+            <DialogFooter>
+              <Button onClick={handleClose} className="w-full">
+                Close
+              </Button>
+            </DialogFooter>
+          </>
+        ) : (
+          <>
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2 text-red-600">
+                <Shield className="h-5 w-5" />
+                VERIFICATION GATE ACTIVATED
+              </DialogTitle>
+              <DialogDescription className="sr-only">
+                Human verification required for this step
+              </DialogDescription>
+            </DialogHeader>
 
-          {/* Frame Details */}
-          <div className="space-y-3">
-            <div>
-              <p className="text-sm text-muted-foreground">Step Details</p>
-              <p className="font-medium">
-                Frame #{frame.frame_index} at {formatTimestamp(frame.timestamp_ms)}
-              </p>
+            <div className="space-y-4 py-4">
+              {/* Alert Banner */}
+              <div className="flex items-start gap-3 p-3 bg-red-500/10 border border-red-500/30 rounded-lg">
+                <AlertTriangle className="h-5 w-5 text-red-500 mt-0.5 shrink-0" />
+                <div>
+                  <p className="font-medium text-red-600 dark:text-red-400">
+                    This step requires Human-Origin Approval
+                  </p>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    AI execution cannot proceed without your explicit authorization.
+                  </p>
+                </div>
+              </div>
+
+              <Separator />
+
+              {/* Frame Details */}
+              <div className="space-y-3">
+                <div>
+                  <p className="text-sm text-muted-foreground">Step Details</p>
+                  <p className="font-medium">
+                    Frame #{frame.frame_index} at {formatTimestamp(frame.timestamp_ms)}
+                  </p>
+                </div>
+
+                <div>
+                  <p className="text-sm text-muted-foreground">Detected Action</p>
+                  <p className="font-medium text-lg">"{frame.ocr_text || "No text detected"}"</p>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <p className="text-sm text-muted-foreground">Confidence:</p>
+                  <Badge
+                    variant={
+                      frame.confidence_level === "HIGH"
+                        ? "default"
+                        : frame.confidence_level === "MEDIUM"
+                        ? "secondary"
+                        : "destructive"
+                    }
+                  >
+                    {Math.round(frame.confidence_score * 100)}% ({frame.confidence_level})
+                  </Badge>
+                  {frame.is_critical && (
+                    <Badge variant="destructive">CRITICAL</Badge>
+                  )}
+                </div>
+
+                {/* Emphasis Flags */}
+                <div className="flex flex-wrap gap-2">
+                  {frame.cursor_pause && (
+                    <Badge variant="outline" className="text-xs">Cursor Pause</Badge>
+                  )}
+                  {frame.text_selected && (
+                    <Badge variant="outline" className="text-xs">Text Selected</Badge>
+                  )}
+                  {frame.zoom_focus && (
+                    <Badge variant="outline" className="text-xs">Zoom Focus</Badge>
+                  )}
+                  {frame.lingering_frame && (
+                    <Badge variant="outline" className="text-xs">Lingering</Badge>
+                  )}
+                </div>
+              </div>
+
+              <Separator />
+
+              {/* Sovereignty Statement */}
+              <div className="text-sm text-muted-foreground bg-muted/50 p-3 rounded-lg">
+                <p className="font-medium text-foreground mb-1">Sovereignty Check</p>
+                <p>
+                  The system cannot proceed without your explicit authorization.
+                  Confirm this step matches your demonstrated intent.
+                </p>
+              </div>
+
+              {/* Rejection Reason */}
+              <div>
+                <p className="text-sm text-muted-foreground mb-2">
+                  Rejection reason (optional)
+                </p>
+                <Textarea
+                  placeholder="Explain why this step should be excluded..."
+                  value={rejectionReason}
+                  onChange={(e) => setRejectionReason(e.target.value)}
+                  className="h-20"
+                />
+              </div>
             </div>
 
-            <div>
-              <p className="text-sm text-muted-foreground">Detected Action</p>
-              <p className="font-medium text-lg">"{frame.ocr_text || "No text detected"}"</p>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <p className="text-sm text-muted-foreground">Confidence:</p>
-              <Badge
-                variant={
-                  frame.confidence_level === "HIGH"
-                    ? "default"
-                    : frame.confidence_level === "MEDIUM"
-                    ? "secondary"
-                    : "destructive"
-                }
+            <DialogFooter className="flex gap-2">
+              <Button
+                variant="destructive"
+                onClick={handleReject}
+                disabled={isSubmitting}
+                className="flex-1"
               >
-                {Math.round(frame.confidence_score * 100)}% ({frame.confidence_level})
-              </Badge>
-              {frame.is_critical && (
-                <Badge variant="destructive">CRITICAL</Badge>
-              )}
-            </div>
-
-            {/* Emphasis Flags */}
-            <div className="flex flex-wrap gap-2">
-              {frame.cursor_pause && (
-                <Badge variant="outline" className="text-xs">Cursor Pause</Badge>
-              )}
-              {frame.text_selected && (
-                <Badge variant="outline" className="text-xs">Text Selected</Badge>
-              )}
-              {frame.zoom_focus && (
-                <Badge variant="outline" className="text-xs">Zoom Focus</Badge>
-              )}
-              {frame.lingering_frame && (
-                <Badge variant="outline" className="text-xs">Lingering</Badge>
-              )}
-            </div>
-          </div>
-
-          <Separator />
-
-          {/* Sovereignty Statement */}
-          <div className="text-sm text-muted-foreground bg-muted/50 p-3 rounded-lg">
-            <p className="font-medium text-foreground mb-1">Sovereignty Check</p>
-            <p>
-              The system cannot proceed without your explicit authorization.
-              Confirm this step matches your demonstrated intent.
-            </p>
-          </div>
-
-          {/* Rejection Reason */}
-          <div>
-            <p className="text-sm text-muted-foreground mb-2">
-              Rejection reason (optional)
-            </p>
-            <Textarea
-              placeholder="Explain why this step should be excluded..."
-              value={rejectionReason}
-              onChange={(e) => setRejectionReason(e.target.value)}
-              className="h-20"
-            />
-          </div>
-        </div>
-
-        <DialogFooter className="flex gap-2">
-          <Button
-            variant="destructive"
-            onClick={handleReject}
-            disabled={isSubmitting}
-            className="flex-1"
-          >
-            <XCircle className="mr-2 h-4 w-4" />
-            Reject / Stop
-          </Button>
-          <Button
-            onClick={handleApprove}
-            disabled={isSubmitting}
-            className="flex-1 bg-green-600 hover:bg-green-700"
-          >
-            <CheckCircle className="mr-2 h-4 w-4" />
-            Approve & Bless
-          </Button>
-        </DialogFooter>
+                <XCircle className="mr-2 h-4 w-4" />
+                Reject / Stop
+              </Button>
+              <Button
+                onClick={handleApprove}
+                disabled={isSubmitting}
+                className="flex-1 bg-green-600 hover:bg-green-700"
+              >
+                <CheckCircle className="mr-2 h-4 w-4" />
+                Approve & Bless
+              </Button>
+            </DialogFooter>
+          </>
+        )}
       </DialogContent>
     </Dialog>
   );

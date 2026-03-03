@@ -24,7 +24,8 @@ import {
   ZoomIn,
   Timer,
   BookOpen,
-  Lock
+  Lock,
+  KeyRound
 } from "lucide-react";
 import { VerificationGate } from "@/components/VerificationGate";
 import { ReasoningLogPanel } from "@/components/ReasoningLogPanel";
@@ -49,7 +50,19 @@ interface ArtifactFrame {
     action: string;
     created_at: string;
     user_id: string;
+    approval_signature: string | null;
   }[];
+}
+
+async function generateApprovalSignature(frameId: string, artifactId: string, userId: string): Promise<string> {
+  const timestamp = Date.now().toString();
+  const payload = `${frameId}:${artifactId}:${userId}:${timestamp}`;
+  const encoder = new TextEncoder();
+  const data = encoder.encode(payload);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  const hashHex = hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
+  return `GOV-${hashHex.substring(0, 40).toUpperCase()}`;
 }
 
 export default function TransformReview() {
@@ -171,7 +184,6 @@ export default function TransformReview() {
 
 
   const handleApproveAll = async () => {
-    // Get all frames that need verification
     const pendingFrames = frames?.filter(needsVerification) || [];
 
     if (pendingFrames.length === 0) {
@@ -184,13 +196,16 @@ export default function TransformReview() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("Not authenticated");
 
-      // Create bulk approvals
-      const approvals = pendingFrames.map(frame => ({
-        artifact_id: artifactId,
-        frame_id: frame.id,
-        user_id: user.id,
-        action: "APPROVED"
-      }));
+      // Generate a unique approval signature per frame
+      const approvals = await Promise.all(
+        pendingFrames.map(async (frame) => ({
+          artifact_id: artifactId,
+          frame_id: frame.id,
+          user_id: user.id,
+          action: "APPROVED",
+          approval_signature: await generateApprovalSignature(frame.id, artifactId!, user.id),
+        }))
+      );
 
       const { error } = await supabase
         .from("verification_approvals")
@@ -199,7 +214,7 @@ export default function TransformReview() {
       if (error) throw error;
 
       await queryClient.invalidateQueries({ queryKey: ["artifact-frames", artifactId] });
-      toast.success(`Approving and blessing ${pendingFrames.length} steps`);
+      toast.success(`Approved and blessed ${pendingFrames.length} steps with governance signatures`);
     } catch (error) {
       console.error("Approve all error:", error);
       toast.error("Failed to approve all steps");
@@ -459,6 +474,13 @@ export default function TransformReview() {
                                   <Badge variant="destructive">
                                     <XCircle className="mr-1 h-3 w-3" />
                                     REJECTED
+                                  </Badge>
+                                )}
+                                {/* Approval Signature */}
+                                {status === "approved" && frame.verification_approvals?.find(v => v.action === "APPROVED")?.approval_signature && (
+                                  <Badge variant="outline" className="font-mono text-[10px] text-green-500 border-green-500/40 max-w-[160px] truncate">
+                                    <KeyRound className="mr-1 h-3 w-3 shrink-0" />
+                                    {frame.verification_approvals.find(v => v.action === "APPROVED")!.approval_signature!.substring(0, 18)}…
                                   </Badge>
                                 )}
                               </div>

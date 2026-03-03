@@ -2420,6 +2420,15 @@ serve(async (req) => {
 
         if (zombieJobs?.length) {
           console.log(`[poll] Found ${zombieJobs.length} zombie processing jobs, cleaning up...`);
+
+          // Collect unique course_ids to decrement their concurrency counters
+          const zombieCourseIds = [...new Set(zombieJobs.map(z => z.course_id))];
+          const courseEmailMap = new Map<string, string>();
+          for (const cid of zombieCourseIds) {
+            const { data: courseData } = await supabase.from("courses").select("email").eq("id", cid).single();
+            if (courseData?.email) courseEmailMap.set(cid, courseData.email);
+          }
+
           for (const zombie of zombieJobs) {
             const attempts = zombie.attempt_count || 0;
             const maxAttempts = zombie.max_attempts || 5;
@@ -2444,6 +2453,13 @@ serve(async (req) => {
               console.log(`[poll] Reset zombie job ${zombie.id} (${zombie.step}) to pending`);
             }
 
+            // Decrement concurrency counter — the zombie held a slot that was never released
+            const zombieEmail = courseEmailMap.get(zombie.course_id);
+            if (zombieEmail) {
+              await decrementActiveJobs(supabase, zombieEmail);
+              console.log(`[poll] Decremented concurrency counter for ${zombieEmail} (zombie ${zombie.id})`);
+            }
+
             // Deduplicate: purge extra pending jobs for the same (course_id, step)
             // so the claim loop doesn't hit constraint violations from duplicates
             const { data: dupes } = await supabase
@@ -2461,6 +2477,37 @@ serve(async (req) => {
               }
               console.log(`[poll] Purged ${dupes.length - 1} duplicate pending jobs for (${zombie.course_id}, ${zombie.step})`);
             }
+          }
+
+          // Force-heal concurrency counters for affected users
+          const healedEmails = new Set<string>();
+          for (const [, email] of courseEmailMap) {
+            if (healedEmails.has(email)) continue;
+            healedEmails.add(email);
+
+            // Get all course IDs for this user
+            const { data: userCourses } = await supabase
+              .from("courses")
+              .select("id")
+              .eq("email", email);
+            const courseIds = userCourses?.map((c: any) => c.id) || [];
+
+            // Count actually-processing jobs across all their courses
+            let actualCount = 0;
+            if (courseIds.length > 0) {
+              const { count } = await supabase
+                .from("processing_queue")
+                .select("id", { count: "exact", head: true })
+                .eq("status", "processing")
+                .eq("purged", false)
+                .in("course_id", courseIds);
+              actualCount = count ?? 0;
+            }
+
+            await supabase
+              .from("processing_concurrency")
+              .upsert({ user_email: email, active_jobs: actualCount, last_updated: new Date().toISOString() }, { onConflict: "user_email" });
+            console.log(`[poll] Force-healed concurrency for ${email}: active_jobs = ${actualCount}`);
           }
         }
 
