@@ -1,0 +1,2 @@
+[functions.generate-knowledge-layer]
+verify_jwt = false

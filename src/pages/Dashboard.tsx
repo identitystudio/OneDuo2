@@ -1475,6 +1475,24 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
         }
 
         if (moduleData) {
+          // Fetch knowledge_layer for this module/course
+          let knowledgeLayer: any = null;
+          if (item.isModule) {
+            const { data: klData } = await supabase
+              .from('course_modules')
+              .select('knowledge_layer')
+              .eq('id', item.id)
+              .maybeSingle();
+            knowledgeLayer = klData?.knowledge_layer || null;
+          } else {
+            const { data: klData } = await supabase
+              .from('courses')
+              .select('knowledge_layer')
+              .eq('id', item.id)
+              .maybeSingle();
+            knowledgeLayer = klData?.knowledge_layer || null;
+          }
+
           modules.push({
             id: moduleData.id,
             moduleNumber: moduleData.moduleNumber || (i + 1),
@@ -1482,12 +1500,14 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
             video_duration_seconds: moduleData.video_duration_seconds,
             transcript: moduleData.transcript,
             frame_urls: moduleData.frame_urls,
+            frame_analyses: moduleData.frame_analyses,
             audio_events: moduleData.audio_events,
             prosody_annotations: moduleData.prosody_annotations,
             key_moments_index: moduleData.key_moments_index,
             concepts_frameworks: moduleData.concepts_frameworks,
             hidden_patterns: moduleData.hidden_patterns,
             implementation_steps: moduleData.implementation_steps,
+            knowledge_layer: knowledgeLayer,
           });
         }
       }
@@ -1642,22 +1662,39 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
   };
 
   const handleUpgradeAllKnowledgeLayer = async () => {
-    const completedCourses = courses.filter(
-      c => c.status === 'completed' && c.knowledge_layer_status !== 'complete' && c.knowledge_layer_status !== 'generating'
-    );
-    if (completedCourses.length === 0) {
+    // Build flat job list — multi-module courses generate per module (transcript on course_modules),
+    // single-module courses generate at course level (transcript on courses)
+    const jobs: Array<{ courseId: string; moduleId?: string }> = [];
+
+    for (const course of courses) {
+      if (course.status !== 'completed') continue;
+      if (course.modules && course.modules.length > 0) {
+        for (const mod of course.modules) {
+          if (mod.status === 'completed' && mod.knowledge_layer_status !== 'complete' && mod.knowledge_layer_status !== 'generating') {
+            jobs.push({ courseId: course.id, moduleId: mod.id });
+          }
+        }
+      } else {
+        if (course.knowledge_layer_status !== 'complete' && course.knowledge_layer_status !== 'generating') {
+          jobs.push({ courseId: course.id });
+        }
+      }
+    }
+
+    if (jobs.length === 0) {
       toast.info('All completed videos already have AI Artifacts.');
       return;
     }
-    toast.loading(`Upgrading ${completedCourses.length} video(s)... this may take a few minutes.`, { id: 'kl-upgrade-all' });
+
+    toast.loading(`Upgrading ${jobs.length} video(s)... this may take a few minutes.`, { id: 'kl-upgrade-all' });
     let done = 0;
-    for (const course of completedCourses) {
+    for (const job of jobs) {
       try {
-        await supabase.functions.invoke('generate-knowledge-layer', { body: { courseId: course.id } });
+        await supabase.functions.invoke('generate-knowledge-layer', { body: job });
         done++;
       } catch (_) { /* continue with rest */ }
     }
-    toast.success(`✓ AI Artifacts generated for ${done}/${completedCourses.length} videos.`, { id: 'kl-upgrade-all' });
+    toast.success(`✓ AI Artifacts generated for ${done}/${jobs.length} videos.`, { id: 'kl-upgrade-all' });
     loadCourses(false);
   };
 

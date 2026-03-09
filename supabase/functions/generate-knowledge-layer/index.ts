@@ -269,9 +269,26 @@ serve(async (req) => {
     const durationStr = formatDuration(durationSec);
     const moduleTitle: string = row.title || "Untitled Module";
 
-    // Transcript
-    const rawTranscript = buildTranscriptText(row.transcript);
+    // Transcript — for course-level calls, fall back to first module's transcript if course row is empty
+    let rawTranscript = buildTranscriptText(row.transcript);
+    if (!rawTranscript && table === "courses") {
+      const { data: firstMod } = await supabase
+        .from("course_modules")
+        .select("transcript, title, video_duration_seconds")
+        .eq("course_id", courseId)
+        .order("module_number")
+        .limit(1)
+        .maybeSingle();
+      if (firstMod?.transcript) {
+        rawTranscript = buildTranscriptText(firstMod.transcript);
+        console.log(`[KnowledgeLayer] Used module transcript fallback for course ${courseId}`);
+      }
+    }
     const transcriptChunk = rawTranscript.slice(0, MAX_TRANSCRIPT_CHARS);
+
+    if (!transcriptChunk) {
+      console.warn(`[KnowledgeLayer] No transcript found for ${table}:${moduleId || courseId} — output may be empty`);
+    }
 
     // Frames — pull from artifact_frames if available, else use frame_urls OCR
     let frameSummary = "";

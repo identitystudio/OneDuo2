@@ -227,6 +227,8 @@ export interface ModuleData {
   concepts_frameworks?: IntelligenceLayerItem[];
   hidden_patterns?: IntelligenceLayerItem[];
   implementation_steps?: any[];
+  // Knowledge Layer (10/10 AI artifact)
+  knowledge_layer?: any;
 }
 
 // Merged course data with all modules as chapters
@@ -2134,6 +2136,76 @@ export const generateMergedCoursePDF = async (
       pdf.setTextColor(100, 100, 100);
       pdf.text(safe(`Duration: ${formatTime(module.video_duration_seconds)}`), margin, y);
       y += 10;
+    }
+
+    // ========== KNOWLEDGE LAYER (10/10 AI ARTIFACT SECTIONS) ==========
+    const kl = module.knowledge_layer;
+    if (kl) {
+      const klSections: Array<{ key: string; label: string }> = [
+        { key: 'primary_topic',        label: 'PRIMARY TOPIC' },
+        { key: 'outcome',              label: 'OUTCOME' },
+        { key: 'executive_summary',    label: 'EXECUTIVE SUMMARY' },
+        { key: 'core_concepts',        label: 'CORE CONCEPTS' },
+        { key: 'frameworks',           label: 'FRAMEWORKS / MODELS' },
+        { key: 'visual_segments',      label: 'VISUAL SEGMENTS' },
+        { key: 'key_claims',           label: 'KEY CLAIMS / THESIS' },
+        { key: 'questions',            label: 'QUESTIONS THIS MODULE ANSWERS' },
+        { key: 'actionable_takeaways', label: 'ACTIONABLE TAKEAWAYS' },
+        { key: 'cross_module_links',   label: 'CROSS-MODULE LINK OPPORTUNITIES' },
+        { key: 'important_quotes',     label: 'IMPORTANT QUOTES' },
+        { key: 'prompt_starters',      label: 'PROMPT STARTERS FOR AI' },
+        { key: 'retrieval_tags',       label: 'RETRIEVAL TAGS' },
+      ];
+
+      // Section divider
+      if (y > pageHeight - 40) addPageWithHeaders();
+      pdf.setFillColor(0, 0, 0);
+      pdf.rect(margin, y, contentWidth, 0.5, 'F');
+      y += 6;
+      pdf.setFontSize(13);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setTextColor(0, 0, 0);
+      pdf.text(safe('AI KNOWLEDGE LAYER'), margin, y);
+      y += 10;
+
+      for (const { key, label } of klSections) {
+        const rawVal = kl[key];
+        if (!rawVal) continue;
+        const val = Array.isArray(rawVal) ? rawVal.join(', ') : String(rawVal);
+        if (!val.trim()) continue;
+
+        if (y > pageHeight - 40) addPageWithHeaders();
+
+        // Section heading
+        pdf.setFontSize(11);
+        pdf.setFont('helvetica', 'bold');
+        pdf.setTextColor(0, 0, 0);
+        pdf.text(safe(label), margin, y);
+        y += 6;
+
+        // Section body
+        pdf.setFontSize(9);
+        pdf.setFont('helvetica', 'normal');
+        pdf.setTextColor(30, 30, 30);
+        const lines = pdf.splitTextToSize(safe(val), contentWidth - 5);
+        for (const line of lines) {
+          if (y > pageHeight - 20) {
+            addPageWithHeaders();
+            pdf.setFont('helvetica', 'normal');
+            pdf.setFontSize(9);
+            pdf.setTextColor(30, 30, 30);
+          }
+          pdf.text(line, margin + 3, y);
+          y += 5;
+        }
+        y += 5;
+      }
+
+      // Divider before transcript
+      if (y > pageHeight - 20) addPageWithHeaders();
+      pdf.setFillColor(180, 180, 180);
+      pdf.rect(margin, y, contentWidth, 0.3, 'F');
+      y += 8;
     }
 
     // ========== INTELLIGENCE LAYERS (A-D) ==========
