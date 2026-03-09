@@ -156,7 +156,7 @@ ${transcriptChunk}
 
 ---
 
-Now produce the structured knowledge layer using EXACTLY these 15 sections:
+Now produce the structured knowledge layer using EXACTLY these 16 sections:
 
 ## MODULE TITLE
 ## DURATION
@@ -193,6 +193,13 @@ Now produce the structured knowledge layer using EXACTLY these 15 sections:
 
 ## PROMPT STARTERS FOR AI
 (Useful prompts a user could ask based on this module)
+
+## DECISION RULES
+(Actionable if-then logic extracted from this module. Format each rule as:
+  IF [situation or condition]
+  → THEN [recommended action or decision]
+  WHY: [one-sentence rationale]
+Produce 5–10 decision rules. These turn knowledge into executable logic for AI reasoning.)
 
 ## RETRIEVAL TAGS
 (Flat comma-separated tag list for semantic retrieval)
@@ -418,6 +425,7 @@ function parseMarkdownToJson(md: string, title: string, duration: string): Recor
     "CROSS-MODULE LINK OPPORTUNITIES",
     "IMPORTANT QUOTES",
     "PROMPT STARTERS FOR AI",
+    "DECISION RULES",
     "RETRIEVAL TAGS",
     "FULL CLEANED TRANSCRIPT",
   ];
@@ -461,6 +469,7 @@ function parseMarkdownToJson(md: string, title: string, duration: string): Recor
     cross_module_links: sections["CROSS-MODULE LINK OPPORTUNITIES"] || "",
     important_quotes: sections["IMPORTANT QUOTES"] || "",
     prompt_starters: sections["PROMPT STARTERS FOR AI"] || "",
+    decision_rules: sections["DECISION RULES"] || "",
     retrieval_tags: tags,
     full_transcript: sections["FULL CLEANED TRANSCRIPT"] || "",
     generated_at: new Date().toISOString(),

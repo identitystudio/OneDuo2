@@ -301,6 +301,7 @@ function buildMarkdownFromJson(layer: Record<string, any> | null, fallbackTitle:
     ['CROSS-MODULE LINK OPPORTUNITIES', layer.cross_module_links],
     ['IMPORTANT QUOTES', layer.important_quotes],
     ['PROMPT STARTERS FOR AI', layer.prompt_starters],
+    ['DECISION RULES', layer.decision_rules],
     ['RETRIEVAL TAGS', Array.isArray(layer.retrieval_tags) ? layer.retrieval_tags.join(', ') : layer.retrieval_tags],
     ['FULL CLEANED TRANSCRIPT', layer.full_transcript],
   ];

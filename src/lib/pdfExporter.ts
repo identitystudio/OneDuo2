@@ -2154,6 +2154,7 @@ export const generateMergedCoursePDF = async (
         { key: 'cross_module_links',   label: 'CROSS-MODULE LINK OPPORTUNITIES' },
         { key: 'important_quotes',     label: 'IMPORTANT QUOTES' },
         { key: 'prompt_starters',      label: 'PROMPT STARTERS FOR AI' },
+        { key: 'decision_rules',       label: 'DECISION RULES' },
         { key: 'retrieval_tags',       label: 'RETRIEVAL TAGS' },
       ];
 
