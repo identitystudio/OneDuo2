@@ -2243,10 +2243,11 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                                 <>
                                   <Button
                                     size="sm"
+                                    variant="outline"
                                     disabled={generatingPDF === `block-${block.courses[0]?.id}`}
-                                    className={`relative gap-1.5 text-white ${block.courses[0]?.pdf_revision_pending
-                                      ? 'bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700'
-                                      : 'bg-gradient-to-r from-[#DC2626] to-[#B91C1C] hover:from-[#B91C1C] hover:to-[#991B1B]'
+                                    className={`relative gap-1.5 font-bold border-2 bg-transparent ${block.courses[0]?.pdf_revision_pending
+                                      ? 'border-blue-400 text-blue-400 hover:bg-blue-400/10'
+                                      : 'border-red-500 text-red-500 hover:bg-red-500/10'
                                       }`}
                                     onClick={() => handleExportCombinedPDF(block, true)}
                                     title={block.courses[0]?.pdf_revision_pending ? 'Download Updated PDF' : 'Generate PDF'}
