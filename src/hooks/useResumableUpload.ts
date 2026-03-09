@@ -206,7 +206,6 @@ export function useResumableUpload() {
         },
         headers: {
           Authorization: `Bearer ${accessToken}`,
-          apikey: supabaseKey,
           'x-upsert': 'true',
         },
 
