@@ -7,7 +7,7 @@ import { ManualProcessingCard } from '@/components/ManualProcessingCard';
 import {
   Plus, RefreshCw,
   CheckCircle, Clock, Loader2, Sparkles, Check,
-  AlertTriangle, Zap, ArrowRight, Link2, FileText, ChevronDown, ChevronRight, Download, X, Layers, Mail, Upload, Globe, Lock, Paperclip, Pencil, Key
+  AlertTriangle, Zap, ArrowRight, Link2, FileText, ChevronDown, ChevronRight, Download, X, Layers, Mail, Upload, Globe, Lock, Paperclip, Pencil, Key, MoreHorizontal
 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
@@ -17,6 +17,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import {
@@ -2324,43 +2325,6 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                                       <span className="hidden sm:inline">Generate Txt File</span>
                                     </Button>
                                   )}
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      handleCopyAILink(block.courses[0].id);
-                                    }}
-                                    className="gap-1.5 border-cyan-500/20 text-cyan-400 hover:bg-cyan-500/10"
-                                    disabled={!block.courses[0]?.share_enabled}
-                                    title={block.courses[0]?.share_enabled ? 'Copy AI link' : 'Enable sharing first'}
-                                  >
-                                    <Link2 className="w-3.5 h-3.5" />
-                                    <span className="hidden sm:inline">AI Link</span>
-                                  </Button>
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      handleToggleSharing(block.courses[0].id, block.courses[0]?.share_enabled ?? false);
-                                    }}
-                                    disabled={togglingShare === block.courses[0].id}
-                                    className={`gap-1.5 ${block.courses[0]?.share_enabled
-                                      ? 'border-green-500/30 text-green-400 hover:bg-green-500/10'
-                                      : 'border-white/20 text-white/50 hover:bg-white/10'
-                                      }`}
-                                    title={block.courses[0]?.share_enabled ? 'Public sharing is ON' : 'Public sharing is OFF'}
-                                  >
-                                    {togglingShare === block.courses[0].id ? (
-                                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                                    ) : block.courses[0]?.share_enabled ? (
-                                      <Globe className="w-3.5 h-3.5" />
-                                    ) : (
-                                      <Lock className="w-3.5 h-3.5" />
-                                    )}
-                                    <span className="hidden sm:inline">{block.courses[0]?.share_enabled ? 'Public' : 'Private'}</span>
-                                  </Button>
                                 </>
                               )}
                               {isExpanded && (
@@ -2376,23 +2340,62 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                                   {block.displayItems.every((i) => selectedCourses.has(i.id)) ? 'Deselect All' : 'Select All'}
                                 </Button>
                               )}
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setAddFilesDialog({
-                                    open: true,
-                                    courseId: block.courses[0].id,
-                                    courseTitle: block.name,
-                                    existingFiles: block.courseFiles || []
-                                  });
-                                }}
-                                className="border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/10 gap-1"
-                              >
-                                <Paperclip className="w-4 h-4" />
-                                <span className="hidden sm:inline">Add Files</span>
-                              </Button>
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={(e) => e.stopPropagation()}
+                                    className="border-white/20 text-white/50 hover:text-white hover:bg-white/10 px-2"
+                                  >
+                                    <MoreHorizontal className="w-4 h-4" />
+                                  </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end" className="w-48 bg-[#0f1117] border-white/10 text-white">
+                                  {block.allCompleted && (
+                                    <>
+                                      <DropdownMenuItem
+                                        onClick={() => handleCopyAILink(block.courses[0].id)}
+                                        disabled={!block.courses[0]?.share_enabled}
+                                        className="gap-2 cursor-pointer text-cyan-400 focus:text-cyan-400 focus:bg-cyan-500/10"
+                                      >
+                                        <Link2 className="w-4 h-4" />
+                                        AI Link
+                                        {!block.courses[0]?.share_enabled && (
+                                          <span className="ml-auto text-[10px] text-white/30">enable sharing</span>
+                                        )}
+                                      </DropdownMenuItem>
+                                      <DropdownMenuItem
+                                        onClick={() => handleToggleSharing(block.courses[0].id, block.courses[0]?.share_enabled ?? false)}
+                                        disabled={togglingShare === block.courses[0].id}
+                                        className={`gap-2 cursor-pointer ${block.courses[0]?.share_enabled ? 'text-green-400 focus:text-green-400 focus:bg-green-500/10' : 'text-white/50 focus:text-white focus:bg-white/10'}`}
+                                      >
+                                        {togglingShare === block.courses[0].id ? (
+                                          <Loader2 className="w-4 h-4 animate-spin" />
+                                        ) : block.courses[0]?.share_enabled ? (
+                                          <Globe className="w-4 h-4" />
+                                        ) : (
+                                          <Lock className="w-4 h-4" />
+                                        )}
+                                        {block.courses[0]?.share_enabled ? 'Public' : 'Private'}
+                                      </DropdownMenuItem>
+                                      <DropdownMenuSeparator className="bg-white/10" />
+                                    </>
+                                  )}
+                                  <DropdownMenuItem
+                                    onClick={() => setAddFilesDialog({
+                                      open: true,
+                                      courseId: block.courses[0].id,
+                                      courseTitle: block.name,
+                                      existingFiles: block.courseFiles || []
+                                    })}
+                                    className="gap-2 cursor-pointer text-cyan-400 focus:text-cyan-400 focus:bg-cyan-500/10"
+                                  >
+                                    <Paperclip className="w-4 h-4" />
+                                    Add Files
+                                  </DropdownMenuItem>
+                                </DropdownMenuContent>
+                              </DropdownMenu>
                               <button onClick={() => toggleBlock(block.name)}>
                                 {isExpanded ? (
                                   <ChevronDown className="w-5 h-5 text-white/40" />
