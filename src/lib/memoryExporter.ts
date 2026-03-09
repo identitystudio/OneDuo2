@@ -213,6 +213,107 @@ export interface OneDuoMemory {
 
 export type ExportMode = 'training' | 'creative';
 
+// ============= KNOWLEDGE LAYER MARKDOWN EXPORT =============
+
+/**
+ * Fetches the stored knowledge_layer_txt for a course or module and
+ * returns it as a downloadable .md Blob ready for Poe, CopyBots, or
+ * any AI tool that accepts plain text uploads.
+ *
+ * Falls back to building a minimal markdown from knowledge_layer JSONB
+ * if knowledge_layer_txt is null.
+ */
+export async function downloadKnowledgeLayerMarkdown(
+  courseId: string,
+  moduleId?: string,
+  filename?: string
+): Promise<void> {
+  // Fetch from Supabase
+  let txt: string | null = null;
+  let title = 'OneDuo Knowledge Layer';
+
+  if (moduleId) {
+    const { data } = await supabase
+      .from('course_modules')
+      .select('title, knowledge_layer_txt, knowledge_layer, knowledge_layer_status')
+      .eq('id', moduleId)
+      .maybeSingle();
+
+    if (data) {
+      title = data.title || title;
+      txt = data.knowledge_layer_txt ?? buildMarkdownFromJson(data.knowledge_layer, data.title);
+    }
+  } else {
+    const { data } = await supabase
+      .from('courses')
+      .select('title, knowledge_layer_txt, knowledge_layer, knowledge_layer_status')
+      .eq('id', courseId)
+      .maybeSingle();
+
+    if (data) {
+      title = data.title || title;
+      txt = data.knowledge_layer_txt ?? buildMarkdownFromJson(data.knowledge_layer, data.title);
+    }
+  }
+
+  if (!txt) {
+    throw new Error('Knowledge Layer not yet generated for this module. Please wait for processing to complete.');
+  }
+
+  // Trigger browser download
+  const blob = new Blob([txt], { type: 'text/markdown;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename || `${title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_knowledge_layer.md`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Build a minimal markdown string from the JSONB knowledge_layer object
+ * when knowledge_layer_txt was not stored (legacy / partial runs).
+ */
+function buildMarkdownFromJson(layer: Record<string, any> | null, fallbackTitle: string): string | null {
+  if (!layer) return null;
+
+  const lines: string[] = [
+    `# ONEDUO KNOWLEDGE ARTIFACT`,
+    ``,
+    `**Module:** ${layer.module_title || fallbackTitle}`,
+    `**Duration:** ${layer.duration || 'N/A'}`,
+    `**Generated:** ${layer.generated_at || new Date().toISOString()}`,
+    ``,
+    `---`,
+    ``,
+  ];
+
+  const sections: Array<[string, string]> = [
+    ['PRIMARY TOPIC', layer.primary_topic],
+    ['OUTCOME', layer.outcome],
+    ['EXECUTIVE SUMMARY', layer.executive_summary],
+    ['CORE CONCEPTS', layer.core_concepts],
+    ['FRAMEWORKS / MODELS', layer.frameworks],
+    ['VISUAL SEGMENTS', layer.visual_segments],
+    ['KEY CLAIMS / THESIS', layer.key_claims],
+    ['QUESTIONS THIS MODULE ANSWERS', layer.questions],
+    ['ACTIONABLE TAKEAWAYS', layer.actionable_takeaways],
+    ['CROSS-MODULE LINK OPPORTUNITIES', layer.cross_module_links],
+    ['IMPORTANT QUOTES', layer.important_quotes],
+    ['PROMPT STARTERS FOR AI', layer.prompt_starters],
+    ['RETRIEVAL TAGS', Array.isArray(layer.retrieval_tags) ? layer.retrieval_tags.join(', ') : layer.retrieval_tags],
+    ['FULL CLEANED TRANSCRIPT', layer.full_transcript],
+  ];
+
+  for (const [heading, content] of sections) {
+    if (content) {
+      lines.push(`## ${heading}`, ``, content, ``, `---`, ``);
+    }
+  }
+
+  return lines.join('\n');
+}
+
 interface CourseData {
   title: string;
   video_duration_seconds?: number;

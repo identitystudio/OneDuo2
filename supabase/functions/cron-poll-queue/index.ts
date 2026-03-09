@@ -68,7 +68,7 @@ Deno.serve(async (req) => {
     
     const results: Array<{ jobId: string; courseId: string; step: string; status: string }> = [];
     let claimedCount = 0;
-    const MAX_JOBS_PER_POLL = 5;
+    const MAX_JOBS_PER_POLL = 2;
 
     for (let i = 0; i < MAX_JOBS_PER_POLL; i++) {
       // Atomically claim a job with retry for constraint violations
@@ -275,6 +275,42 @@ Deno.serve(async (req) => {
               status: 'reset_from_expired'
             });
           }
+        }
+      }
+    }
+
+    // ============ PHASE 3b: RECOVER STUCK awaiting_webhook JOBS (>30 min) ============
+    // Jobs in 'awaiting_webhook' are invisible to the normal visibility timeout recovery.
+    // If Replicate/AssemblyAI never fires the webhook (rate limited, dropped), these
+    // jobs freeze forever. Reset them to 'pending' so they get retried.
+    const webhookTimeoutCutoff = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+    const { data: stuckWebhookJobs } = await supabase
+      .from('processing_queue')
+      .select('id, course_id, step, attempt_count')
+      .eq('status', 'awaiting_webhook')
+      .lt('updated_at', webhookTimeoutCutoff)
+      .eq('purged', false)
+      .limit(5);
+
+    if (stuckWebhookJobs && stuckWebhookJobs.length > 0) {
+      console.log(`[cron-poll] Found ${stuckWebhookJobs.length} jobs stuck in awaiting_webhook >30min, resetting to pending`);
+      for (const stuckJob of stuckWebhookJobs) {
+        const attemptCount = (stuckJob.attempt_count || 0) + 1;
+        if (attemptCount >= 5) {
+          await supabase.from('processing_queue').update({
+            status: 'failed',
+            error_message: `Webhook never fired after ${attemptCount} attempts`
+          }).eq('id', stuckJob.id);
+          console.log(`[cron-poll] Webhook job ${stuckJob.id} exceeded max attempts, marked failed`);
+        } else {
+          await supabase.from('processing_queue').update({
+            status: 'pending',
+            claimed_by: null,
+            visibility_timeout: null,
+            attempt_count: attemptCount,
+            error_message: `Webhook timeout (attempt ${attemptCount}), requeueing`
+          }).eq('id', stuckJob.id);
+          console.log(`[cron-poll] Reset stuck webhook job ${stuckJob.id} to pending (attempt ${attemptCount})`);
         }
       }
     }

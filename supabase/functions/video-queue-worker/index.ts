@@ -688,6 +688,49 @@ async function processVideoJobBatched(
     );
   }
 
+  // ========== PHASE 5: KNOWLEDGE LAYER GENERATION ==========
+  // Non-blocking — fires after PDF + intent detection.
+  // Calls generate-knowledge-layer which uses Replicate (Llama 3) to produce
+  // the 17-section structured AI thinking layer and stores it on the course row.
+  try {
+    await logJobEvent(supabase, job.job_id, 'knowledge_layer_start', 'info',
+      'Starting OneDuo™ Knowledge Layer generation', undefined, undefined,
+      { courseId, moduleId: moduleId || null, fps: EXTRACTION_FPS }
+    );
+
+    const klResponse = await fetch(`${supabaseUrl}/functions/v1/generate-knowledge-layer`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${supabaseServiceKey}`
+      },
+      body: JSON.stringify({ courseId, moduleId: moduleId || undefined })
+    });
+
+    if (klResponse.ok) {
+      const klResult = await klResponse.json();
+      await logJobEvent(supabase, job.job_id, 'knowledge_layer_complete', 'info',
+        `Knowledge Layer generated (${klResult.markdownLength || 0} chars)`, undefined, undefined,
+        { courseId, moduleId: moduleId || null, markdownLength: klResult.markdownLength }
+      );
+    } else {
+      const errorText = await klResponse.text();
+      console.warn(`[VideoQueueWorker] Knowledge Layer generation failed: ${errorText}`);
+      await logJobEvent(supabase, job.job_id, 'knowledge_layer_error', 'warn',
+        `Knowledge Layer failed (non-blocking)`, errorText, undefined,
+        { courseId, moduleId: moduleId || null }
+      );
+    }
+  } catch (klError) {
+    // Non-blocking — PDF is already done; knowledge layer can be regenerated on demand
+    console.warn('[VideoQueueWorker] Knowledge Layer error (non-blocking):', klError);
+    await logJobEvent(supabase, job.job_id, 'knowledge_layer_error', 'warn',
+      `Knowledge Layer failed (non-blocking)`,
+      klError instanceof Error ? klError.message : 'Unknown error',
+      undefined, {}
+    );
+  }
+
   await updateProgress(supabase, courseId, moduleId, 100, expectedFrames, pdfPaths[0]);
 
   return {

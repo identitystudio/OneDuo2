@@ -318,10 +318,6 @@ serve(async (req) => {
         confidence_score: parseFloat(score.toFixed(2)),
         confidence_level: score >= 0.80 ? "HIGH" : score >= 0.50 ? "MEDIUM" : "LOW",
         is_critical: isCritical,
-        psychological_layer: currentAnalysis.psychologicalLayer,
-        instructor_intent: currentAnalysis.instructorIntent,
-        key_elements: currentAnalysis.keyElements,
-        prosody_annotations: currentAnalysis.prosody,
       });
 
       if (score >= 0.50) stats.keyMoments++;
@@ -330,7 +326,11 @@ serve(async (req) => {
       if (textSelected) stats.selectionCount++;
 
       if (batchFrames.length >= batchSize || i === framesToProcess - 1) {
-        await supabase.from("artifact_frames").insert(batchFrames);
+        const { error: insertError } = await supabase.from("artifact_frames").insert(batchFrames);
+        if (insertError) {
+          console.error("[OneDuo] Frame insert error:", insertError.message);
+          throw new Error(`Frame insert failed: ${insertError.message}`);
+        }
         batchFrames = [];
       }
       previousAnalysis = currentAnalysis;
@@ -338,10 +338,8 @@ serve(async (req) => {
 
     await supabase.from("transformation_artifacts").update({
       status: "completed",
-      frames_processed: framesToProcess,
-      key_moments_count: stats.keyMoments,
-      critical_moments_count: stats.criticalCount,
-      transformation_score: parseFloat(((stats.keyMoments / framesToProcess) * 10).toFixed(1)),
+      frame_count: framesToProcess,
+      key_moments: stats.keyMoments,
       updated_at: new Date().toISOString(),
     }).eq("id", artifactId);
 

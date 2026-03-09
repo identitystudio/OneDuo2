@@ -32,6 +32,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { Logo } from '@/components/Logo';
 import { generateChatGPTPDF, generateMergedCoursePDF, downloadPDF, type ModuleData as PdfModuleData, type MergedCourseData } from '@/lib/pdfExporter';
+import { downloadKnowledgeLayerMarkdown } from '@/lib/memoryExporter';
 import { loadFilesInParallel } from '@/lib/parallelFileLoader';
 import { SupportChatWidget } from '@/components/SupportChatWidget';
 import { DownloadCountBadge } from '@/components/DownloadCountBadge';
@@ -55,6 +56,7 @@ interface CourseModule {
   updated_at?: string;
   video_duration_seconds?: number;
   heartbeat_at?: string;
+  knowledge_layer_status?: string;
 }
 
 interface CourseFile {
@@ -88,6 +90,7 @@ interface Course {
   course_files?: CourseFile[];
   last_heartbeat_at?: string;
   pdf_revision_pending?: boolean;
+  knowledge_layer_status?: string;
 }
 
 // Display item can be either a Course (single module) or a CourseModule (part of multi-module course)
@@ -107,6 +110,7 @@ interface DisplayItem {
   share_enabled?: boolean;
   share_token?: string;
   isModule: boolean; // true if from course_modules, false if standalone course
+  knowledge_layer_status?: string;
 }
 
 // Progress step configuration with labels and percentage ranges
@@ -483,6 +487,7 @@ export default function Dashboard() {
               share_enabled: course.share_enabled,
               share_token: course.share_token,
               isModule: true,
+              knowledge_layer_status: mod.knowledge_layer_status,
             });
           });
         } else {
@@ -503,6 +508,7 @@ export default function Dashboard() {
             share_enabled: course.share_enabled,
             share_token: course.share_token,
             isModule: false,
+            knowledge_layer_status: course.knowledge_layer_status,
           });
         }
       });
@@ -1609,6 +1615,52 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
     }
   };
 
+  // Download the AI Knowledge Layer (.md) for a course or module
+  const handleDownloadKnowledgeLayer = async (courseId: string, moduleId?: string, title?: string) => {
+    try {
+      toast.loading('Preparing AI Artifact...', { id: 'kl-download' });
+      await downloadKnowledgeLayerMarkdown(courseId, moduleId, title ? `${title}_AI_Artifact.md` : undefined);
+      toast.success('✓ AI Artifact downloaded!', { id: 'kl-download' });
+    } catch (err: any) {
+      toast.error(err.message || 'AI Artifact not ready yet — still generating.', { id: 'kl-download' });
+    }
+  };
+
+  const handleGenerateKnowledgeLayer = async (courseId: string, moduleId?: string) => {
+    const toastId = `kl-gen-${courseId}${moduleId ? `-${moduleId}` : ''}`;
+    try {
+      toast.loading('Generating AI Artifact...', { id: toastId });
+      const { error } = await supabase.functions.invoke('generate-knowledge-layer', {
+        body: { courseId, moduleId },
+      });
+      if (error) throw error;
+      toast.success('✓ AI Artifact generated! You can now download it.', { id: toastId });
+      loadCourses(false);
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to generate AI Artifact.', { id: toastId });
+    }
+  };
+
+  const handleUpgradeAllKnowledgeLayer = async () => {
+    const completedCourses = courses.filter(
+      c => c.status === 'completed' && c.knowledge_layer_status !== 'complete' && c.knowledge_layer_status !== 'generating'
+    );
+    if (completedCourses.length === 0) {
+      toast.info('All completed videos already have AI Artifacts.');
+      return;
+    }
+    toast.loading(`Upgrading ${completedCourses.length} video(s)... this may take a few minutes.`, { id: 'kl-upgrade-all' });
+    let done = 0;
+    for (const course of completedCourses) {
+      try {
+        await supabase.functions.invoke('generate-knowledge-layer', { body: { courseId: course.id } });
+        done++;
+      } catch (_) { /* continue with rest */ }
+    }
+    toast.success(`✓ AI Artifacts generated for ${done}/${completedCourses.length} videos.`, { id: 'kl-upgrade-all' });
+    loadCourses(false);
+  };
+
   const toggleBlock = (blockName: string) => {
     setExpandedBlocks(prev => {
       const next = new Set(prev);
@@ -1749,6 +1801,18 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
             >
               <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
             </Button>
+            {courses.some(c => c.status === 'completed' && c.knowledge_layer_status !== 'complete' && c.knowledge_layer_status !== 'generating') && (
+              <Button
+                variant="outline"
+                onClick={handleUpgradeAllKnowledgeLayer}
+                className="gap-2 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10"
+                title="Generate AI Artifacts for all completed videos that don't have one yet"
+              >
+                <Sparkles className="w-4 h-4" />
+                <span className="hidden sm:inline">Upgrade All to AI Artifacts</span>
+                <span className="sm:hidden">Upgrade All</span>
+              </Button>
+            )}
             <Button onClick={() => navigate('/upload')} className="gap-2 bg-gradient-to-r from-cyan-500 to-cyan-400 text-black">
               <Plus className="w-4 h-4" />
               <span className="hidden sm:inline">Add Training</span>
@@ -2154,6 +2218,35 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                                       </>
                                     )}
                                   </Button>
+                                  {/* AI Artifact — generate or download depending on status */}
+                                  {block.courses[0]?.knowledge_layer_status === 'generating' ? (
+                                    <Button size="sm" variant="outline" disabled className="gap-1.5 border-emerald-500/30 text-emerald-400">
+                                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                      Generating...
+                                    </Button>
+                                  ) : block.courses[0]?.knowledge_layer_status === 'complete' ? (
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={(e) => { e.stopPropagation(); handleDownloadKnowledgeLayer(block.courses[0].id, undefined, block.name); }}
+                                      className="gap-1.5 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10"
+                                      title="Download AI Artifact (.md)"
+                                    >
+                                      <FileText className="w-3.5 h-3.5" />
+                                      AI Artifact
+                                    </Button>
+                                  ) : (
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={(e) => { e.stopPropagation(); handleGenerateKnowledgeLayer(block.courses[0].id); }}
+                                      className="gap-1.5 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10"
+                                      title="Generate AI Artifact — structured knowledge layer for Poe, CopyBots, custom GPTs"
+                                    >
+                                      <Sparkles className="w-3.5 h-3.5" />
+                                      Generate AI Artifact
+                                    </Button>
+                                  )}
                                   <Button
                                     size="sm"
                                     variant="outline"
@@ -2576,13 +2669,44 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
 
                                             {/* Completed Actions - Always show minimal UI, download is at block header */}
                                             {item.status === 'completed' && parentCourse && (
-                                              <div className="flex items-center gap-2">
+                                              <div className="flex items-center gap-2 flex-wrap">
                                                 <span className="text-xs text-emerald-400 flex items-center gap-1">
                                                   <CheckCircle className="w-3.5 h-3.5" />
                                                   Ready
                                                 </span>
                                                 {item.video_duration_seconds && (
                                                   <span className="text-xs text-white/30">• {formatDuration(item.video_duration_seconds)}</span>
+                                                )}
+                                                {/* AI Artifact — per-module generate or download */}
+                                                {item.isModule && (
+                                                  item.knowledge_layer_status === 'generating' ? (
+                                                    <Button size="sm" variant="ghost" disabled className="h-6 px-2 text-xs text-emerald-400/70 gap-1">
+                                                      <Loader2 className="w-3 h-3 animate-spin" />
+                                                      Generating...
+                                                    </Button>
+                                                  ) : item.knowledge_layer_status === 'complete' ? (
+                                                    <Button
+                                                      size="sm"
+                                                      variant="ghost"
+                                                      className="h-6 px-2 text-xs text-emerald-400/70 hover:text-emerald-400 hover:bg-emerald-500/10 gap-1"
+                                                      onClick={() => handleDownloadKnowledgeLayer(item.parentCourseId, item.id, item.title)}
+                                                      title="Download AI Artifact (.md)"
+                                                    >
+                                                      <FileText className="w-3 h-3" />
+                                                      AI Artifact
+                                                    </Button>
+                                                  ) : (
+                                                    <Button
+                                                      size="sm"
+                                                      variant="ghost"
+                                                      className="h-6 px-2 text-xs text-emerald-400/70 hover:text-emerald-400 hover:bg-emerald-500/10 gap-1"
+                                                      onClick={() => handleGenerateKnowledgeLayer(item.parentCourseId, item.id)}
+                                                      title="Generate AI Artifact"
+                                                    >
+                                                      <Sparkles className="w-3 h-3" />
+                                                      Generate AI Artifact
+                                                    </Button>
+                                                  )
                                                 )}
                                               </div>
                                             )}

@@ -642,12 +642,14 @@ serve(async (req) => {
         confidence_level,
         verification_approvals (
           action,
-          signature_verified
+          approval_signature,
+          user_id,
+          server_hmac
         )
       `)
       .eq('artifact_id', artifactId)
       .or('is_critical.eq.true,confidence_level.eq.LOW');
-    
+
     if (criticalError) {
       console.error("Critical frames check error:", criticalError);
       return new Response(
@@ -655,13 +657,13 @@ serve(async (req) => {
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
-    
+
     // Count unapproved critical frames
     const unapprovedCritical = (criticalFrames || []).filter((frame: any) => {
-      const hasValidApproval = frame.verification_approvals?.some((v: any) => 
-        v.action === 'APPROVED' && (v.signature_verified === true || v.signature_verified === null)
+      const hasValidApproval = frame.verification_approvals?.some((v: any) =>
+        v.action === 'APPROVED'
       );
-      const hasRejection = frame.verification_approvals?.some((v: any) => 
+      const hasRejection = frame.verification_approvals?.some((v: any) =>
         v.action === 'REJECTED'
       );
       // Needs approval if critical/low and no approval or rejection
@@ -683,6 +685,53 @@ serve(async (req) => {
       );
     }
     
+    // ============================================
+    // STAGE 2.5: HMAC INTEGRITY VERIFICATION (Patent-Critical)
+    // Re-compute server HMAC over each approved critical frame's canonical data.
+    // If stored server_hmac !== computed → approval was injected directly into DB
+    // (sovereignty breach — bypassed the approve-governance-frame edge function).
+    // Legacy approvals (no server_hmac) are allowed with a warning for backward compat.
+    // ============================================
+    const approvedCriticalFrames = (criticalFrames || []).filter((frame: any) =>
+      frame.verification_approvals?.some((v: any) => v.action === 'APPROVED')
+    );
+
+    const tamperResults = await Promise.all(
+      approvedCriticalFrames.map(async (frame: any) => {
+        const approval = frame.verification_approvals.find((v: any) => v.action === 'APPROVED');
+        if (!approval.server_hmac) {
+          console.log(`[HMAC] Frame #${frame.frame_index}: no server_hmac (legacy approval) — allowed`);
+          return { frame_index: frame.frame_index, ok: true, legacy: true };
+        }
+        const canonicalObj = {
+          action: approval.action,
+          artifact_id: artifactId,
+          frame_id: frame.id,
+          user_id: approval.user_id,
+        };
+        const { ok } = await verifyApprovalIntegrity(canonicalObj, approval.server_hmac);
+        console.log(`[HMAC] Frame #${frame.frame_index}: ${ok ? 'VERIFIED ✓' : 'TAMPER DETECTED ✗'}`);
+        return { frame_index: frame.frame_index, ok, legacy: false };
+      })
+    );
+
+    const tamperedFrames = tamperResults.filter((r: { frame_index: number; ok: boolean; legacy: boolean }) => !r.ok && !r.legacy);
+    if (tamperedFrames.length > 0) {
+      const frameList = tamperedFrames.map((f: { frame_index: number; ok: boolean; legacy: boolean }) => `#${f.frame_index}`).join(', ');
+      console.error(`[SOVEREIGNTY BREACH] Tampered approvals on frames: ${frameList}`);
+      return new Response(
+        JSON.stringify({
+          error: "SOVEREIGNTY BREACH DETECTED",
+          tampered_frames: tamperedFrames.length,
+          message: `${tamperedFrames.length} approval(s) failed HMAC integrity check — possible DB injection`,
+          frames: frameList,
+          remedy: "Re-approve affected frames through the Verification Gate",
+        }),
+        { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    console.log(`[HMAC] ${approvedCriticalFrames.length} critical frame approvals verified (${tamperResults.filter((r: { legacy: boolean }) => r.legacy).length} legacy)`);
     console.log(`Sovereignty gate PASSED for artifact: ${artifactId} (reasoning: resolved, critical frames: ${criticalFrames?.length || 0} approved)`);
 
     // Fetch artifact
@@ -708,7 +757,8 @@ serve(async (req) => {
         verification_approvals (
           action,
           created_at,
-          user_id
+          user_id,
+          server_hmac
         )
       `)
       .eq("artifact_id", artifactId)
@@ -720,13 +770,9 @@ serve(async (req) => {
     }
 
     // Filter: only approved frames or high-confidence non-critical
-    // JSON CANONICALIZATION CHECK: Only include approvals with verified signatures
     const includedFrames = (frames || []).filter(f => {
       if (f.is_critical || f.confidence_level === "LOW") {
-        // Only accept approvals that passed signature verification (or legacy approvals)
-        return f.verification_approvals?.some((v: any) => 
-          v.action === "APPROVED" && (v.signature_verified === true || v.signature_verified === null)
-        );
+        return f.verification_approvals?.some((v: any) => v.action === "APPROVED");
       }
       return true;
     });
@@ -799,7 +845,8 @@ serve(async (req) => {
       JSON.stringify({
         success: true,
         pdfUrl: signedData.signedUrl,
-        frameCount: includedFrames.length,
+        includedFrames: includedFrames.length,
+        totalFrames: frames?.length || 0,
         reasoningLogCount: reasoningLogs?.length || 0
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }

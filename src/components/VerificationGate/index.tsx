@@ -69,12 +69,14 @@ export function VerificationGate({ frame, open, onOpenChange }: VerificationGate
 
       const signature = await generateApprovalSignature(frame.id, frame.artifact_id, user.id);
 
-      const { error } = await supabase.from("verification_approvals").insert({
-        artifact_id: frame.artifact_id,
-        frame_id: frame.id,
-        user_id: user.id,
-        action: "APPROVED",
-        approval_signature: signature,
+      // Route through edge function so server can compute + store HMAC for tamper detection
+      const { error } = await supabase.functions.invoke("approve-governance-frame", {
+        body: {
+          artifact_id: frame.artifact_id,
+          frame_id: frame.id,
+          action: "APPROVED",
+          approval_signature: signature,
+        },
       });
 
       if (error) throw error;
@@ -92,15 +94,14 @@ export function VerificationGate({ frame, open, onOpenChange }: VerificationGate
   const handleReject = async () => {
     setIsSubmitting(true);
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error("Not authenticated");
-
-      const { error } = await supabase.from("verification_approvals").insert({
-        artifact_id: frame.artifact_id,
-        frame_id: frame.id,
-        user_id: user.id,
-        action: "REJECTED",
-        reason: rejectionReason || "No reason provided",
+      // Route through edge function so server HMAC is recorded for rejected frames too
+      const { error } = await supabase.functions.invoke("approve-governance-frame", {
+        body: {
+          artifact_id: frame.artifact_id,
+          frame_id: frame.id,
+          action: "REJECTED",
+          reason: rejectionReason || "No reason provided",
+        },
       });
 
       if (error) throw error;

@@ -196,22 +196,23 @@ export default function TransformReview() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("Not authenticated");
 
-      // Generate a unique approval signature per frame
-      const approvals = await Promise.all(
-        pendingFrames.map(async (frame) => ({
-          artifact_id: artifactId,
-          frame_id: frame.id,
-          user_id: user.id,
-          action: "APPROVED",
-          approval_signature: await generateApprovalSignature(frame.id, artifactId!, user.id),
-        }))
+      // Route each approval through the edge function so server computes + stores HMAC
+      const results = await Promise.all(
+        pendingFrames.map(async (frame) => {
+          const approval_signature = await generateApprovalSignature(frame.id, artifactId!, user.id);
+          return supabase.functions.invoke("approve-governance-frame", {
+            body: {
+              artifact_id: artifactId,
+              frame_id: frame.id,
+              action: "APPROVED",
+              approval_signature,
+            },
+          });
+        })
       );
 
-      const { error } = await supabase
-        .from("verification_approvals")
-        .insert(approvals);
-
-      if (error) throw error;
+      const failed = results.filter((r) => r.error);
+      if (failed.length > 0) throw new Error(`${failed.length} approval(s) failed`);
 
       await queryClient.invalidateQueries({ queryKey: ["artifact-frames", artifactId] });
       toast.success(`Approved and blessed ${pendingFrames.length} steps with governance signatures`);

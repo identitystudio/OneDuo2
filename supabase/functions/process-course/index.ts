@@ -1555,7 +1555,7 @@ serve(async (req) => {
         // GOVERNANCE: Filter out purged records (soft-deleted via execution_frames)
         const { data: courses, error } = await supabase
           .from("courses")
-          .select("id, title, status, progress, progress_step, error_message, created_at, completed_at, density_mode, fps_target, is_multi_module, module_count, completed_modules, fix_attempts, last_fix_strategy, video_duration_seconds, share_enabled, share_token, last_heartbeat_at, pdf_revision_pending, course_files, project_id")
+          .select("id, title, status, progress, progress_step, error_message, created_at, completed_at, density_mode, fps_target, is_multi_module, module_count, completed_modules, fix_attempts, last_fix_strategy, video_duration_seconds, share_enabled, share_token, last_heartbeat_at, pdf_revision_pending, course_files, project_id, knowledge_layer_status")
           .eq("email", email)
           .eq("purged", false)
           .order("created_at", { ascending: false });
@@ -1570,7 +1570,7 @@ serve(async (req) => {
         if (courseIds.length > 0) {
           const { data: modules } = await supabase
             .from("course_modules")
-            .select("id, course_id, module_number, title, status, progress, progress_step, error_message, created_at, video_duration_seconds, heartbeat_at")
+            .select("id, course_id, module_number, title, status, progress, progress_step, error_message, created_at, video_duration_seconds, heartbeat_at, knowledge_layer_status")
             .in("course_id", courseIds)
             .eq("purged", false)
             .order("module_number");
