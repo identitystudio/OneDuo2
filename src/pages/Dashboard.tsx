@@ -2230,7 +2230,7 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                                 </div>
                               </div>
                             </div>
-                            <div className="flex items-center gap-3">
+                            <div className="flex items-center gap-2 flex-wrap justify-end">
                               {/* Actions - Only show when ALL modules completed */}
                               {block.allCompleted && (
                                 <>
@@ -2245,11 +2245,11 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                                     title={block.courses[0]?.pdf_revision_pending ? 'Download Updated PDF' : 'Generate PDF'}
                                   >
                                     {generatingPDF === `block-${block.courses[0]?.id}` ? (
-                                      <><Loader2 className="w-4 h-4 animate-spin" /> Generating...</>
+                                      <><Loader2 className="w-4 h-4 animate-spin" /><span className="hidden sm:inline">Generating...</span></>
                                     ) : (
                                       <>
                                         <Download className="w-4 h-4" />
-                                        Generate PDF
+                                        <span className="hidden sm:inline">Generate PDF</span>
                                         {block.courses[0]?.pdf_revision_pending && (
                                           <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-blue-400 rounded-full animate-pulse" />
                                         )}
@@ -2260,7 +2260,7 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                                   {block.courses[0]?.knowledge_layer_status === 'generating' ? (
                                     <Button size="sm" variant="outline" disabled className="gap-1.5 border-emerald-500/30 text-emerald-400">
                                       <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                                      Generating...
+                                      <span className="hidden sm:inline">Generating...</span>
                                     </Button>
                                   ) : block.courses[0]?.knowledge_layer_status === 'complete' ? (
                                     <Button
@@ -2271,7 +2271,7 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                                       title="Download Txt File"
                                     >
                                       <FileText className="w-3.5 h-3.5" />
-                                      Download Txt File
+                                      <span className="hidden sm:inline">Download Txt File</span>
                                     </Button>
                                   ) : (
                                     <Button
@@ -2282,7 +2282,7 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                                       title="Generate Txt File"
                                     >
                                       <Sparkles className="w-3.5 h-3.5" />
-                                      Generate Txt File
+                                      <span className="hidden sm:inline">Generate Txt File</span>
                                     </Button>
                                   )}
                                   <Button
