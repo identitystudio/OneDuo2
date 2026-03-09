@@ -2112,10 +2112,10 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                         >
                           {/* Block Header */}
                           <div
-                            className={`w-full px-6 py-4 flex items-center justify-between hover:bg-white/[0.02] transition-colors ${hasProcessing ? 'bg-cyan-500/5' : hasFailed ? 'bg-red-500/5' : ''
+                            className={`w-full px-4 sm:px-6 py-4 flex flex-col sm:flex-row sm:items-center gap-3 hover:bg-white/[0.02] transition-colors ${hasProcessing ? 'bg-cyan-500/5' : hasFailed ? 'bg-red-500/5' : ''
                               }`}
                           >
-                            <div className="flex items-center gap-4 flex-1 min-w-0">
+                            <div className="flex items-center gap-3 flex-1 min-w-0">
                               {/* Checkbox for bulk selection */}
                               <button
                                 onClick={(e) => {
@@ -2237,7 +2237,7 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                                 </div>
                               </div>
                             </div>
-                            <div className="flex items-center gap-2 flex-wrap justify-end">
+                            <div className="flex items-center gap-1.5 flex-wrap justify-end shrink-0">
                               {/* Actions - Only show when ALL modules completed */}
                               {block.allCompleted && (
                                 <>
@@ -2304,7 +2304,7 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                                     title={block.courses[0]?.share_enabled ? 'Copy AI link' : 'Enable sharing first'}
                                   >
                                     <Link2 className="w-3.5 h-3.5" />
-                                    AI Link
+                                    <span className="hidden sm:inline">AI Link</span>
                                   </Button>
                                   <Button
                                     size="sm"
@@ -2327,7 +2327,7 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                                     ) : (
                                       <Lock className="w-3.5 h-3.5" />
                                     )}
-                                    {block.courses[0]?.share_enabled ? 'Public' : 'Private'}
+                                    <span className="hidden sm:inline">{block.courses[0]?.share_enabled ? 'Public' : 'Private'}</span>
                                   </Button>
                                 </>
                               )}
@@ -2359,7 +2359,7 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                                 className="border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/10 gap-1"
                               >
                                 <Paperclip className="w-4 h-4" />
-                                Add Files
+                                <span className="hidden sm:inline">Add Files</span>
                               </Button>
                               <button onClick={() => toggleBlock(block.name)}>
                                 {isExpanded ? (
