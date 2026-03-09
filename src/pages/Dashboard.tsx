@@ -1661,6 +1661,25 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
     }
   };
 
+  const handleRegenerateKnowledgeLayer = async (courseId: string, moduleId?: string, title?: string) => {
+    const toastId = `kl-regen-${courseId}${moduleId ? `-${moduleId}` : ''}`;
+    try {
+      toast.loading('Regenerating Txt File...', { id: toastId });
+      // Reset status so the edge function doesn't skip it
+      const table = moduleId ? 'course_modules' : 'courses';
+      const rowId = moduleId || courseId;
+      await supabase.from(table).update({ knowledge_layer_status: 'pending' }).eq('id', rowId);
+      const { error } = await supabase.functions.invoke('generate-knowledge-layer', {
+        body: { courseId, moduleId },
+      });
+      if (error) throw error;
+      toast.success('✓ Txt File regenerated! Download it now.', { id: toastId });
+      loadCourses(false);
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to regenerate Txt File.', { id: toastId });
+    }
+  };
+
   const handleUpgradeAllKnowledgeLayer = async () => {
     // Build flat job list — multi-module courses generate per module (transcript on course_modules),
     // single-module courses generate at course level (transcript on courses)
@@ -2271,16 +2290,28 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                                       <span className="hidden sm:inline">Generating...</span>
                                     </Button>
                                   ) : block.courses[0]?.knowledge_layer_status === 'complete' ? (
-                                    <Button
-                                      size="sm"
-                                      variant="outline"
-                                      onClick={(e) => { e.stopPropagation(); handleDownloadKnowledgeLayer(block.courses[0].id, undefined, block.name); }}
-                                      className="gap-1.5 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10"
-                                      title="Download Txt File"
-                                    >
-                                      <FileText className="w-3.5 h-3.5" />
-                                      <span className="hidden sm:inline">Download Txt File</span>
-                                    </Button>
+                                    <>
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        onClick={(e) => { e.stopPropagation(); handleDownloadKnowledgeLayer(block.courses[0].id, undefined, block.name); }}
+                                        className="gap-1.5 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10"
+                                        title="Download Txt File"
+                                      >
+                                        <FileText className="w-3.5 h-3.5" />
+                                        <span className="hidden sm:inline">Download Txt File</span>
+                                      </Button>
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        onClick={(e) => { e.stopPropagation(); handleRegenerateKnowledgeLayer(block.courses[0].id, undefined, block.name); }}
+                                        className="gap-1.5 border-emerald-500/10 text-emerald-400/60 hover:bg-emerald-500/10"
+                                        title="Regenerate Txt File"
+                                      >
+                                        <RefreshCw className="w-3.5 h-3.5" />
+                                        <span className="hidden sm:inline">Regenerate</span>
+                                      </Button>
+                                    </>
                                   ) : (
                                     <Button
                                       size="sm"
@@ -2731,16 +2762,28 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                                                       Generating...
                                                     </Button>
                                                   ) : item.knowledge_layer_status === 'complete' ? (
-                                                    <Button
-                                                      size="sm"
-                                                      variant="ghost"
-                                                      className="h-6 px-2 text-xs text-emerald-400/70 hover:text-emerald-400 hover:bg-emerald-500/10 gap-1"
-                                                      onClick={() => handleDownloadKnowledgeLayer(item.parentCourseId, item.id, item.title)}
-                                                      title="Download Txt File"
-                                                    >
-                                                      <FileText className="w-3 h-3" />
-                                                      Download Txt File
-                                                    </Button>
+                                                    <>
+                                                      <Button
+                                                        size="sm"
+                                                        variant="ghost"
+                                                        className="h-6 px-2 text-xs text-emerald-400/70 hover:text-emerald-400 hover:bg-emerald-500/10 gap-1"
+                                                        onClick={() => handleDownloadKnowledgeLayer(item.parentCourseId, item.id, item.title)}
+                                                        title="Download Txt File"
+                                                      >
+                                                        <FileText className="w-3 h-3" />
+                                                        Download Txt File
+                                                      </Button>
+                                                      <Button
+                                                        size="sm"
+                                                        variant="ghost"
+                                                        className="h-6 px-2 text-xs text-emerald-400/40 hover:text-emerald-400 hover:bg-emerald-500/10 gap-1"
+                                                        onClick={() => handleRegenerateKnowledgeLayer(item.parentCourseId, item.id, item.title)}
+                                                        title="Regenerate Txt File"
+                                                      >
+                                                        <RefreshCw className="w-3 h-3" />
+                                                        Regenerate
+                                                      </Button>
+                                                    </>
                                                   ) : (
                                                     <Button
                                                       size="sm"

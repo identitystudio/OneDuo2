@@ -27,7 +27,7 @@ const corsHeaders = {
 // Max output tokens kept at 4096 to stay within Supabase edge fn limits.
 const REPLICATE_MODEL = "meta/meta-llama-3-70b-instruct";
 
-// Transcript is chunked so each call stays well under the model's 8k ctx.
+// Total chars sent to the model. Split evenly across start / middle / end.
 const MAX_TRANSCRIPT_CHARS = 12_000;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -54,6 +54,28 @@ function buildTranscriptText(transcript: any): string {
       .join("\n");
   }
   return JSON.stringify(transcript);
+}
+
+/**
+ * Sample a long transcript evenly: take equal slices from the start,
+ * middle, and end so the AI has context for the full video duration,
+ * not just the opening minutes.
+ */
+function sampleTranscriptEvenly(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+
+  const chunkSize = Math.floor(maxChars / 3);
+
+  const start  = text.slice(0, chunkSize);
+  const midPos = Math.floor(text.length / 2) - Math.floor(chunkSize / 2);
+  const middle = text.slice(midPos, midPos + chunkSize);
+  const end    = text.slice(text.length - chunkSize);
+
+  return (
+    start  + "\n\n[... middle of video ...]\n\n" +
+    middle + "\n\n[... end of video ...]\n\n" +
+    end
+  );
 }
 
 function buildFrameSummary(frames: any[], fps: number): string {
@@ -151,7 +173,7 @@ FRAME RATE: ${fps} FPS
 --- VISUAL FRAME SUMMARY ---
 ${frameSummary}
 
---- TRANSCRIPT (excerpt) ---
+--- TRANSCRIPT (evenly sampled: start / middle / end of full video) ---
 ${transcriptChunk}
 
 ---
@@ -291,7 +313,7 @@ serve(async (req) => {
         console.log(`[KnowledgeLayer] Used module transcript fallback for course ${courseId}`);
       }
     }
-    const transcriptChunk = rawTranscript.slice(0, MAX_TRANSCRIPT_CHARS);
+    const transcriptChunk = sampleTranscriptEvenly(rawTranscript, MAX_TRANSCRIPT_CHARS);
 
     if (!transcriptChunk) {
       console.warn(`[KnowledgeLayer] No transcript found for ${table}:${moduleId || courseId} — output may be empty`);
