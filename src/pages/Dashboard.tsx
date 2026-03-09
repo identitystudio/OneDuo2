@@ -1686,14 +1686,21 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
       return;
     }
 
-    toast.loading(`Upgrading ${jobs.length} video(s)... this may take a few minutes.`, { id: 'kl-upgrade-all' });
-    let done = 0;
-    for (const job of jobs) {
-      try {
-        await supabase.functions.invoke('generate-knowledge-layer', { body: job });
-        done++;
-      } catch (_) { /* continue with rest */ }
-    }
+    toast.loading(`Generating Txt Files for ${jobs.length} video(s)... this may take a few minutes.`, { id: 'kl-upgrade-all' });
+
+    // Fire all jobs in parallel with a 3-minute timeout per job
+    // so one slow/stuck video never blocks the rest
+    const withTimeout = (job: { courseId: string; moduleId?: string }) =>
+      Promise.race([
+        supabase.functions.invoke('generate-knowledge-layer', { body: job }),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('timeout')), 180_000)
+        ),
+      ]);
+
+    const results = await Promise.allSettled(jobs.map(withTimeout));
+    const done = results.filter(r => r.status === 'fulfilled').length;
+
     toast.success(`✓ Txt Files generated for ${done}/${jobs.length} videos.`, { id: 'kl-upgrade-all' });
     loadCourses(false);
   };

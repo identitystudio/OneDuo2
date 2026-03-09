@@ -325,7 +325,17 @@ serve(async (req) => {
     );
 
     console.log(`[KnowledgeLayer] Calling Replicate for ${table}:${moduleId || courseId}`);
-    const rawMarkdown = await callReplicate(replicate, systemPrompt, userPrompt);
+
+    // Hard timeout: Supabase edge functions die at 150s — bail at 120s and mark failed
+    // so the status never gets stuck at 'generating'
+    const replicateWithTimeout = Promise.race([
+      callReplicate(replicate, systemPrompt, userPrompt),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("Replicate timeout after 120s — retry to continue")), 120_000)
+      ),
+    ]);
+
+    const rawMarkdown = await replicateWithTimeout;
 
     if (!rawMarkdown || rawMarkdown.trim().length < 100) {
       throw new Error("Replicate returned empty or too-short output");
