@@ -2291,28 +2291,16 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                                       <span className="hidden sm:inline">Generating...</span>
                                     </Button>
                                   ) : block.courses[0]?.knowledge_layer_status === 'complete' ? (
-                                    <>
-                                      <Button
-                                        size="sm"
-                                        variant="outline"
-                                        onClick={(e) => { e.stopPropagation(); handleDownloadKnowledgeLayer(block.courses[0].id, undefined, block.name); }}
-                                        className="gap-1.5 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10"
-                                        title="Download Txt File"
-                                      >
-                                        <FileText className="w-3.5 h-3.5" />
-                                        <span className="hidden sm:inline">Download Txt File</span>
-                                      </Button>
-                                      <Button
-                                        size="sm"
-                                        variant="outline"
-                                        onClick={(e) => { e.stopPropagation(); handleRegenerateKnowledgeLayer(block.courses[0].id, undefined, block.name); }}
-                                        className="gap-1.5 border-emerald-500/10 text-emerald-400/60 hover:bg-emerald-500/10"
-                                        title="Regenerate Txt File"
-                                      >
-                                        <RefreshCw className="w-3.5 h-3.5" />
-                                        <span className="hidden sm:inline">Regenerate</span>
-                                      </Button>
-                                    </>
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={(e) => { e.stopPropagation(); handleDownloadKnowledgeLayer(block.courses[0].id, undefined, block.name); }}
+                                      className="gap-1.5 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10"
+                                      title="Download Txt File"
+                                    >
+                                      <FileText className="w-3.5 h-3.5" />
+                                      <span className="hidden sm:inline">Download Txt File</span>
+                                    </Button>
                                   ) : (
                                     <Button
                                       size="sm"
@@ -2394,6 +2382,18 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                                     <Paperclip className="w-4 h-4" />
                                     Add Files
                                   </DropdownMenuItem>
+                                  {block.allCompleted && block.courses[0]?.knowledge_layer_status === 'complete' && (
+                                    <>
+                                      <DropdownMenuSeparator className="bg-white/10" />
+                                      <DropdownMenuItem
+                                        onClick={() => handleRegenerateKnowledgeLayer(block.courses[0].id, undefined, block.name)}
+                                        className="gap-2 cursor-pointer text-white/50 focus:text-white focus:bg-white/10"
+                                      >
+                                        <RefreshCw className="w-4 h-4" />
+                                        Regenerate Txt
+                                      </DropdownMenuItem>
+                                    </>
+                                  )}
                                 </DropdownMenuContent>
                               </DropdownMenu>
                               <button onClick={() => toggleBlock(block.name)}>
