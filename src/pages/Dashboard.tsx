@@ -1638,9 +1638,9 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
   // Download the AI Knowledge Layer (.md) for a course or module
   const handleDownloadKnowledgeLayer = async (courseId: string, moduleId?: string, title?: string) => {
     try {
-      toast.loading('Preparing AI Artifact...', { id: 'kl-download' });
+      toast.loading('Preparing Txt File...', { id: 'kl-download' });
       await downloadKnowledgeLayerMarkdown(courseId, moduleId, title ? `${title}_AI_Artifact.md` : undefined);
-      toast.success('✓ AI Artifact downloaded!', { id: 'kl-download' });
+      toast.success('✓ Txt File downloaded!', { id: 'kl-download' });
     } catch (err: any) {
       toast.error(err.message || 'AI Artifact not ready yet — still generating.', { id: 'kl-download' });
     }
@@ -1649,12 +1649,12 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
   const handleGenerateKnowledgeLayer = async (courseId: string, moduleId?: string) => {
     const toastId = `kl-gen-${courseId}${moduleId ? `-${moduleId}` : ''}`;
     try {
-      toast.loading('Generating AI Artifact...', { id: toastId });
+      toast.loading('Generating Txt File...', { id: toastId });
       const { error } = await supabase.functions.invoke('generate-knowledge-layer', {
         body: { courseId, moduleId },
       });
       if (error) throw error;
-      toast.success('✓ AI Artifact generated! You can now download it.', { id: toastId });
+      toast.success('✓ Txt File generated! You can now download it.', { id: toastId });
       loadCourses(false);
     } catch (err: any) {
       toast.error(err.message || 'Failed to generate AI Artifact.', { id: toastId });
@@ -1682,7 +1682,7 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
     }
 
     if (jobs.length === 0) {
-      toast.info('All completed videos already have AI Artifacts.');
+      toast.info('All completed videos already have Txt Files.');
       return;
     }
 
@@ -1694,7 +1694,7 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
         done++;
       } catch (_) { /* continue with rest */ }
     }
-    toast.success(`✓ AI Artifacts generated for ${done}/${jobs.length} videos.`, { id: 'kl-upgrade-all' });
+    toast.success(`✓ Txt Files generated for ${done}/${jobs.length} videos.`, { id: 'kl-upgrade-all' });
     loadCourses(false);
   };
 
@@ -1843,11 +1843,11 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                 variant="outline"
                 onClick={handleUpgradeAllKnowledgeLayer}
                 className="gap-2 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10"
-                title="Generate AI Artifacts for all completed videos that don't have one yet"
+                title="Generate Txt Files for all completed videos that don't have one yet"
               >
                 <Sparkles className="w-4 h-4" />
-                <span className="hidden sm:inline">Upgrade All to AI Artifacts</span>
-                <span className="sm:hidden">Upgrade All</span>
+                <span className="hidden sm:inline">Generate All Txt Files</span>
+                <span className="sm:hidden">Generate All</span>
               </Button>
             )}
             <Button onClick={() => navigate('/upload')} className="gap-2 bg-gradient-to-r from-cyan-500 to-cyan-400 text-black">
@@ -2237,25 +2237,26 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                                   <Button
                                     size="sm"
                                     disabled={generatingPDF === `block-${block.courses[0]?.id}`}
-                                    className={`relative w-9 h-9 p-0 text-white ${block.courses[0]?.pdf_revision_pending
+                                    className={`relative gap-1.5 text-white ${block.courses[0]?.pdf_revision_pending
                                       ? 'bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700'
                                       : 'bg-gradient-to-r from-[#DC2626] to-[#B91C1C] hover:from-[#B91C1C] hover:to-[#991B1B]'
                                       }`}
                                     onClick={() => handleExportCombinedPDF(block, true)}
-                                    title={block.courses[0]?.pdf_revision_pending ? 'Download Updated OneDuo' : 'Download OneDuo'}
+                                    title={block.courses[0]?.pdf_revision_pending ? 'Download Updated PDF' : 'Generate PDF'}
                                   >
                                     {generatingPDF === `block-${block.courses[0]?.id}` ? (
-                                      <Loader2 className="w-4 h-4 animate-spin" />
+                                      <><Loader2 className="w-4 h-4 animate-spin" /> Generating...</>
                                     ) : (
                                       <>
                                         <Download className="w-4 h-4" />
+                                        Generate PDF
                                         {block.courses[0]?.pdf_revision_pending && (
                                           <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-blue-400 rounded-full animate-pulse" />
                                         )}
                                       </>
                                     )}
                                   </Button>
-                                  {/* AI Artifact — generate or download depending on status */}
+                                  {/* Txt File — generate or download depending on status */}
                                   {block.courses[0]?.knowledge_layer_status === 'generating' ? (
                                     <Button size="sm" variant="outline" disabled className="gap-1.5 border-emerald-500/30 text-emerald-400">
                                       <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -2267,10 +2268,10 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                                       variant="outline"
                                       onClick={(e) => { e.stopPropagation(); handleDownloadKnowledgeLayer(block.courses[0].id, undefined, block.name); }}
                                       className="gap-1.5 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10"
-                                      title="Download AI Artifact (.md)"
+                                      title="Download Txt File"
                                     >
                                       <FileText className="w-3.5 h-3.5" />
-                                      AI Artifact
+                                      Download Txt File
                                     </Button>
                                   ) : (
                                     <Button
@@ -2278,10 +2279,10 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                                       variant="outline"
                                       onClick={(e) => { e.stopPropagation(); handleGenerateKnowledgeLayer(block.courses[0].id); }}
                                       className="gap-1.5 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10"
-                                      title="Generate AI Artifact — structured knowledge layer for Poe, CopyBots, custom GPTs"
+                                      title="Generate Txt File"
                                     >
                                       <Sparkles className="w-3.5 h-3.5" />
-                                      Generate AI Artifact
+                                      Generate Txt File
                                     </Button>
                                   )}
                                   <Button
@@ -2727,10 +2728,10 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                                                       variant="ghost"
                                                       className="h-6 px-2 text-xs text-emerald-400/70 hover:text-emerald-400 hover:bg-emerald-500/10 gap-1"
                                                       onClick={() => handleDownloadKnowledgeLayer(item.parentCourseId, item.id, item.title)}
-                                                      title="Download AI Artifact (.md)"
+                                                      title="Download Txt File"
                                                     >
                                                       <FileText className="w-3 h-3" />
-                                                      AI Artifact
+                                                      Download Txt File
                                                     </Button>
                                                   ) : (
                                                     <Button
@@ -2738,10 +2739,10 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                                                       variant="ghost"
                                                       className="h-6 px-2 text-xs text-emerald-400/70 hover:text-emerald-400 hover:bg-emerald-500/10 gap-1"
                                                       onClick={() => handleGenerateKnowledgeLayer(item.parentCourseId, item.id)}
-                                                      title="Generate AI Artifact"
+                                                      title="Generate Txt File"
                                                     >
                                                       <Sparkles className="w-3 h-3" />
-                                                      Generate AI Artifact
+                                                      Generate Txt File
                                                     </Button>
                                                   )
                                                 )}
