@@ -169,6 +169,7 @@ export default function Dashboard() {
   const [generatingPDF, setGeneratingPDF] = useState<string | null>(null);
   const [pdfProgress, setPdfProgress] = useState({ progress: 0, status: '', title: '' });
   const [deletingCourse, setDeletingCourse] = useState<string | null>(null);
+  const [reExtractingCourse, setReExtractingCourse] = useState<string | null>(null);
   const [expandedBlocks, setExpandedBlocks] = useState<Set<string>>(new Set());
   const [selectedCourses, setSelectedCourses] = useState<Set<string>>(new Set());
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
@@ -1096,6 +1097,23 @@ export default function Dashboard() {
   }, [stalledCourseCount]);
 
   // ProcessingCard is now imported from @/components/ProcessingProgressCard
+
+  const handleReExtractFrames = async (courseId: string) => {
+    setReExtractingCourse(courseId);
+    const toastId = 'reextract-' + courseId;
+    toast.loading('Re-extracting frames from video...', { id: toastId });
+    try {
+      const { error } = await supabase.functions.invoke('persist-frames', {
+        body: { courseId, forceReExtract: true },
+      });
+      if (error) throw error;
+      toast.success('Frames re-extracted successfully! Generate your PDF now.', { id: toastId });
+    } catch (err: any) {
+      toast.error('Failed to re-extract frames. Please try again.', { id: toastId });
+    } finally {
+      setReExtractingCourse(null);
+    }
+  };
 
   const handleDeleteCourse = async (courseId: string) => {
     console.log('[Dashboard] handleDeleteCourse called:', { courseId, email });
@@ -2471,6 +2489,19 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                                                 )}
                                               </div>
                                               <div className="flex items-center gap-2">
+                                                {/* Re-extract Frames Button */}
+                                                <button
+                                                  className="p-1.5 rounded-lg hover:bg-purple-500/20 text-white/30 hover:text-purple-400 transition-colors"
+                                                  title="Re-extract frames from video"
+                                                  disabled={reExtractingCourse === (item.isModule ? item.parentCourseId : item.id)}
+                                                  onClick={() => handleReExtractFrames(item.isModule ? item.parentCourseId : item.id)}
+                                                >
+                                                  {reExtractingCourse === (item.isModule ? item.parentCourseId : item.id) ? (
+                                                    <Loader2 className="w-4 h-4 animate-spin" />
+                                                  ) : (
+                                                    <RefreshCw className="w-4 h-4" />
+                                                  )}
+                                                </button>
                                                 {/* Delete Button - Always visible with subtle styling */}
                                                 <AlertDialog>
                                                   <AlertDialogTrigger asChild>
