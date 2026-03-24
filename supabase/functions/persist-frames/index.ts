@@ -43,7 +43,7 @@ serve(async (req) => {
   const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
   try {
-    const { courseId, moduleId, maxFrames = 100, forceReExtract = false }: PersistRequest = await req.json();
+    const { courseId, moduleId, maxFrames = Infinity, forceReExtract = false }: PersistRequest = await req.json();
 
     if (!courseId) {
       return new Response(JSON.stringify({ 
@@ -124,7 +124,7 @@ serve(async (req) => {
       // producing enough persisted frames for the PDF integrity gate.
       const candidateCount = Math.min(
         existingFrameUrls.length,
-        Math.min(300, Math.ceil(maxFrames * 2))
+        Math.ceil(maxFrames * 2)
       );
 
       extractedFrames = sampleFramesEvenly(existingFrameUrls, candidateCount);

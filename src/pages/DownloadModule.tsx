@@ -3,7 +3,7 @@ import { useParams, Link, useSearchParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Download as DownloadIcon, CheckCircle, Loader2, FileText, MessageSquare, AlertCircle, Package, Film, Layers } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { generateChatGPTPDF } from "@/lib/pdfExporter";
+import { generateChatGPTPDFInChunks } from "@/lib/pdfExporter";
 import { generateMemoryPackage, ExportMode } from "@/lib/memoryExporter";
 import { toast } from "sonner";
 
@@ -154,7 +154,7 @@ const DownloadModulePage = () => {
       const moduleTitle = `${module.courseTitle || 'Course'} - ${module.title}`;
 
       if (selectedFormat === 'pdf') {
-        blob = await generateChatGPTPDF(
+        await generateChatGPTPDFInChunks(
           {
             id: moduleId, // Required for frame persistence
             title: moduleTitle,
@@ -171,13 +171,13 @@ const DownloadModulePage = () => {
           },
           {
             aiFidelityMode: aiVisionMode,
-            includeOCR: true // Always include OCR for AI Vision
+            includeOCR: true,
+            chunkSize: 200,
           }
         );
-        filename = `OneDuo_${moduleTitle.replace(/[^a-zA-Z0-9]/g, "_")}.pdf`;
       } else {
         const mode: ExportMode = selectedFormat === 'memory-training' ? 'training' : 'creative';
-        blob = await generateMemoryPackage(
+        const blob = await generateMemoryPackage(
           {
             title: moduleTitle,
             video_duration_seconds: module.video_duration_seconds,
@@ -193,18 +193,18 @@ const DownloadModulePage = () => {
             setDownloadStatus(status);
           }
         );
-        filename = `OneDuo_${mode}_memory_${moduleTitle.replace(/[^a-zA-Z0-9]/g, "_")}.zip`;
-      }
+        const filename = `OneDuo_${mode}_memory_${moduleTitle.replace(/[^a-zA-Z0-9]/g, "_")}.zip`;
 
-      // Create download link
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+        // Create download link
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }
 
       setDownloadComplete(true);
       toast.success(`Your OneDuo ${formatLabel} is downloading!`);

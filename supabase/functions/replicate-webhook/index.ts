@@ -112,7 +112,7 @@ async function persistFrameToStorage(
 const BATCH_SIZE = 50; // Process 50 frames at a time for efficiency
 const FRAMES_PER_MINUTE = 2.5; // Target density for PDF legibility
 const MIN_FRAMES = 100; // Minimum for any video
-const MAX_FRAMES = 2000; // Cap for 8+ hour videos (~1200 frames at 8hr)
+const MAX_FRAMES = Infinity; // No cap
 
 /**
  * Calculate optimal frame count based on video duration

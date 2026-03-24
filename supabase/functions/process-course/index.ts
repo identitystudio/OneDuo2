@@ -5473,7 +5473,6 @@ async function stepTrainAi(supabase: any, courseId: string) {
         body: JSON.stringify({
           courseId,
           moduleId: null,
-          maxFrames: 200,
           forceReExtract: true
         })
       });

@@ -57,14 +57,8 @@ serve(async (req) => {
     // STABLE RESOLUTION: Always use 720p for consistent OCR inputs
     const resolution = 720;
 
-    // Calculate frames based on video length with hard limits
-    let maxFrames = 5400; // Hard limit for any video (45 mins at 2fps)
-    if (duration > 7200) maxFrames = 3600; // 1 hour at 1fps equiv
-
-    const framesToExtract = Math.min(expectedFrames, maxFrames);
-    const sampleInterval = expectedFrames > framesToExtract
-      ? (expectedFrames / framesToExtract) // Floating point for precision
-      : 1;
+    const framesToExtract = expectedFrames;
+    const sampleInterval = 1;
 
     const actualFramesToExtract = Math.floor(expectedFrames / sampleInterval);
     console.log(`[extract-frames-ffmpeg] Extracting ${actualFramesToExtract} deterministic frames`);
