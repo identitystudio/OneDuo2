@@ -1102,13 +1102,37 @@ export default function Dashboard() {
     setReExtractingCourse(courseId);
     const toastId = 'reextract-' + courseId;
     toast.loading('Re-extracting frames from video...', { id: toastId });
+    console.log('[ReExtract] Starting re-extraction for courseId:', courseId);
     try {
-      const { error } = await supabase.functions.invoke('persist-frames', {
+      const { data, error } = await supabase.functions.invoke('persist-frames', {
         body: { courseId, forceReExtract: true },
       });
+      console.log('[ReExtract] Response:', { data, error });
       if (error) throw error;
-      toast.success('Frames re-extracted successfully! Generate your PDF now.', { id: toastId });
+      if (!data?.success) throw new Error(data?.error || 'Extraction failed');
+
+      const newUrls: string[] = data.persistedUrls || [];
+      console.log('[ReExtract] Frames received:', newUrls.length, '| Failed:', data.failedCount, '| Total extracted:', data.totalCount, '| Source:', data.source);
+
+      // Write the new frame URLs back to the DB so PDF generation picks them up
+      if (newUrls.length > 0) {
+        const { error: dbError } = await supabase
+          .from('courses')
+          .update({ frame_urls: newUrls, total_frames: newUrls.length })
+          .eq('id', courseId);
+        console.log('[ReExtract] DB update:', dbError ? 'FAILED — ' + dbError.message : `OK — saved ${newUrls.length} frame_urls`);
+
+        // Update local state so the card reflects the new count immediately
+        setCourses(prev => prev.map(c =>
+          c.id === courseId ? { ...c, frame_urls: newUrls, total_frames: newUrls.length } : c
+        ));
+      } else {
+        console.warn('[ReExtract] No URLs returned — DB not updated');
+      }
+
+      toast.success(`Re-extracted ${newUrls.length} frames! Generate your PDF now.`, { id: toastId });
     } catch (err: any) {
+      console.error('[ReExtract] Error:', err?.message || err);
       toast.error('Failed to re-extract frames. Please try again.', { id: toastId });
     } finally {
       setReExtractingCourse(null);

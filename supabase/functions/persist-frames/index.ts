@@ -170,7 +170,7 @@ serve(async (req) => {
 
         const candidateCount = Math.min(
           existingFrameUrls.length,
-          Math.min(300, Math.ceil(maxFrames * 2))
+          Number.isFinite(maxFrames) ? Math.ceil(maxFrames * 2) : existingFrameUrls.length
         );
 
         extractedFrames = sampleFramesEvenly(existingFrameUrls, candidateCount);
