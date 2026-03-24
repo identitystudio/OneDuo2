@@ -249,8 +249,6 @@ interface ExportOptions {
   userEmail?: string; // Alternative way to pass email for watermark
   fastMode?: boolean; // Skip OCR + workflow analysis for faster generation
   aiFidelityMode?: boolean; // NEW: High-fidelity layout for AI vision (large images, high density)
-  skipPersistPhase?: boolean; // Skip Phase 0 frame persistence (use frameUrlOverride instead)
-  frameUrlOverride?: string[]; // Directly supply frame URLs, bypassing persistence
 }
 
 const LEGAL_FOOTER = `Proprietary Governance Artifact - Not For AI Training or System Replication. Identity Nails LLC / OneDuo - All Rights Reserved. Unauthorized automation, reproduction, or derivative system generation is prohibited. See /ip-notice for governing terms.`;
@@ -777,8 +775,6 @@ export const generateChatGPTPDF = async (
     includeWorkflowAnalysis = false, // CHANGED: Default to false for speed
     userEmail,
     fastMode = true, // New: enables all speed optimizations
-    skipPersistPhase = false,
-    frameUrlOverride,
   } = options;
 
   // In fast mode, force OCR and workflow off
@@ -922,12 +918,7 @@ export const generateChatGPTPDF = async (
   // Start at 0% progress
   onProgress?.(0, 'Preparing PDF generation...');
 
-  // Fast path: caller already persisted frames and passed them directly (chunked generation)
-  if (skipPersistPhase && frameUrlOverride && frameUrlOverride.length > 0) {
-    persistedFrameUrls = frameUrlOverride;
-    framesEmbedded = frameUrlOverride.length;
-    onProgress?.(10, `Processing ${framesEmbedded} frames...`);
-  } else if (totalFrames > 0 && course.id) {
+  if (totalFrames > 0 && course.id) {
     onProgress?.(0, `Extracting ${effectiveMaxFrames} frames from video...`);
 
     try {
@@ -1599,6 +1590,11 @@ export const generateChatGPTPDF = async (
       const progress = 45 + ((i + 1) / renderableFrameCount) * 45;
       onProgress?.(Number(progress.toFixed(1)), `Embedding frame ${i + 1} of ${renderableFrameCount}...`);
 
+      // Every 200 frames yield to the browser to prevent tab crash and allow GC
+      if (i > 0 && i % 200 === 0) {
+        await new Promise(r => setTimeout(r, 0));
+      }
+
       // Use overlap-based matching: check if segment's time range overlaps with frame's time range
       // This fixes the issue where long transcript segments (50-100s) weren't matching because
       // their start time fell outside the narrow frame window, even when speech overlapped
@@ -2002,79 +1998,6 @@ export const downloadPDF = (blob: Blob, filename: string) => {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
-};
-
-/**
- * Chunked PDF generation — splits frames into parts and downloads each immediately.
- * Prevents browser crashes and edge function timeouts for long videos.
- */
-export const generateChatGPTPDFInChunks = async (
-  course: CourseData,
-  onProgress?: (progress: number, status: string) => void,
-  options: ExportOptions & { chunkSize?: number } = {}
-): Promise<void> => {
-  const { chunkSize = 200, ...pdfOptions } = options;
-  const title = course.title || 'OneDuo';
-  const safeTitle = title.replace(/[^a-zA-Z0-9]/g, '_');
-
-  // Step 1: Persist ALL frames once
-  onProgress?.(0, 'Extracting frames from video...');
-
-  if (!course.id) throw new Error('Missing course ID - cannot generate PDF.');
-
-  let allUrls: string[] = [];
-
-  const runPersist = async (forceReExtract: boolean) =>
-    persistFramesToStorage(
-      course.id!,
-      null,
-      Infinity,
-      (current, total, status) => {
-        const progress = (current / Math.max(total, 1)) * 10;
-        onProgress?.(Number(progress.toFixed(1)), status);
-      },
-      { forceReExtract }
-    );
-
-  let persistResult = await runPersist(false);
-  if (persistResult.urls.length === 0) {
-    onProgress?.(1, 'Frames missing — forcing fresh extraction...');
-    persistResult = await runPersist(true);
-  }
-  if (persistResult.urls.length === 0) {
-    throw new Error('No frames could be persisted. Please retry or contact support.');
-  }
-
-  allUrls = persistResult.urls;
-  const totalChunks = Math.ceil(allUrls.length / chunkSize);
-
-  onProgress?.(10, `${allUrls.length} frames ready — generating ${totalChunks} part(s)...`);
-
-  // Step 2: Generate + download each chunk
-  for (let i = 0; i < totalChunks; i++) {
-    const chunk = allUrls.slice(i * chunkSize, (i + 1) * chunkSize);
-    const partSuffix = totalChunks > 1 ? `_Part_${i + 1}_of_${totalChunks}` : '';
-
-    const blob = await generateChatGPTPDF(
-      course,
-      (p, s) => {
-        const overall = 10 + ((i + p / 100) / totalChunks) * 90;
-        onProgress?.(Number(overall.toFixed(1)), `Part ${i + 1}/${totalChunks}: ${s}`);
-      },
-      {
-        ...pdfOptions,
-        skipPersistPhase: true,
-        frameUrlOverride: chunk,
-      }
-    );
-
-    downloadPDF(blob, `OneDuo_${safeTitle}${partSuffix}.pdf`);
-
-    // Yield to browser so GC can reclaim memory before next chunk
-    await new Promise(r => setTimeout(r, 500));
-  }
-
-  onProgress?.(100, `Done — ${totalChunks} PDF part(s) downloaded.`);
 };
 
 /**

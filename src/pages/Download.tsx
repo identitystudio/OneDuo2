@@ -3,7 +3,7 @@ import { useParams, Link, useSearchParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Download as DownloadIcon, CheckCircle, Loader2, FileText, MessageSquare, AlertCircle, Package, Film, Layers, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { generateChatGPTPDFInChunks } from "@/lib/pdfExporter";
+import { generateChatGPTPDF, downloadPDF } from "@/lib/pdfExporter";
 import { generateMemoryPackage, ExportMode } from "@/lib/memoryExporter";
 import { toast } from "sonner";
 import { useAuth } from "@/components/AuthGuard";
@@ -236,7 +236,7 @@ const DownloadPage = () => {
       };
 
       if (selectedFormat === 'pdf') {
-        await generateChatGPTPDFInChunks(
+        const blob = await generateChatGPTPDF(
           dataForExport,
           (progress, status) => {
             setDownloadProgress(progress);
@@ -245,12 +245,13 @@ const DownloadPage = () => {
           {
             aiFidelityMode: aiVisionMode,
             includeOCR: true,
-            chunkSize: 200,
           }
         );
+        filename = `OneDuo_${title.replace(/[^a-zA-Z0-9]/g, "_")}.pdf`;
+        downloadPDF(blob, filename);
       } else {
         const mode: ExportMode = selectedFormat === 'memory-training' ? 'training' : 'creative';
-        const blob = await generateMemoryPackage(
+        blob = await generateMemoryPackage(
           dataForExport,
           mode,
           filmMode,
@@ -259,7 +260,7 @@ const DownloadPage = () => {
             setDownloadStatus(status);
           }
         );
-        const filename = `OneDuo_${mode}_memory_${title.replace(/[^a-zA-Z0-9]/g, "_")}.zip`;
+        filename = `OneDuo_${mode}_memory_${title.replace(/[^a-zA-Z0-9]/g, "_")}.zip`;
 
         // Create download link
         const url = URL.createObjectURL(blob);
