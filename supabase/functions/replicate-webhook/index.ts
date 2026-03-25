@@ -129,42 +129,28 @@ function calculateOptimalFrameCount(durationSeconds: number | null): number {
   return Math.max(MIN_FRAMES, Math.min(MAX_FRAMES, targetFrames));
 }
 
+const CHECKPOINT_SIZE = 500; // Save to DB every 500 frames to survive CPU timeout
+
 async function persistAllFramesToStorage(
   supabase: any,
   courseId: string,
   replicateUrls: string[],
   logJobId: string,
-  videoDurationSeconds?: number
+  videoDurationSeconds?: number,
+  tableName?: string,
+  recordId?: string
 ): Promise<{ persistedUrls: string[]; failedCount: number; skippedCount: number }> {
   const persistedUrls: string[] = [];
   let failedCount = 0;
   let skippedCount = 0;
-  
-  // Calculate dynamic frame limit based on video duration
-  const maxFramesForVideo = calculateOptimalFrameCount(videoDurationSeconds || null);
-  
-  console.log(`[replicate-webhook] Video duration: ${videoDurationSeconds ? Math.round(videoDurationSeconds/60) : 'unknown'} min, target frames: ${maxFramesForVideo}`);
-  
-  // Sample evenly if we have more frames than our target
-  let urlsToPersist = replicateUrls;
-  if (replicateUrls.length > maxFramesForVideo) {
-    // Sample evenly across the entire video for proportional coverage
-    const step = replicateUrls.length / maxFramesForVideo;
-    urlsToPersist = [];
-    for (let i = 0; i < maxFramesForVideo; i++) {
-      const idx = Math.floor(i * step);
-      urlsToPersist.push(replicateUrls[idx]);
-    }
-    skippedCount = replicateUrls.length - maxFramesForVideo;
-    console.log(`[replicate-webhook] Sampled ${maxFramesForVideo} of ${replicateUrls.length} frames (proportional to ${Math.round((videoDurationSeconds || 0)/60)} min video)`);
-  }
-  
-  console.log(`[replicate-webhook] Persisting ${urlsToPersist.length} frames to permanent storage...`);
-  
-  for (let i = 0; i < urlsToPersist.length; i += BATCH_SIZE) {
-    const batch = urlsToPersist.slice(i, i + BATCH_SIZE);
+
+  console.log(`[replicate-webhook] Video duration: ${videoDurationSeconds ? Math.round(videoDurationSeconds/60) : 'unknown'} min, persisting all ${replicateUrls.length} frames (uncapped)`);
+  console.log(`[replicate-webhook] Persisting ${replicateUrls.length} frames to permanent storage in checkpoints of ${CHECKPOINT_SIZE}...`);
+
+  for (let i = 0; i < replicateUrls.length; i += BATCH_SIZE) {
+    const batch = replicateUrls.slice(i, i + BATCH_SIZE);
     const batchResults = await Promise.allSettled(
-      batch.map((url, batchIdx) => 
+      batch.map((url, batchIdx) =>
         persistFrameToStorage(supabase, courseId, url, i + batchIdx)
       )
     );
@@ -178,8 +164,17 @@ async function persistAllFramesToStorage(
     }
 
     // Progress log every 100 frames
-    if ((i + BATCH_SIZE) % 100 === 0 || i + BATCH_SIZE >= urlsToPersist.length) {
-      console.log(`[replicate-webhook] Persist progress: ${Math.min(i + BATCH_SIZE, urlsToPersist.length)}/${urlsToPersist.length}`);
+    if ((i + BATCH_SIZE) % 100 === 0 || i + BATCH_SIZE >= replicateUrls.length) {
+      console.log(`[replicate-webhook] Persist progress: ${Math.min(i + BATCH_SIZE, replicateUrls.length)}/${replicateUrls.length}`);
+    }
+
+    // Save checkpoint to DB every 500 frames so CPU timeout doesn't lose work
+    if (tableName && recordId && persistedUrls.length > 0 && persistedUrls.length % CHECKPOINT_SIZE < BATCH_SIZE) {
+      await supabase.from(tableName).update({
+        frame_urls: persistedUrls,
+        total_frames: persistedUrls.length,
+      }).eq("id", recordId);
+      console.log(`[replicate-webhook] Checkpoint saved: ${persistedUrls.length} storage URLs written to DB`);
     }
   }
   
@@ -364,80 +359,19 @@ serve(async (req: Request) => {
         }).eq("id", recordId);
       }
       
-      // Persist all frames to permanent storage - DYNAMIC COUNT based on video duration
-      const { persistedUrls, failedCount } = await persistAllFramesToStorage(
-        supabase,
-        courseId,
-        replicateFrameUrls,
-        logJobId,
-        videoDurationSeconds
-      );
-      
-      // Use the PERMANENT Supabase Storage URLs, not the temporary Replicate URLs
-      const frameUrls = persistedUrls;
+      // Save all raw Replicate URLs directly to DB and exit — no storage upload in webhook.
+      // Storage upload happens lazily in persist-frames during PDF generation, avoiding CPU timeout.
+      console.log(`[replicate-webhook] Saving ${replicateFrameUrls.length} frame URLs to DB...`);
+      const frameUrls = replicateFrameUrls;
       
       // ========== SAFEGUARD #4: LOG + ALERT ON DB UPDATE FAILURES ==========
       // Track whether DB update succeeds after frame persistence
       let _dbUpdateSucceeded = false;
       let _dbUpdateError: string | null = null;
       
-      if (frameUrls.length === 0) {
-        // All frames failed to persist - this is a critical failure
-        console.error(`[replicate-webhook] CRITICAL: All ${replicateFrameUrls.length} frames failed to persist!`);
-        
-        await logJobEvent(supabase, logJobId, {
-          step: 'frame_persistence_failed',
-          level: 'error',
-          message: `All ${replicateFrameUrls.length} frames failed to persist - falling back to Replicate URLs (may expire)`,
-          metadata: {
-            prediction_id: predictionId,
-            replicate_frame_count: replicateFrameUrls.length,
-          }
-        });
-        
-        // FALLBACK: Use Replicate URLs anyway (better than nothing, may work if downloaded soon)
-        const { error: fallbackError } = await supabase.from(tableName).update({
-          frame_urls: replicateFrameUrls,
-          total_frames: replicateFrameUrls.length,
-          progress: isAlreadyCompleted ? currentRecord.progress : 50,
-          constraint_status: 'pending_check', // Needs re-persistence
-        }).eq("id", recordId);
-        
-        if (fallbackError) {
-          _dbUpdateError = fallbackError.message;
-          console.error(`[replicate-webhook] CRITICAL ALERT: Frames available but DB update FAILED:`, fallbackError.message);
-          
-          // ========== SAFEGUARD #4: HIGH-SEVERITY LOGGING ==========
-          await logJobEvent(supabase, logJobId, {
-            step: 'db_update_failed_after_persistence',
-            level: 'error',
-            message: `CRITICAL SILENT FAILURE: ${replicateFrameUrls.length} frames ready but DB update failed: ${fallbackError.message}`,
-            metadata: {
-              frame_count: replicateFrameUrls.length,
-              db_error: fallbackError.message,
-              recovery_action_needed: true,
-              course_id: courseId
-            }
-          });
-          
-          // Insert critical constraint violation for ops visibility
-          try {
-            await supabase.from("constraint_violations").insert({
-              entity_type: 'course',
-              entity_id: courseId,
-              constraint_name: 'db_update_after_frame_persistence',
-              violation_type: 'silent_failure',
-              expected_state: { frame_urls_count: replicateFrameUrls.length },
-              actual_state: { db_error: fallbackError.message, frames_available: true },
-              severity: 'critical'
-            });
-          } catch { /* ignore */ }
-        } else {
-          _dbUpdateSucceeded = true;
-        }
-      } else {
-        // SUCCESS: Store the permanent URLs
-        console.log(`[replicate-webhook] Stored ${frameUrls.length} permanent frame URLs (${failedCount} failed)`);
+      {
+        // Save all Replicate URLs directly — storage upload deferred to persist-frames
+        console.log(`[replicate-webhook] Saving ${frameUrls.length} frame URLs to DB...`);
         
         const { error: updateError } = await supabase.from(tableName).update({
           frame_urls: frameUrls,
@@ -504,13 +438,10 @@ serve(async (req: Request) => {
       await logJobEvent(supabase, logJobId, {
         step: 'frame_extraction_complete',
         level: 'info',
-        message: `Frame extraction completed via webhook: ${frameUrls.length} permanent frames stored`,
+        message: `Frame extraction completed via webhook: ${frameUrls.length} frames saved to DB`,
         metadata: {
           prediction_id: predictionId,
-          replicate_frame_count: replicateFrameUrls.length,
-          persisted_frame_count: frameUrls.length,
-          failed_count: failedCount,
-          persistence_success_rate: `${Math.round((frameUrls.length / Math.max(replicateFrameUrls.length, 1)) * 100)}%`,
+          frame_count: frameUrls.length,
         }
       });
       // Mark the current queue job as completed

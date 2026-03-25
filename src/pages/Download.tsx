@@ -61,6 +61,11 @@ const DownloadPage = () => {
   const [noDataAvailable, setNoDataAvailable] = useState(false);
   const hasAutoTriggered = useRef(false);
 
+  // Chunked download state (for videos > 60 min)
+  const CHUNK_DURATION_SEC = 3600;
+  const [downloadingChunkIdx, setDownloadingChunkIdx] = useState<number | null>(null);
+  const [completedChunks, setCompletedChunks] = useState<Set<number>>(new Set());
+
   useEffect(() => {
     if (!courseId) {
       setError("No course ID provided");
@@ -182,10 +187,12 @@ const DownloadPage = () => {
     fetchData();
   }, [courseId, moduleParam, userEmail, salvageMode]);
 
-  // Auto-trigger download when data loads
+  // Auto-trigger download when data loads (only for short videos — long ones use chunk buttons)
   useEffect(() => {
     const hasData = module || (course && course.frame_urls?.length);
-    if (hasData && !hasAutoTriggered.current && !downloading && !downloadComplete) {
+    const totalDuration = module?.video_duration_seconds || course?.video_duration_seconds || 0;
+    const isLongVideo = totalDuration > CHUNK_DURATION_SEC;
+    if (hasData && !isLongVideo && !hasAutoTriggered.current && !downloading && !downloadComplete) {
       hasAutoTriggered.current = true;
       handleDownload();
     }
@@ -284,6 +291,58 @@ const DownloadPage = () => {
     }
   };
 
+  const handleChunkDownload = async (chunkIdx: number, totalDuration: number, chunkCount: number) => {
+    const downloadData = module || course;
+    if (!downloadData) return;
+
+    const startSeconds = chunkIdx * CHUNK_DURATION_SEC;
+    const endSeconds = Math.min((chunkIdx + 1) * CHUNK_DURATION_SEC, totalDuration);
+    const title = module
+      ? `${course?.title || 'Course'} - ${module.title}`
+      : course?.title || 'OneDuo';
+
+    setDownloadingChunkIdx(chunkIdx);
+    setDownloadProgress(0);
+    setDownloadStatus(`Preparing Part ${chunkIdx + 1} of ${chunkCount}...`);
+
+    const dataForExport = {
+      id: module?.id || courseId,
+      title,
+      video_duration_seconds: module?.video_duration_seconds || course?.video_duration_seconds,
+      transcript: module?.transcript || course?.transcript || [],
+      frame_urls: module?.frame_urls || course?.frame_urls || [],
+      frame_analyses: (module as any)?.frame_analyses || (course as any)?.frame_analyses || [],
+      audio_events: module?.audio_events || course?.audio_events,
+      prosody_annotations: module?.prosody_annotations || course?.prosody_annotations,
+    };
+
+    try {
+      const blob = await generateChatGPTPDF(
+        dataForExport,
+        (progress, status) => {
+          setDownloadProgress(progress);
+          setDownloadStatus(status);
+        },
+        {
+          aiFidelityMode: aiVisionMode,
+          includeOCR: true,
+          timeRange: { startSeconds, endSeconds },
+        }
+      );
+      const partLabel = `Part_${chunkIdx + 1}_of_${chunkCount}`;
+      downloadPDF(blob, `OneDuo_${title.replace(/[^a-zA-Z0-9]/g, '_')}_${partLabel}.pdf`);
+      setCompletedChunks(prev => new Set([...prev, chunkIdx]));
+      toast.success(`Part ${chunkIdx + 1} of ${chunkCount} downloaded!`);
+    } catch (err: any) {
+      console.error(`Chunk ${chunkIdx + 1} download failed:`, err);
+      toast.error(`Failed to generate Part ${chunkIdx + 1}. Please retry.`);
+    } finally {
+      setDownloadingChunkIdx(null);
+      setDownloadProgress(0);
+      setDownloadStatus('');
+    }
+  };
+
   // Handle no data available state
   if (noDataAvailable) {
     return (
@@ -345,6 +404,10 @@ const DownloadPage = () => {
   const displaySubtitle = module && course
     ? `Module ${module.moduleNumber} of ${course.title}`
     : null;
+
+  const totalDuration = module?.video_duration_seconds || course?.video_duration_seconds || 0;
+  const isLongVideo = totalDuration > CHUNK_DURATION_SEC;
+  const chunkCount = isLongVideo ? Math.ceil(totalDuration / CHUNK_DURATION_SEC) : 1;
 
   return (
     <div className="min-h-screen bg-background flex items-center justify-center p-4">
@@ -506,14 +569,58 @@ const DownloadPage = () => {
                 )}
               </div>
 
-              <Button onClick={handleDownload} size="lg" className="w-full text-lg py-6">
-                <DownloadIcon className="h-5 w-5 mr-2" />
-                {selectedFormat === 'pdf' ? 'Download PDF' : 'Download Memory Package'}
-              </Button>
+              {isLongVideo && selectedFormat === 'pdf' ? (
+                // Chunked download buttons for long videos
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-left text-muted-foreground">
+                    {chunkCount} parts · 60 min each — click each to download
+                  </p>
+                  {Array.from({ length: chunkCount }, (_, i) => {
+                    const start = i * CHUNK_DURATION_SEC;
+                    const end = Math.min((i + 1) * CHUNK_DURATION_SEC, totalDuration);
+                    const isCompleted = completedChunks.has(i);
+                    const isDownloadingThis = downloadingChunkIdx === i;
+                    const startLabel = formatTime(start);
+                    const endLabel = formatTime(end);
+                    return (
+                      <Button
+                        key={i}
+                        onClick={() => handleChunkDownload(i, totalDuration, chunkCount)}
+                        disabled={downloadingChunkIdx !== null}
+                        variant={isCompleted ? 'outline' : 'default'}
+                        className="w-full justify-between"
+                      >
+                        <span className="flex items-center gap-2">
+                          {isCompleted
+                            ? <CheckCircle className="h-4 w-4 text-green-500" />
+                            : isDownloadingThis
+                              ? <Loader2 className="h-4 w-4 animate-spin" />
+                              : <DownloadIcon className="h-4 w-4" />}
+                          Part {i + 1} &nbsp;
+                          <span className="text-xs opacity-70">{startLabel} – {endLabel}</span>
+                        </span>
+                        {isDownloadingThis && (
+                          <span className="text-xs opacity-70">{Math.round(downloadProgress)}%</span>
+                        )}
+                      </Button>
+                    );
+                  })}
+                  {downloadingChunkIdx !== null && (
+                    <p className="text-xs text-muted-foreground text-center mt-2">{downloadStatus}</p>
+                  )}
+                </div>
+              ) : (
+                <Button onClick={handleDownload} size="lg" className="w-full text-lg py-6">
+                  <DownloadIcon className="h-5 w-5 mr-2" />
+                  {selectedFormat === 'pdf' ? 'Download PDF' : 'Download Memory Package'}
+                </Button>
+              )}
 
               <p className="text-xs text-muted-foreground mt-4">
                 {selectedFormat === 'pdf'
-                  ? 'Your PDF includes all frames, transcripts, and AI instructions'
+                  ? isLongVideo
+                    ? `${chunkCount} PDFs · each covers 60 min · all frames included`
+                    : 'Your PDF includes all frames, transcripts, and AI instructions'
                   : 'ZIP includes memory.json, keyframes, transcript, and README'}
               </p>
             </div>

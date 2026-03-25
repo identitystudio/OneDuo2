@@ -120,15 +120,23 @@ serve(async (req) => {
     let source: PersistResult['source'] = 'existing_frames';
 
     if (!forceReExtract && Array.isArray(existingFrameUrls) && existingFrameUrls.length > 0) {
-      // Use extra candidates to tolerate expired/broken frame URLs while still
-      // producing enough persisted frames for the PDF integrity gate.
-      const candidateCount = Math.min(
-        existingFrameUrls.length,
-        Math.ceil(maxFrames * 2)
-      );
+      // FAST PATH: Return existing frame_urls directly without uploading to storage.
+      // Replicate CDN URLs are valid for ~24h — more than enough for immediate PDF generation.
+      // Storage upload is skipped here to prevent CPU timeout on large frame counts (1000+ frames).
+      const framesToReturn = Number.isFinite(maxFrames)
+        ? sampleFramesEvenly(existingFrameUrls, Math.min(existingFrameUrls.length, maxFrames))
+        : existingFrameUrls.slice();
 
-      extractedFrames = sampleFramesEvenly(existingFrameUrls, candidateCount);
-      console.log(`[persist-frames] Using ${candidateCount} sampled existing frame_urls as primary source`);
+      console.log(`[persist-frames] Returning ${framesToReturn.length} existing frame URLs directly (no storage upload)`);
+      return new Response(JSON.stringify({
+        success: true,
+        persistedUrls: framesToReturn,
+        failedCount: 0,
+        totalCount: framesToReturn.length,
+        source: 'existing_frames',
+      }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
     } else {
       // Slow path: extract fresh frames from video via Replicate
       source = 'replicate_fresh';
@@ -146,17 +154,33 @@ serve(async (req) => {
 
       console.log(`[persist-frames] Extracting ${maxFrames} frames from video via Replicate...`);
 
+      // Generate a signed URL so Replicate can access private Supabase storage videos
+      let accessibleVideoUrl = videoUrl;
+      if (videoUrl.includes('/storage/v1/object/') && !videoUrl.includes('/storage/v1/object/public/')) {
+        const storagePath = videoUrl.split('/storage/v1/object/')[1].replace(/^(sign|authenticated)\//, '');
+        const bucket = storagePath.split('/')[0];
+        const path = storagePath.split('/').slice(1).join('/');
+        const { data: signedData } = await supabase.storage.from(bucket).createSignedUrl(path, 3600);
+        if (signedData?.signedUrl) {
+          accessibleVideoUrl = signedData.signedUrl;
+          console.log(`[persist-frames] Generated signed URL for Replicate access`);
+        } else {
+          console.warn(`[persist-frames] Could not generate signed URL, using original video_url`);
+        }
+      }
+
       try {
         extractedFrames = await extractFramesFromVideo(
-          videoUrl,
+          accessibleVideoUrl,
           maxFrames,
           videoDuration || 300,
           REPLICATE_API_KEY
         );
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        console.warn(`[persist-frames] Video extraction failed: ${msg}`);
+        console.warn(`[persist-frames] Replicate extraction FAILED: ${msg}`);
         console.warn('[persist-frames] Falling back to existing frame_urls on entity...');
+        source = `existing_frames (replicate_error: ${msg})` as any;
 
         if (!existingFrameUrls || existingFrameUrls.length === 0) {
           return new Response(JSON.stringify({
@@ -228,10 +252,8 @@ serve(async (req) => {
     }
 
     const result: PersistResult = {
-      // Success means we persisted *some* usable frames.
-      // The client-side PDF exporter enforces the integrity gate (e.g. >=50% required).
       success: persistedUrls.length > 0,
-      persistedUrls: persistedUrls.slice(0, maxFrames),
+      persistedUrls: Number.isFinite(maxFrames) ? persistedUrls.slice(0, maxFrames) : persistedUrls,
       failedCount,
       totalCount: extractedFrames.length,
       source,
@@ -265,9 +287,10 @@ async function checkExistingFrames(
   maxFrames: number
 ): Promise<string[]> {
   try {
+    const listLimit = Number.isFinite(maxFrames) ? maxFrames + 10 : 10000;
     const { data: files, error } = await supabase.storage
       .from('course-videos')
-      .list(storagePath, { limit: maxFrames + 10, sortBy: { column: 'name', order: 'asc' } });
+      .list(storagePath, { limit: listLimit, sortBy: { column: 'name', order: 'asc' } });
 
     if (error || !files || files.length === 0) {
       return [];

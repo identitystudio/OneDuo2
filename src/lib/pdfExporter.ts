@@ -249,6 +249,7 @@ interface ExportOptions {
   userEmail?: string; // Alternative way to pass email for watermark
   fastMode?: boolean; // Skip OCR + workflow analysis for faster generation
   aiFidelityMode?: boolean; // NEW: High-fidelity layout for AI vision (large images, high density)
+  timeRange?: { startSeconds: number; endSeconds: number }; // Chunked export: only include frames in this range
 }
 
 const LEGAL_FOOTER = `Proprietary Governance Artifact - Not For AI Training or System Replication. Identity Nails LLC / OneDuo - All Rights Reserved. Unauthorized automation, reproduction, or derivative system generation is prohibited. See /ip-notice for governing terms.`;
@@ -850,17 +851,37 @@ export const generateChatGPTPDF = async (
     }
   };
 
-  const allFrames = course.frame_urls || [];
+  const timeRange = options.timeRange;
+  let allFrames = course.frame_urls || [];
+  let transcript = course.transcript || [];
+
+  // If a time range is specified (chunked export), filter frames and transcript to that slice
+  if (timeRange) {
+    const totalDuration = course.video_duration_seconds || 0;
+    const totalFrames = allFrames.length;
+    if (totalDuration > 0 && totalFrames > 0) {
+      const startIdx = Math.floor(timeRange.startSeconds / totalDuration * totalFrames);
+      const endIdx = Math.min(totalFrames, Math.ceil(timeRange.endSeconds / totalDuration * totalFrames));
+      allFrames = allFrames.slice(startIdx, endIdx);
+      console.log(`[PDF] Time range ${timeRange.startSeconds}s–${timeRange.endSeconds}s → frames ${startIdx}–${endIdx} (${allFrames.length} frames)`);
+    }
+    transcript = transcript.filter(seg =>
+      (seg.start ?? 0) >= timeRange.startSeconds &&
+      (seg.start ?? 0) < timeRange.endSeconds
+    );
+  }
+
   const allFrameCount = allFrames.length;
   // Duration sanity check: if the DB duration implies < 0.5 FPS (i.e. duration is too large
   // relative to frame count), it's likely a stale 300s default. Estimate from frame count at 1 FPS.
-  let videoDuration = course.video_duration_seconds || 0;
-  if (videoDuration > 0 && allFrameCount > 0 && videoDuration / allFrameCount > 2) {
+  let videoDuration = timeRange
+    ? timeRange.endSeconds - timeRange.startSeconds
+    : course.video_duration_seconds || 0;
+  if (!timeRange && videoDuration > 0 && allFrameCount > 0 && videoDuration / allFrameCount > 2) {
     const estimatedDuration = allFrameCount; // 1 FPS → 1 frame per second
     console.warn(`[PDF] Duration sanity check: DB says ${videoDuration}s for ${allFrameCount} frames (${(videoDuration / allFrameCount).toFixed(1)}s/frame). Capping to ${estimatedDuration}s (1 FPS estimate).`);
     videoDuration = estimatedDuration;
   }
-  const transcript = course.transcript || [];
 
   // Determine how many frames to embed.
   // - If caller provided maxFrames: respect it (bounded by MAX_EXPORT_FRAMES)
@@ -918,7 +939,14 @@ export const generateChatGPTPDF = async (
   // Start at 0% progress
   onProgress?.(0, 'Preparing PDF generation...');
 
-  if (totalFrames > 0 && course.id) {
+  if (timeRange && totalFrames > 0) {
+    // CHUNKED PATH: Use filtered frames directly — no storage upload needed.
+    // Replicate CDN URLs are valid for ~24h, more than enough for immediate PDF generation.
+    persistedFrameUrls = sampledFrameUrls;
+    framesEmbedded = persistedFrameUrls.length;
+    onProgress?.(10, `Using ${framesEmbedded} frames for this chunk...`);
+    console.log(`[pdfExporter] Chunked export: using ${framesEmbedded} frames directly (no persist-frames call)`);
+  } else if (totalFrames > 0 && course.id) {
     onProgress?.(0, `Extracting ${effectiveMaxFrames} frames from video...`);
 
     try {

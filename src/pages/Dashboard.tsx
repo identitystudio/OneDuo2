@@ -1101,39 +1101,31 @@ export default function Dashboard() {
   const handleReExtractFrames = async (courseId: string) => {
     setReExtractingCourse(courseId);
     const toastId = 'reextract-' + courseId;
-    toast.loading('Re-extracting frames from video...', { id: toastId });
     console.log('[ReExtract] Starting re-extraction for courseId:', courseId);
     try {
-      const { data, error } = await supabase.functions.invoke('persist-frames', {
-        body: { courseId, forceReExtract: true },
+      // Fetch video_url from DB
+      const { data: course, error: fetchError } = await supabase
+        .from('courses')
+        .select('video_url, video_duration_seconds')
+        .eq('id', courseId)
+        .single();
+      console.log('[ReExtract] Course fetch:', { video_url: course?.video_url, duration: course?.video_duration_seconds, fetchError });
+      if (fetchError) throw fetchError;
+      if (!course?.video_url) throw new Error('No video URL found for this course');
+
+      // Trigger async extraction via extract-frames-ffmpeg — returns immediately,
+      // Replicate processes in background, replicate-webhook saves frames when done
+      toast.loading('Queuing frame extraction — this runs in the background. Check back in a few minutes.', { id: toastId });
+      const { data, error } = await supabase.functions.invoke('extract-frames-ffmpeg', {
+        body: { videoUrl: course.video_url, courseId, fps: 2 },
       });
-      console.log('[ReExtract] Response:', { data, error });
+      console.log('[ReExtract] extract-frames-ffmpeg response:', { data, error });
       if (error) throw error;
-      if (!data?.success) throw new Error(data?.error || 'Extraction failed');
 
-      const newUrls: string[] = data.persistedUrls || [];
-      console.log('[ReExtract] Frames received:', newUrls.length, '| Failed:', data.failedCount, '| Total extracted:', data.totalCount, '| Source:', data.source);
-
-      // Write the new frame URLs back to the DB so PDF generation picks them up
-      if (newUrls.length > 0) {
-        const { error: dbError } = await supabase
-          .from('courses')
-          .update({ frame_urls: newUrls, total_frames: newUrls.length })
-          .eq('id', courseId);
-        console.log('[ReExtract] DB update:', dbError ? 'FAILED — ' + dbError.message : `OK — saved ${newUrls.length} frame_urls`);
-
-        // Update local state so the card reflects the new count immediately
-        setCourses(prev => prev.map(c =>
-          c.id === courseId ? { ...c, frame_urls: newUrls, total_frames: newUrls.length } : c
-        ));
-      } else {
-        console.warn('[ReExtract] No URLs returned — DB not updated');
-      }
-
-      toast.success(`Re-extracted ${newUrls.length} frames! Generate your PDF now.`, { id: toastId });
+      toast.success('Frame extraction queued! Frames will update automatically when Replicate finishes.', { id: toastId, duration: 8000 });
     } catch (err: any) {
       console.error('[ReExtract] Error:', err?.message || err);
-      toast.error('Failed to re-extract frames. Please try again.', { id: toastId });
+      toast.error('Failed to queue frame extraction. Please try again.', { id: toastId });
     } finally {
       setReExtractingCourse(null);
     }
