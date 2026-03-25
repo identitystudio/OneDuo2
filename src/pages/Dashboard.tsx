@@ -1574,9 +1574,29 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
         fileLoadFailures = loadedFiles.filter(f => !f.success).map(f => f.name);
       }
 
-      setPdfProgress(prev => ({ ...prev, progress: 50, status: 'Building merged PDF...' }));
+      // ========== CHUNKED PDF GENERATION (60-min parts for long videos) ==========
+      const CHUNK_DURATION_SEC = 3600;
+      const totalDuration = modules.reduce((sum, m) => sum + (m.video_duration_seconds || 0), 0);
+      const isLongVideo = totalDuration > CHUNK_DURATION_SEC;
+      const chunkCount = isLongVideo ? Math.ceil(totalDuration / CHUNK_DURATION_SEC) : 1;
 
-      const mergedCourseData: MergedCourseData = {
+      const filterModuleToRange = (m: any, globalStart: number, globalEnd: number, moduleOffset: number) => {
+        const dur = m.video_duration_seconds || 0;
+        const moduleEnd = moduleOffset + dur;
+        if (moduleEnd <= globalStart || moduleOffset >= globalEnd) return null;
+        const localStart = Math.max(0, globalStart - moduleOffset);
+        const localEnd = Math.min(dur, globalEnd - moduleOffset);
+        const total = (m.frame_urls || []).length;
+        const startIdx = dur > 0 ? Math.floor(localStart / dur * total) : 0;
+        const endIdx = dur > 0 ? Math.min(total, Math.ceil(localEnd / dur * total)) : total;
+        return {
+          ...m,
+          frame_urls: (m.frame_urls || []).slice(startIdx, endIdx),
+          transcript: (m.transcript || []).filter((seg: any) => (seg.start ?? 0) >= localStart && (seg.start ?? 0) < localEnd),
+        };
+      };
+
+      const baseMergedData: MergedCourseData = {
         courseId: block.courses[0]?.id || blockId,
         title: block.name,
         modules,
@@ -1584,23 +1604,49 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
         supplementalFiles: supplementalFiles.length > 0 ? supplementalFiles : undefined,
       };
 
-      const pdfBlob = await generateMergedCoursePDF(
-        mergedCourseData,
-        (progress, status) => {
-          const scaledProgress = 50 + (progress * 0.50);
-          setPdfProgress(prev => ({ ...prev, progress: scaledProgress, status }));
-        },
-        { maxFrames: 1000, aiFidelityMode }
-      );
+      for (let chunkIdx = 0; chunkIdx < chunkCount; chunkIdx++) {
+        const startSeconds = chunkIdx * CHUNK_DURATION_SEC;
+        const endSeconds = Math.min((chunkIdx + 1) * CHUNK_DURATION_SEC, totalDuration);
+        const partLabel = isLongVideo ? ` - Part ${chunkIdx + 1} of ${chunkCount}` : '';
 
-      // Trigger immediate download
-      try {
-        const filename = `${block.name} - OneDuo.pdf`;
-        downloadPDF(pdfBlob, filename);
-        toast.success(`✓ OneDuo PDF downloaded!`);
-      } catch (downloadError) {
-        console.error('Local download trigger failed:', downloadError);
+        setPdfProgress(prev => ({
+          ...prev,
+          progress: 50,
+          status: isLongVideo ? `Generating Part ${chunkIdx + 1} of ${chunkCount}...` : 'Building merged PDF...',
+        }));
+
+        let chunkedModules = modules;
+        if (isLongVideo) {
+          let offset = 0;
+          chunkedModules = modules.map(m => {
+            const filtered = filterModuleToRange(m, startSeconds, endSeconds, offset);
+            offset += m.video_duration_seconds || 0;
+            return filtered;
+          }).filter(Boolean);
+        }
+
+        const chunkData: MergedCourseData = { ...baseMergedData, modules: chunkedModules };
+
+        const pdfBlob = await generateMergedCoursePDF(
+          chunkData,
+          (progress, status) => {
+            const scaledProgress = 50 + (progress * 0.50);
+            const statusLabel = isLongVideo ? `Part ${chunkIdx + 1}/${chunkCount}: ${status}` : status;
+            setPdfProgress(prev => ({ ...prev, progress: scaledProgress, status: statusLabel }));
+          },
+          { maxFrames: Infinity, aiFidelityMode }
+        );
+
+        try {
+          const filename = `${block.name}${partLabel} - OneDuo.pdf`;
+          downloadPDF(pdfBlob, filename);
+          if (isLongVideo) toast.success(`✓ Part ${chunkIdx + 1} of ${chunkCount} downloaded!`);
+        } catch (downloadError) {
+          console.error(`Part ${chunkIdx + 1} download failed:`, downloadError);
+        }
       }
+
+      if (!isLongVideo) toast.success(`✓ OneDuo PDF downloaded!`);
 
       // Background cloud sync & email delivery
       try {
