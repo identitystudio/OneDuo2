@@ -4418,6 +4418,8 @@ async function extractFramesWithWebhook(
     ? Math.ceil(videoDurationSeconds * fps * 1.1)
     : 10000;
 
+  console.log(`[extractFramesWithWebhook] maxFrames=${maxFrames} (videoDurationSeconds=${videoDurationSeconds}, fps=${fps})`);
+
   await logJobEvent(supabase, logJobId, {
     step: 'frame_extraction_webhook_start',
     level: 'info',
@@ -4440,6 +4442,12 @@ async function extractFramesWithWebhook(
   const modelData = await modelResponse.json();
   const latestVersionId = modelData.latest_version?.id;
   if (!latestVersionId) throw new Error("Could not find model version");
+
+  const inputSchema = modelData.latest_version?.openapi_schema?.components?.schemas?.Input?.properties;
+  console.log(`[extractFramesWithWebhook] Model version: ${latestVersionId}, accepted inputs: ${JSON.stringify(Object.keys(inputSchema || {}))}`);
+  if (inputSchema?.max_frames) {
+    console.log(`[extractFramesWithWebhook] max_frames schema: ${JSON.stringify(inputSchema.max_frames)}`);
+  }
 
   // Build webhook URL
   const webhookUrl = `${supabaseUrl}/functions/v1/replicate-webhook`;
@@ -4473,8 +4481,7 @@ async function extractFramesWithWebhook(
           input: {
             video: directVideoUrl,
             fps: fps,
-            width: resolution,
-            max_frames: maxFrames, // Prevent Replicate's 300-frame default cap
+            extract_all_frames: true, // Extract all frames, bypassing the 300-frame default cap
             webhook_metadata: webhookMetadata,
           },
           webhook: webhookUrl,
@@ -4615,8 +4622,7 @@ async function extractFrames(supabase: any, recordId: string, videoUrl: string, 
         input: {
           video: directVideoUrl,
           fps: fps,
-          width: resolution,
-          max_frames: videoDurationSeconds ? Math.ceil(videoDurationSeconds * fps * 1.1) : 10000, // Prevent Replicate's 300-frame default cap
+          extract_all_frames: true, // Extract all frames, bypassing the 300-frame default cap
         },
       });
     } catch (error: any) {
@@ -4985,7 +4991,7 @@ async function stepTranscribeAndExtract(supabase: any, courseId: string, fixMeta
   if (!skipFrameExtraction) {
     try {
       await extractFramesWithWebhook(
-        supabase, courseId, course.video_url, course.fps_target || 3, 'courses',
+        supabase, courseId, course.video_url, course.fps_target || 1, 'courses',
         courseId, undefined, 'transcribe_and_extract', fixMetadata, course.video_duration_seconds
       );
     } catch (error) {
@@ -5103,7 +5109,7 @@ async function stepTranscribeAndExtractModule(supabase: any, courseId: string, m
   if (!skipFrameExtraction) {
     try {
       await extractFramesWithWebhook(
-        supabase, module.id, module.video_url, module.courses.fps_target || 3,
+        supabase, module.id, module.video_url, module.courses.fps_target || 1,
         'course_modules', courseId, moduleNumber, 'transcribe_and_extract_module', fixMetadata, module.video_duration_seconds
       );
     } catch (error) {
@@ -5226,7 +5232,7 @@ async function stepExtractFrames(supabase: any, courseId: string, fixMetadata?: 
       supabase,
       courseId,
       streamingUrl,
-      course.fps_target || 3,
+      course.fps_target || 1,
       'courses',
       courseId,
       undefined,
@@ -5246,7 +5252,7 @@ async function stepExtractFrames(supabase: any, courseId: string, fixMetadata?: 
   }
 
   // Non-chunked uploads: keep legacy polling-based extraction.
-  await extractFrames(supabase, courseId, course.video_url, course.fps_target || 3, 'courses', fixMetadata, course.video_duration_seconds);
+  await extractFrames(supabase, courseId, course.video_url, course.fps_target || 1, 'courses', fixMetadata, course.video_duration_seconds);
 }
 
 async function stepRenderGifs(supabase: any, courseId: string, fixMetadata?: any) {

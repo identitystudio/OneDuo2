@@ -19,6 +19,7 @@ interface ProcessingProgressCardProps {
   displayProgress: number;
   estimatedTimeRemaining: string;
   videoDurationSeconds?: number;
+  fpsTarget?: number;
   syncStatus: { isStale: boolean; message: string; isStarting: boolean };
   isDelayed?: boolean;
   onTeamEmailSubmit: (email: string) => void;
@@ -131,6 +132,7 @@ export function ProcessingProgressCard({
   displayProgress,
   estimatedTimeRemaining,
   videoDurationSeconds,
+  fpsTarget,
   syncStatus,
   isDelayed,
   onTeamEmailSubmit,
@@ -152,7 +154,7 @@ export function ProcessingProgressCard({
   };
 
   // Format estimated frames for long videos
-  const estimatedFrames = videoDurationSeconds ? Math.floor(videoDurationSeconds * 3) : null;
+  const estimatedFrames = videoDurationSeconds ? Math.floor(videoDurationSeconds * (fpsTarget || 1)) : null;
   const processedFrames = estimatedFrames ? Math.floor((displayProgress / 100) * estimatedFrames) : null;
 
   return (

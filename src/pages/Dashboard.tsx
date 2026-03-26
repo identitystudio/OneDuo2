@@ -2675,6 +2675,7 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                                                   progress: displayProgress[item.id] ?? item.progress,
                                                 })}
                                                 videoDurationSeconds={item.video_duration_seconds}
+                                                fpsTarget={parentCourse?.fps_target || 1}
                                                 syncStatus={getSyncStatus({
                                                   ...parentCourse,
                                                   last_heartbeat_at: item.heartbeat_at,

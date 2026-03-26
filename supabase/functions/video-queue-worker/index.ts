@@ -399,7 +399,7 @@ async function processVideoJobBatched(
       { videoUrl: videoUrl.substring(0, 80), fps: EXTRACTION_FPS }
     );
 
-    const extractionResult = await extractFrames(videoUrl, supabaseServiceKey, job.job_id, supabase);
+    const extractionResult = await extractFrames(videoUrl, supabaseServiceKey, job.job_id, supabase, videoDuration);
     allFrameUrls = extractionResult.frames;
     videoDuration = extractionResult.duration;
 
@@ -843,7 +843,8 @@ async function extractFrames(
   videoUrl: string,
   apiKey: string,
   jobId: string,
-  supabase: SupabaseClient
+  supabase: SupabaseClient,
+  videoDurationSeconds?: number
 ): Promise<{ frames: string[]; duration: number }> {
   const REPLICATE_API_KEY = Deno.env.get('REPLICATE_API_KEY');
 
@@ -873,12 +874,16 @@ async function extractFrames(
 
   while (!prediction && retryAttempts < maxRetries) {
     try {
+      const maxFrames = (videoDurationSeconds && videoDurationSeconds > 0)
+        ? Math.ceil(videoDurationSeconds * EXTRACTION_FPS * 1.1)
+        : 10000;
       prediction = await replicate.predictions.create({
         version: latestVersionId,
         input: {
           video: videoUrl,
           fps: EXTRACTION_FPS, // EXACTLY 1 FPS - NON-NEGOTIABLE
           width: TARGET_WIDTH,
+          max_frames: maxFrames, // Prevent Replicate's 300-frame default cap
         },
       });
     } catch (error: any) {

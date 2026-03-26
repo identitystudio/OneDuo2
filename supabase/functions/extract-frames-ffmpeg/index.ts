@@ -295,8 +295,7 @@ async function queueReplicatePrediction(
         input: {
           video: videoUrl,
           fps,
-          width: resolution,
-          max_frames: maxFrames, // Prevent Replicate's 300-frame default cap
+          extract_all_frames: true, // Extract all frames, bypassing the 300-frame default cap
           webhook_metadata: webhookMetadata, // Passed back to our webhook so it knows which course to update
         },
         webhook: webhookUrl,
