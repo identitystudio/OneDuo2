@@ -359,10 +359,29 @@ serve(async (req: Request) => {
         }).eq("id", recordId);
       }
       
-      // Save all raw Replicate URLs directly to DB and exit — no storage upload in webhook.
-      // Storage upload happens lazily in persist-frames during PDF generation, avoiding CPU timeout.
-      console.log(`[replicate-webhook] Saving ${replicateFrameUrls.length} frame URLs to DB...`);
-      const frameUrls = replicateFrameUrls;
+      // Sample frames down to target FPS if Replicate returned native-rate frames.
+      // extract_all_frames:true ignores the fps input and returns every frame at native rate
+      // (e.g. 75,787 frames for a 51-min 25fps video instead of ~3,060 at 1fps).
+      // We sample evenly here to honour the user's selected FPS.
+      const targetFps: number = webhookMeta.fps ?? 1;
+      let frameUrls: string[];
+      if (videoDurationSeconds && videoDurationSeconds > 0) {
+        const targetFrameCount = Math.max(1, Math.ceil(videoDurationSeconds * targetFps));
+        if (replicateFrameUrls.length > targetFrameCount * 1.5) {
+          const step = replicateFrameUrls.length / targetFrameCount;
+          frameUrls = Array.from({ length: targetFrameCount }, (_, i) =>
+            replicateFrameUrls[Math.min(Math.floor(i * step), replicateFrameUrls.length - 1)]
+          );
+          console.log(`[replicate-webhook] Sampled ${frameUrls.length} frames from ${replicateFrameUrls.length} total (${targetFps}fps × ${Math.round(videoDurationSeconds)}s)`);
+        } else {
+          frameUrls = replicateFrameUrls;
+        }
+      } else {
+        frameUrls = replicateFrameUrls;
+      }
+
+      // Save raw URLs directly to DB — storage upload deferred to persist-frames during PDF generation.
+      console.log(`[replicate-webhook] Saving ${frameUrls.length} frame URLs to DB...`);
       
       // ========== SAFEGUARD #4: LOG + ALERT ON DB UPDATE FAILURES ==========
       // Track whether DB update succeeds after frame persistence
@@ -373,12 +392,16 @@ serve(async (req: Request) => {
         // Save all Replicate URLs directly — storage upload deferred to persist-frames
         console.log(`[replicate-webhook] Saving ${frameUrls.length} frame URLs to DB...`);
         
-        const { error: updateError } = await supabase.from(tableName).update({
+        const frameUpdatePayload: Record<string, unknown> = {
           frame_urls: frameUrls,
           total_frames: frameUrls.length,
           progress: isAlreadyCompleted ? currentRecord.progress : 50,
-          constraint_status: 'valid', // Frames persisted successfully
-        }).eq("id", recordId);
+        };
+        // constraint_status only exists on courses table, not course_modules
+        if (tableName === 'courses') {
+          frameUpdatePayload.constraint_status = 'valid';
+        }
+        const { error: updateError } = await supabase.from(tableName).update(frameUpdatePayload).eq("id", recordId);
         
         if (updateError) {
           const _dbUpdateError = updateError.message;
@@ -614,41 +637,68 @@ serve(async (req: Request) => {
         }
       });
 
-      // Update queue job as failed
-      // FIX: Accept both 'awaiting_webhook' and 'processing' status
-      const { data: failedRows } = await supabase.from("processing_queue")
-        .update({ 
-          status: "failed", 
-          error_message: error || `Replicate ${status}`
-        })
+      // Check current attempt count to decide: retry or escalate to manual review
+      const { data: failedJob } = await supabase.from("processing_queue")
+        .select("id, attempt_count, max_attempts")
         .eq("course_id", courseId)
         .in("status", ["awaiting_webhook", "processing"])
-        .select("id");
-      
-      if (!failedRows || failedRows.length === 0) {
-        console.warn(`[replicate-webhook] WARNING: Failed job update affected 0 rows for course ${courseId}`);
-      }
+        .maybeSingle();
 
-      // Trigger manual review notification instead of hard failure
-      console.log(`[replicate-webhook] Triggering manual review notification for course ${courseId}`);
-      try {
-        await supabase.functions.invoke('notify-processing-failure', {
-          body: {
-            courseId: courseId,
-            step: step || 'extract_frames',
-            errorMessage: `Frame extraction failed: ${error || status}`,
-            attemptCount: 1,
-            source: 'replicate-webhook'
-          }
-        });
-      } catch (notifyErr) {
-        console.error(`[replicate-webhook] Failed to notify:`, notifyErr);
-        // Fallback: still update to manual_review
+      const attemptCount = failedJob?.attempt_count ?? 0;
+      const maxAttempts = failedJob?.max_attempts ?? 3;
+      const shouldRetry = attemptCount < maxAttempts - 1; // -1 because this attempt counts
+
+      if (shouldRetry && failedJob) {
+        // Auto-retry: reset job to pending so the watchdog/poll picks it up again
+        console.log(`[replicate-webhook] Replicate failed (attempt ${attemptCount + 1}/${maxAttempts}) — resetting to pending for retry`);
+        await supabase.from("processing_queue")
+          .update({
+            status: "pending",
+            started_at: null,
+            attempt_count: attemptCount + 1,
+            error_message: `Replicate ${status}: ${error || 'unknown'} — retrying`,
+          })
+          .eq("id", failedJob.id);
+
         await supabase.from(tableName).update({
-          status: "manual_review",
-          error_message: null,
-          progress_step: "manual_review",
+          progress_step: "extracting_frames",
+          last_heartbeat_at: new Date().toISOString(),
         }).eq("id", recordId);
+
+        // Kick the worker to pick up the retried job
+        await supabase.functions.invoke('process-course', {
+          body: { action: 'poll' }
+        }).catch(() => {});
+      } else {
+        // Max retries reached — escalate to manual review
+        if (failedJob) {
+          await supabase.from("processing_queue")
+            .update({
+              status: "failed",
+              error_message: error || `Replicate ${status}`,
+            })
+            .eq("id", failedJob.id);
+        }
+
+        console.log(`[replicate-webhook] Max retries reached — triggering manual review for course ${courseId}`);
+        try {
+          await supabase.functions.invoke('notify-processing-failure', {
+            body: {
+              courseId: courseId,
+              step: step || 'extract_frames',
+              errorMessage: `Frame extraction failed after ${maxAttempts} attempts: ${error || status}`,
+              attemptCount: maxAttempts,
+              source: 'replicate-webhook'
+            }
+          });
+        } catch (notifyErr) {
+          console.error(`[replicate-webhook] Failed to notify:`, notifyErr);
+          await supabase.from(tableName).update({
+            status: "manual_review",
+            error_message: null,
+            progress_step: "manual_review",
+          }).eq("id", recordId);
+        }
       }
 
       return new Response(JSON.stringify({ 

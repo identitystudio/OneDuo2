@@ -2996,7 +2996,49 @@ serve(async (req) => {
           }
         }
 
-        // 6) Always kick pending work (not only when we recovered something)
+        // 6a) Find jobs stuck in "awaiting_webhook" for too long (webhook never fired)
+        // This handles cases where Replicate fails silently without firing the webhook
+        const WEBHOOK_TIMEOUT_MINUTES = 45;
+        const webhookTimeout = new Date(Date.now() - WEBHOOK_TIMEOUT_MINUTES * 60 * 1000).toISOString();
+
+        const { data: timedOutWebhookJobs } = await supabase
+          .from("processing_queue")
+          .select("id, course_id, step, attempt_count, max_attempts, started_at")
+          .eq("status", "awaiting_webhook")
+          .eq("purged", false)
+          .lt("started_at", webhookTimeout)
+          .limit(5);
+
+        if (timedOutWebhookJobs?.length) {
+          console.log(`[watchdog] Found ${timedOutWebhookJobs.length} webhook-timeout jobs (stuck > ${WEBHOOK_TIMEOUT_MINUTES}min)`);
+
+          for (const job of timedOutWebhookJobs) {
+            const attempts = job.attempt_count ?? 0;
+            const maxAttempts = job.max_attempts ?? 3;
+
+            if (attempts < maxAttempts - 1) {
+              await supabase.from("processing_queue").update({
+                status: "pending",
+                started_at: null,
+                attempt_count: attempts + 1,
+                error_message: `Webhook timeout after ${WEBHOOK_TIMEOUT_MINUTES}min — retrying (attempt ${attempts + 1}/${maxAttempts})`,
+              }).eq("id", job.id);
+              console.log(`[watchdog] Reset webhook-timeout job ${job.id} (${job.step}) to pending for retry`);
+            } else {
+              await supabase.from("processing_queue").update({
+                status: "failed",
+                error_message: `Webhook never fired after ${maxAttempts} attempts (${WEBHOOK_TIMEOUT_MINUTES}min timeout each)`,
+              }).eq("id", job.id);
+              await supabase.from("courses").update({
+                status: "failed",
+                error_message: "Frame extraction timed out. Please try re-uploading your video.",
+              }).eq("id", job.course_id);
+              console.log(`[watchdog] Webhook-timeout job ${job.id} permanently failed after max attempts`);
+            }
+          }
+        }
+
+        // 6b) Always kick pending work (not only when we recovered something)
         // CRITICAL FIX: Filter out purged jobs
         const { data: pendingJobs } = await supabase
           .from("processing_queue")
@@ -4411,7 +4453,7 @@ async function extractFramesWithWebhook(
   const REPLICATE_API_KEY = Deno.env.get("REPLICATE_API_KEY");
   if (!REPLICATE_API_KEY) throw new Error("REPLICATE_API_KEY not configured");
 
-  const directVideoUrl = await resolveVideoUrlForExternalServices(supabase, videoUrl);
+  const directVideoUrl = await resolveVideoUrlForExternalServices(supabase, videoUrl, { expiresInSeconds: 86400 });
   const resolution = fixMetadata?.lowerResolution ? 480 : 640;
   const logJobId = tableName === 'courses' ? getJobIdForCourse(recordId) : `module-${recordId.slice(0, 8)}`;
   const maxFrames = videoDurationSeconds
@@ -4480,8 +4522,12 @@ async function extractFramesWithWebhook(
           version: latestVersionId,
           input: {
             video: directVideoUrl,
-            fps: fps,
-            extract_all_frames: true, // Extract all frames, bypassing the 300-frame default cap
+            // Use effective FPS capped so total frames stay under 295 (model default cap is 300).
+            // extract_all_frames:true ignores fps and extracts at native video rate (~25fps),
+            // causing Replicate to abort (code: PA) on long videos due to OOM/timeout.
+            fps: videoDurationSeconds && videoDurationSeconds > 0
+              ? Math.min(fps, 295 / videoDurationSeconds)
+              : fps,
             webhook_metadata: webhookMetadata,
           },
           webhook: webhookUrl,

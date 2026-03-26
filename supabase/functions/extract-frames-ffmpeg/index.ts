@@ -294,9 +294,8 @@ async function queueReplicatePrediction(
         version: latestVersionId,
         input: {
           video: videoUrl,
-          fps,
-          extract_all_frames: true, // Extract all frames, bypassing the 300-frame default cap
-          webhook_metadata: webhookMetadata, // Passed back to our webhook so it knows which course to update
+          fps: duration > 0 ? Math.min(fps, 295 / duration) : fps,
+          webhook_metadata: webhookMetadata,
         },
         webhook: webhookUrl,
         webhook_events_filter: ["completed"], // Only notify on completion
