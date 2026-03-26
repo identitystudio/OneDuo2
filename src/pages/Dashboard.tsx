@@ -1122,7 +1122,11 @@ export default function Dashboard() {
       console.log('[ReExtract] extract-frames-ffmpeg response:', { data, error });
       if (error) throw error;
 
-      toast.success('Frame extraction queued! Frames will update automatically when Replicate finishes.', { id: toastId, duration: 8000 });
+      const estimatedFrames = data?.estimatedFrames;
+      const successMsg = estimatedFrames
+        ? `Extraction queued! Expecting ~${estimatedFrames.toLocaleString()} frames. Check back in a few minutes.`
+        : 'Frame extraction queued! Frames will update automatically when Replicate finishes.';
+      toast.success(successMsg, { id: toastId, duration: 8000 });
     } catch (err: any) {
       console.error('[ReExtract] Error:', err?.message || err);
       toast.error('Failed to queue frame extraction. Please try again.', { id: toastId });

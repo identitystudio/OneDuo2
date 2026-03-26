@@ -44,31 +44,104 @@ serve(async (req) => {
       });
     }
 
-    // Get video duration first (needed for calculating expected frame count)
-    const duration = await getVideoDuration(videoUrl);
-    console.log(`[extract-frames-ffmpeg] Video duration: ${duration}s`);
+    // Generate a signed URL FIRST so both duration estimation and Replicate can access private storage.
+    // Public-path URLs (/object/public/) return 400 for private buckets when accessed externally.
+    // Mirrors resolveVideoUrlForExternalServices in process-course: retry + HEAD verify.
+    let accessibleVideoUrl = videoUrl;
+    if (videoUrl.includes('/storage/v1/object/')) {
+      // Parse bucket + path using URL API for robustness
+      let bucket: string;
+      let path: string;
+      try {
+        const u = new URL(videoUrl);
+        const parts = u.pathname.split('/').filter(Boolean);
+        const objectIdx = parts.indexOf('object');
+        bucket = parts[objectIdx + 2];
+        path = parts.slice(objectIdx + 3).join('/');
+      } catch {
+        const storagePart = videoUrl.split('/storage/v1/object/')[1]
+          .replace(/^(public|sign|authenticated)\//, '');
+        bucket = storagePart.split('/')[0];
+        path = storagePart.split('/').slice(1).join('/');
+      }
 
-    // STABLE SAMPLING: Lock FPS and resolution to ensure repeatable outputs (Moat #2)
-    const fps = 2; // Locked at 2 FPS for deterministic output
+      console.log(`[extract-frames-ffmpeg] Resolving signed URL: bucket=${bucket}, path=${path}`);
+
+      let signedUrl: string | null = null;
+      let lastErr = 'unknown';
+      const maxAttempts = 15;
+
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        const { data: signedData, error: signedError } = await supabase.storage
+          .from(bucket)
+          .createSignedUrl(path, 86400);
+
+        if (signedError || !signedData?.signedUrl) {
+          lastErr = signedError?.message || 'no URL returned';
+          console.warn(`[extract-frames-ffmpeg] Signed URL attempt ${attempt}/${maxAttempts} failed: ${lastErr}`);
+          await new Promise(r => setTimeout(r, Math.min(1000 * attempt, 5000)));
+          continue;
+        }
+
+        // Verify the signed URL is actually reachable (HEAD request)
+        try {
+          const head = await fetch(signedData.signedUrl, { method: 'HEAD' });
+          if (head.ok) {
+            signedUrl = signedData.signedUrl;
+            console.log(`[extract-frames-ffmpeg] Signed URL verified on attempt ${attempt} (status ${head.status})`);
+            break;
+          }
+          lastErr = `HEAD returned ${head.status}`;
+          console.warn(`[extract-frames-ffmpeg] Signed URL attempt ${attempt}/${maxAttempts}: ${lastErr}`);
+        } catch (headErr) {
+          lastErr = `HEAD error: ${headErr instanceof Error ? headErr.message : headErr}`;
+          console.warn(`[extract-frames-ffmpeg] Signed URL attempt ${attempt}/${maxAttempts}: ${lastErr}`);
+        }
+
+        await new Promise(r => setTimeout(r, Math.min(2000 + 1000 * attempt, 5000)));
+      }
+
+      if (signedUrl) {
+        accessibleVideoUrl = signedUrl;
+      } else {
+        return new Response(JSON.stringify({
+          error: `Could not get an accessible signed URL for the video after ${maxAttempts} attempts. Last error: ${lastErr}`,
+        }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+    }
+
+    // Use actual duration from DB (accurate) — fall back to file-size estimation only if missing
+    let duration = 0;
+    const { data: dbRecord } = await supabase.from(tableName).select('video_duration_seconds').eq('id', targetId).single();
+    if (dbRecord?.video_duration_seconds && dbRecord.video_duration_seconds > 0) {
+      duration = dbRecord.video_duration_seconds;
+      console.log(`[extract-frames-ffmpeg] Duration from DB: ${duration}s`);
+    } else {
+      // Use signed URL so HEAD request can access private storage and get content-length
+      duration = await getVideoDuration(accessibleVideoUrl);
+      console.warn(`[extract-frames-ffmpeg] DB duration missing — estimated from file size: ${duration}s`);
+      if (duration <= 360) {
+        console.warn(`[extract-frames-ffmpeg] WARNING: Duration estimate of ${duration}s seems too low for a course video — content-length may be missing from server headers`);
+      }
+    }
+    const durationMin = Math.round(duration / 60);
+
+    // 1 FPS = 1 frame per second = exact frame count matching video duration
+    const fps = 1;
     const expectedFrames = Math.floor(duration * fps);
+    const actualFramesToExtract = expectedFrames;
 
-    console.log(`[extract-frames-ffmpeg] Deterministic extraction for ${targetId}, fixed fps: ${fps}`);
+    console.log(`[extract-frames-ffmpeg] ========================================`);
+    console.log(`[extract-frames-ffmpeg] Course/Module : ${targetId}`);
+    console.log(`[extract-frames-ffmpeg] Video duration: ${duration}s (${durationMin} min)`);
+    console.log(`[extract-frames-ffmpeg] FPS           : ${fps} (1 frame per second)`);
+    console.log(`[extract-frames-ffmpeg] Expected frames: ${actualFramesToExtract}`);
+    console.log(`[extract-frames-ffmpeg] ========================================`);
 
-    // STABLE RESOLUTION: Always use 720p for consistent OCR inputs
-    const resolution = 720;
-
-    const framesToExtract = expectedFrames;
-    const sampleInterval = 1;
-
-    const actualFramesToExtract = Math.floor(expectedFrames / sampleInterval);
-    console.log(`[extract-frames-ffmpeg] Extracting ${actualFramesToExtract} deterministic frames`);
-
-    // STABLE VARIABLES FOR LOGGING AND REPLICATE (Moat #2)
     const isLongVideo = duration > 7200;
     const isVeryLongVideo = duration > 14400;
-    const effectiveFps = 2; // Locked for determinism
+    const effectiveFps = fps;
 
-    // Update progress
     await supabase.from(tableName).update({
       progress: 30,
       total_frames: actualFramesToExtract,
@@ -79,41 +152,39 @@ serve(async (req) => {
     const REPLICATE_API_KEY = Deno.env.get("REPLICATE_API_KEY");
 
     if (REPLICATE_API_KEY) {
-      // Use Replicate with optimized settings based on video length
-      const frames = await extractWithReplicate(
-        videoUrl,
+      // Fire-and-forget: create the Replicate prediction with a webhook URL so
+      // replicate-webhook handles the result asynchronously. Do NOT poll here —
+      // polling causes CPU timeout for videos longer than ~1 minute.
+      const webhookUrl = `${supabaseUrl}/functions/v1/replicate-webhook`;
+      const predictionId = await queueReplicatePrediction(
+        accessibleVideoUrl,
         effectiveFps,
         REPLICATE_API_KEY,
-        duration,
         isLongVideo,
-        isVeryLongVideo
+        isVeryLongVideo,
+        webhookUrl,
+        { courseId, recordId: targetId, tableName, step: 'extract_frames' },
+        actualFramesToExtract
       );
 
-      if (frames && frames.length > 0) {
-        // Store frame URLs with metadata about sampling
-        await supabase.from(tableName).update({
-          frame_urls: frames,
-          total_frames: frames.length,
-          processed_frames: frames.length,
-          progress: 50,
-          video_duration_seconds: duration,
-        }).eq("id", targetId);
-
-        console.log(`[extract-frames-ffmpeg] Success: ${frames.length} frames extracted from ${Math.round(duration / 60)}min video`);
-
+      if (predictionId) {
+        console.log(`[extract-frames-ffmpeg] ✅ Prediction queued: ${predictionId}`);
+        console.log(`[extract-frames-ffmpeg] ⏳ Replicate will extract ~${actualFramesToExtract} frames from ${durationMin}min video`);
+        console.log(`[extract-frames-ffmpeg] 📡 Webhook will fire at: ${supabaseUrl}/functions/v1/replicate-webhook`);
         return new Response(JSON.stringify({
           success: true,
-          frameCount: frames.length,
+          queued: true,
+          predictionId,
           duration,
-          isLongVideo,
-          effectiveFps,
+          estimatedFrames: actualFramesToExtract,
+          message: `Queued extraction of ~${actualFramesToExtract} frames from ${durationMin}min video. Replicate will call back when done.`,
         }), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
     }
 
-    return new Response(JSON.stringify({ error: "Frame extraction failed" }), {
+    return new Response(JSON.stringify({ error: "Frame extraction failed — could not create Replicate prediction" }), {
       status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
 
@@ -171,10 +242,10 @@ async function getVideoDuration(videoUrl: string): Promise<number> {
     const contentLength = headResponse.headers.get('content-length');
 
     // Estimate duration based on file size if content-length available
-    // Average bitrate assumption: 2Mbps for video
+    // Average bitrate assumption: 4Mbps for typical screen-recorded course video
     if (contentLength) {
       const bytes = parseInt(contentLength);
-      const estimatedDuration = bytes / (2 * 1024 * 1024 / 8); // 2Mbps = 256KB/s
+      const estimatedDuration = bytes / (4 * 1024 * 1024 / 8); // 4Mbps = 512KB/s
       if (estimatedDuration > 0 && estimatedDuration < 36000) { // Max 10 hours
         return Math.max(30, estimatedDuration); // Minimum 30 seconds
       }
@@ -188,58 +259,54 @@ async function getVideoDuration(videoUrl: string): Promise<number> {
   }
 }
 
-// Extract frames using Replicate with optimized settings for long videos
-async function extractWithReplicate(
+// Create a Replicate prediction and return immediately (fire-and-forget).
+// replicate-webhook will handle the result via callback when Replicate finishes.
+async function queueReplicatePrediction(
   videoUrl: string,
   fps: number,
   apiKey: string,
-  duration: number,
   isLongVideo: boolean = false,
-  isVeryLongVideo: boolean = false
-): Promise<string[]> {
+  isVeryLongVideo: boolean = false,
+  webhookUrl: string,
+  webhookMetadata: Record<string, string>,
+  maxFrames: number
+): Promise<string | null> {
   const Replicate = (await import("https://esm.sh/replicate@0.25.2")).default;
   const replicate = new Replicate({ auth: apiKey });
 
-  // Get latest model version
   const modelResponse = await fetch("https://api.replicate.com/v1/models/fofr/video-to-frames", {
     headers: { "Authorization": `Bearer ${apiKey}` },
   });
-
   if (!modelResponse.ok) throw new Error(`Failed to fetch model info: ${modelResponse.status}`);
   const modelData = await modelResponse.json();
   const latestVersionId = modelData.latest_version?.id;
   if (!latestVersionId) throw new Error("Could not find model version");
 
-  // LONG VIDEO OPTIMIZATION:
-  // Resolution settings - prioritize readability for AI consumption
-  // Standard videos: 1080px for maximum text clarity
-  // Long videos: 720px (still HD, text readable)
-  // Very long videos: 540px (reduced but still legible)
   const resolution = isVeryLongVideo ? 540 : (isLongVideo ? 720 : 1080);
+  console.log(`[queueReplicatePrediction] Creating prediction: fps=${fps}, resolution=${resolution}`);
 
-  console.log(`[extractWithReplicate] Starting extraction: fps=${fps}, resolution=${resolution}, duration=${Math.round(duration / 60)}min`);
-
-  // Create prediction with optimized settings
-  let prediction = null;
   let retryAttempts = 0;
-  const maxRetries = isLongVideo ? 15 : 10; // More retries for long videos
+  const maxRetries = 5;
 
-  while (!prediction && retryAttempts < maxRetries) {
+  while (retryAttempts < maxRetries) {
     try {
-      prediction = await replicate.predictions.create({
+      const prediction = await replicate.predictions.create({
         version: latestVersionId,
         input: {
           video: videoUrl,
-          fps: fps,
+          fps,
           width: resolution,
+          max_frames: maxFrames, // Prevent Replicate's 300-frame default cap
+          webhook_metadata: webhookMetadata, // Passed back to our webhook so it knows which course to update
         },
+        webhook: webhookUrl,
+        webhook_events_filter: ["completed"], // Only notify on completion
       });
+      return prediction.id;
     } catch (error: any) {
       if (error?.response?.status === 429) {
-        // Longer delays for long videos to avoid hammering the API
-        const baseDelay = isLongVideo ? 15000 : 10000;
-        const delay = baseDelay * Math.pow(1.5, retryAttempts);
-        console.log(`[extractWithReplicate] Rate limited, waiting ${delay}ms (attempt ${retryAttempts + 1}/${maxRetries})...`);
+        const delay = 10000 * Math.pow(1.5, retryAttempts);
+        console.log(`[queueReplicatePrediction] Rate limited, waiting ${delay}ms...`);
         await new Promise(r => setTimeout(r, delay));
         retryAttempts++;
       } else {
@@ -248,52 +315,5 @@ async function extractWithReplicate(
     }
   }
 
-  if (!prediction) throw new Error("Failed to start frame extraction after max retries");
-
-  // Poll for completion with generous timeout for long videos (2+ hours)
-  let result = prediction;
-
-  // LONG VIDEO TIMEOUT SCALING:
-  // - Short videos (< 2h): 30 minutes max
-  // - Long videos (2-4h): 60 minutes max  
-  // - Very long videos (4-7h): 120 minutes max
-  // - Extremely long videos (7h+): 180 minutes max
-  let maxWaitTime: number;
-  const durationHours = duration / 3600;
-  if (durationHours >= 7) {
-    maxWaitTime = 10800000; // 180 minutes for 7+ hour videos
-  } else if (isVeryLongVideo) {
-    maxWaitTime = 7200000; // 120 minutes for 4-7 hour videos
-  } else if (isLongVideo) {
-    maxWaitTime = 3600000; // 60 minutes
-  } else {
-    maxWaitTime = Math.max(duration * 3000, 1800000); // At least 30 min, or 3x duration
-  }
-
-  const startTime = Date.now();
-  let lastLogTime = startTime;
-
-  while (result.status !== "succeeded" && result.status !== "failed") {
-    const elapsed = Date.now() - startTime;
-    if (elapsed > maxWaitTime) {
-      console.warn(`[extractWithReplicate] Timeout after ${Math.round(elapsed / 60000)} minutes for ${Math.round(duration / 60)}min video`);
-      throw new Error(`Frame extraction timeout after ${Math.round(elapsed / 60000)} minutes`);
-    }
-
-    // Poll every 5 seconds for short videos, 10 seconds for long videos
-    await new Promise((r) => setTimeout(r, isLongVideo ? 10000 : 5000));
-    result = await replicate.predictions.get(prediction.id);
-
-    // Log progress every minute
-    if (Date.now() - lastLogTime > 60000) {
-      console.log(`[extractWithReplicate] Status: ${result.status}, elapsed: ${Math.round(elapsed / 60000)}min/${Math.round(maxWaitTime / 60000)}min`);
-      lastLogTime = Date.now();
-    }
-  }
-
-  if (result.status === "failed") {
-    throw new Error(result.error || "Frame extraction failed");
-  }
-
-  return result.output || [];
+  return null;
 }

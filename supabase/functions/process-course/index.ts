@@ -3895,7 +3895,7 @@ async function stepExtractFramesModule(supabase: any, courseId: string, moduleNu
     status: `extracting_frames_module_${moduleNumber}`,
   }).eq("id", courseId);
 
-  await extractFrames(supabase, module.id, module.video_url, module.courses.fps_target, 'course_modules', fixMetadata);
+  await extractFrames(supabase, module.id, module.video_url, module.courses.fps_target, 'course_modules', fixMetadata, module.video_duration_seconds);
 }
 
 // ============ MULTI-VIDEO MODULE STITCHING ============
@@ -4405,7 +4405,8 @@ async function extractFramesWithWebhook(
   courseId: string,
   moduleNumber?: number,
   step?: string,
-  fixMetadata?: any
+  fixMetadata?: any,
+  videoDurationSeconds?: number
 ): Promise<{ predictionId: string; webhookSubmitted: boolean }> {
   const REPLICATE_API_KEY = Deno.env.get("REPLICATE_API_KEY");
   if (!REPLICATE_API_KEY) throw new Error("REPLICATE_API_KEY not configured");
@@ -4413,6 +4414,9 @@ async function extractFramesWithWebhook(
   const directVideoUrl = await resolveVideoUrlForExternalServices(supabase, videoUrl);
   const resolution = fixMetadata?.lowerResolution ? 480 : 640;
   const logJobId = tableName === 'courses' ? getJobIdForCourse(recordId) : `module-${recordId.slice(0, 8)}`;
+  const maxFrames = videoDurationSeconds
+    ? Math.ceil(videoDurationSeconds * fps * 1.1)
+    : 10000;
 
   await logJobEvent(supabase, logJobId, {
     step: 'frame_extraction_webhook_start',
@@ -4470,6 +4474,7 @@ async function extractFramesWithWebhook(
             video: directVideoUrl,
             fps: fps,
             width: resolution,
+            max_frames: maxFrames, // Prevent Replicate's 300-frame default cap
             webhook_metadata: webhookMetadata,
           },
           webhook: webhookUrl,
@@ -4558,7 +4563,7 @@ async function extractFramesWithWebhook(
 }
 
 // Legacy polling-based frame extraction for backwards compatibility
-async function extractFrames(supabase: any, recordId: string, videoUrl: string, fps: number, tableName: string, fixMetadata?: any) {
+async function extractFrames(supabase: any, recordId: string, videoUrl: string, fps: number, tableName: string, fixMetadata?: any, videoDurationSeconds?: number) {
   const REPLICATE_API_KEY = Deno.env.get("REPLICATE_API_KEY");
   if (!REPLICATE_API_KEY) throw new Error("REPLICATE_API_KEY not configured");
 
@@ -4607,7 +4612,12 @@ async function extractFrames(supabase: any, recordId: string, videoUrl: string, 
     try {
       prediction = await replicate.predictions.create({
         version: latestVersionId,
-        input: { video: directVideoUrl, fps: fps, width: resolution },
+        input: {
+          video: directVideoUrl,
+          fps: fps,
+          width: resolution,
+          max_frames: videoDurationSeconds ? Math.ceil(videoDurationSeconds * fps * 1.1) : 10000, // Prevent Replicate's 300-frame default cap
+        },
       });
     } catch (error: any) {
       const statusCode = error?.response?.status || error?.status;
@@ -4976,7 +4986,7 @@ async function stepTranscribeAndExtract(supabase: any, courseId: string, fixMeta
     try {
       await extractFramesWithWebhook(
         supabase, courseId, course.video_url, course.fps_target || 3, 'courses',
-        courseId, undefined, 'transcribe_and_extract', fixMetadata
+        courseId, undefined, 'transcribe_and_extract', fixMetadata, course.video_duration_seconds
       );
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -5094,7 +5104,7 @@ async function stepTranscribeAndExtractModule(supabase: any, courseId: string, m
     try {
       await extractFramesWithWebhook(
         supabase, module.id, module.video_url, module.courses.fps_target || 3,
-        'course_modules', courseId, moduleNumber, 'transcribe_and_extract_module', fixMetadata
+        'course_modules', courseId, moduleNumber, 'transcribe_and_extract_module', fixMetadata, module.video_duration_seconds
       );
     } catch (error) {
       console.error(`[stepTranscribeAndExtractModule] Frame extraction error:`, error);
@@ -5221,7 +5231,8 @@ async function stepExtractFrames(supabase: any, courseId: string, fixMetadata?: 
       courseId,
       undefined,
       'extract_frames',
-      fixMetadata
+      fixMetadata,
+      course.video_duration_seconds
     );
 
     // Mark current queue job as awaiting webhook callbacks.
@@ -5235,7 +5246,7 @@ async function stepExtractFrames(supabase: any, courseId: string, fixMetadata?: 
   }
 
   // Non-chunked uploads: keep legacy polling-based extraction.
-  await extractFrames(supabase, courseId, course.video_url, course.fps_target || 3, 'courses', fixMetadata);
+  await extractFrames(supabase, courseId, course.video_url, course.fps_target || 3, 'courses', fixMetadata, course.video_duration_seconds);
 }
 
 async function stepRenderGifs(supabase: any, courseId: string, fixMetadata?: any) {
