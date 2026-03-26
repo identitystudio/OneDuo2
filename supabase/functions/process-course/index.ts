@@ -4450,157 +4450,100 @@ async function extractFramesWithWebhook(
   fixMetadata?: any,
   videoDurationSeconds?: number
 ): Promise<{ predictionId: string; webhookSubmitted: boolean }> {
-  const REPLICATE_API_KEY = Deno.env.get("REPLICATE_API_KEY");
-  if (!REPLICATE_API_KEY) throw new Error("REPLICATE_API_KEY not configured");
+  const RUNPOD_API_KEY = Deno.env.get("RUNPOD_API_KEY");
+  const RUNPOD_ENDPOINT_ID = Deno.env.get("RUNPOD_ENDPOINT_ID") || "5d33e66s2crcer";
+  if (!RUNPOD_API_KEY) throw new Error("RUNPOD_API_KEY not configured");
 
   const directVideoUrl = await resolveVideoUrlForExternalServices(supabase, videoUrl, { expiresInSeconds: 86400 });
-  const resolution = fixMetadata?.lowerResolution ? 480 : 640;
   const logJobId = tableName === 'courses' ? getJobIdForCourse(recordId) : `module-${recordId.slice(0, 8)}`;
-  const maxFrames = videoDurationSeconds
-    ? Math.ceil(videoDurationSeconds * fps * 1.1)
-    : 10000;
-
-  console.log(`[extractFramesWithWebhook] maxFrames=${maxFrames} (videoDurationSeconds=${videoDurationSeconds}, fps=${fps})`);
 
   await logJobEvent(supabase, logJobId, {
     step: 'frame_extraction_webhook_start',
     level: 'info',
-    message: `Starting Replicate frame extraction with webhook callback at ${fps} FPS`,
-    metadata: {
-      record_id: recordId,
-      table_name: tableName,
-      course_id: courseId,
-      fps,
-      resolution,
-    }
+    message: `Starting RunPod FFmpeg frame extraction at ${fps} FPS`,
+    metadata: { record_id: recordId, table_name: tableName, course_id: courseId, fps },
   });
 
-  // Get latest model version
-  const modelResponse = await fetch("https://api.replicate.com/v1/models/fofr/video-to-frames", {
-    headers: { "Authorization": `Bearer ${REPLICATE_API_KEY}` },
-  });
+  const webhookUrl = `${supabaseUrl}/functions/v1/runpod-webhook`;
 
-  if (!modelResponse.ok) throw new Error(`Failed to fetch model info: ${modelResponse.status}`);
-  const modelData = await modelResponse.json();
-  const latestVersionId = modelData.latest_version?.id;
-  if (!latestVersionId) throw new Error("Could not find model version");
-
-  const inputSchema = modelData.latest_version?.openapi_schema?.components?.schemas?.Input?.properties;
-  console.log(`[extractFramesWithWebhook] Model version: ${latestVersionId}, accepted inputs: ${JSON.stringify(Object.keys(inputSchema || {}))}`);
-  if (inputSchema?.max_frames) {
-    console.log(`[extractFramesWithWebhook] max_frames schema: ${JSON.stringify(inputSchema.max_frames)}`);
-  }
-
-  // Build webhook URL
-  const webhookUrl = `${supabaseUrl}/functions/v1/replicate-webhook`;
-
-  // Webhook metadata is passed through Replicate's input and returned in the callback
-  const webhookMetadata = {
-    courseId,
-    recordId,
-    tableName,
-    moduleNumber,
-    fps,
-    step,
-  };
-
-  // Retry with backoff for rate limiting AND 502/503 gateway errors
-  let prediction = null;
+  // Submit job to RunPod with retry on rate-limit / transient errors
+  let jobId: string | null = null;
   let retryAttempts = 0;
   const maxRetries = fixMetadata?.extendedDelay ? 15 : 10;
 
-  while (!prediction && retryAttempts < maxRetries) {
+  while (!jobId && retryAttempts < maxRetries) {
     try {
-      // Create prediction with webhook
-      const createResponse = await fetch("https://api.replicate.com/v1/predictions", {
+      const response = await fetch(`https://api.runpod.ai/v2/${RUNPOD_ENDPOINT_ID}/run`, {
         method: "POST",
         headers: {
-          "Authorization": `Bearer ${REPLICATE_API_KEY}`,
+          "Authorization": `Bearer ${RUNPOD_API_KEY}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          version: latestVersionId,
           input: {
-            video: directVideoUrl,
-            // Use effective FPS capped so total frames stay under 295 (model default cap is 300).
-            // extract_all_frames:true ignores fps and extracts at native video rate (~25fps),
-            // causing Replicate to abort (code: PA) on long videos due to OOM/timeout.
-            fps: videoDurationSeconds && videoDurationSeconds > 0
-              ? Math.min(fps, 295 / videoDurationSeconds)
-              : fps,
-            webhook_metadata: webhookMetadata,
+            videoUrl: directVideoUrl,
+            fps,
+            courseId,
+            recordId,
+            tableName,
+            step,
+            moduleNumber,
+            webhookUrl,
           },
-          webhook: webhookUrl,
-          webhook_events_filter: ["completed"],
         }),
       });
 
-      if (!createResponse.ok) {
-        const errorText = await createResponse.text();
-        const statusCode = createResponse.status;
+      if (!response.ok) {
+        const errorText = await response.text();
+        const statusCode = response.status;
         const isRetryable = statusCode === 429 || statusCode === 502 || statusCode === 503 || statusCode === 504;
-
         if (isRetryable) {
-          throw { response: { status: statusCode }, message: errorText };
+          const delay = (fixMetadata?.extendedDelay ? 30000 : 10000) * Math.pow(1.5, retryAttempts);
+          console.warn(`[extractFramesWithWebhook] RunPod ${statusCode}, retry ${retryAttempts + 1}/${maxRetries} in ${Math.round(delay / 1000)}s`);
+          await logJobEvent(supabase, logJobId, {
+            step: 'frame_extraction_webhook_retry',
+            level: 'warn',
+            message: `RunPod API error ${statusCode}, retrying`,
+            metadata: { status_code: statusCode, attempt: retryAttempts + 1 },
+          }).catch(() => {});
+          await new Promise(r => setTimeout(r, delay));
+          retryAttempts++;
+          continue;
         }
-        throw new Error(`Replicate prediction failed: ${statusCode} - ${errorText}`);
+        throw new Error(`RunPod job submission failed: ${statusCode} - ${errorText}`);
       }
 
-      prediction = await createResponse.json();
+      const data = await response.json();
+      jobId = data.id;
     } catch (error: any) {
-      const statusCode = error?.response?.status || error?.status;
       const errorMsg = error?.message?.toLowerCase() || '';
-      const isRetryable = statusCode === 429 || statusCode === 502 || statusCode === 503 || statusCode === 504 ||
-        errorMsg.includes('bad gateway') || errorMsg.includes('gateway') ||
-        errorMsg.includes('timeout') || errorMsg.includes('network');
-
+      const isRetryable = errorMsg.includes('gateway') || errorMsg.includes('timeout') || errorMsg.includes('network');
       if (isRetryable && retryAttempts < maxRetries - 1) {
-        const isGatewayError = statusCode === 502 || statusCode === 503 || errorMsg.includes('gateway');
-        const baseDelay = isGatewayError ? 15000 : (fixMetadata?.extendedDelay ? 30000 : 10000);
-        const delay = baseDelay * Math.pow(1.5, retryAttempts);
-        console.log(`[extractFramesWithWebhook] Retryable error (status=${statusCode}), attempt ${retryAttempts + 1}/${maxRetries}, waiting ${delay}ms...`);
-
-        await logJobEvent(supabase, logJobId, {
-          step: 'frame_extraction_webhook_retry',
-          level: 'warn',
-          message: `Replicate API error, retrying in ${Math.round(delay / 1000)}s`,
-          metadata: { status_code: statusCode, attempt: retryAttempts + 1, max_retries: maxRetries }
-        }).catch(() => { });
-
-        await new Promise(r => setTimeout(r, delay));
         retryAttempts++;
+        await new Promise(r => setTimeout(r, 10000 * retryAttempts));
       } else {
         throw error;
       }
     }
   }
 
-  if (!prediction) throw new Error("Failed to start frame extraction after max retries");
+  if (!jobId) throw new Error("Failed to start RunPod frame extraction after max retries");
 
-  console.log(`[extractFramesWithWebhook] Replicate prediction started: ${prediction.id}, webhook registered`);
+  console.log(`[extractFramesWithWebhook] RunPod job submitted: ${jobId}, webhook: ${webhookUrl}`);
 
   await logJobEvent(supabase, logJobId, {
     step: 'frame_extraction_webhook_submitted',
     level: 'info',
-    message: `Replicate prediction submitted with webhook callback`,
-    metadata: {
-      prediction_id: prediction.id,
-      webhook_url: webhookUrl,
-    }
+    message: `RunPod job submitted`,
+    metadata: { job_id: jobId, webhook_url: webhookUrl },
   });
 
-  // Update progress + progress_step to show extraction started.
-  // IMPORTANT: for webhook-based extraction, we won't get intermediate progress updates,
-  // so we set a clear step for the UI and bump heartbeats to prevent false "Paused".
   await supabase.from(tableName).update({
     progress: 25,
     progress_step: 'extracting_frames',
-    // Store prediction ID for lazy progress updates in get-dashboard
-    prediction_id: prediction.id,
+    prediction_id: jobId,
   }).eq("id", recordId);
 
-  // Best-effort heartbeat bump for the waiting period (no polling loop to update heartbeats).
-  // This prevents the dashboard from marking long extractions as stalled.
   try {
     if (tableName === 'courses') {
       await updateCourseHeartbeat(supabase, recordId);
@@ -4612,7 +4555,7 @@ async function extractFramesWithWebhook(
     // Ignore heartbeat failures
   }
 
-  return { predictionId: prediction.id, webhookSubmitted: true };
+  return { predictionId: jobId, webhookSubmitted: true };
 }
 
 // Legacy polling-based frame extraction for backwards compatibility

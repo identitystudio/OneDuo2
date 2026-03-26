@@ -149,42 +149,38 @@ serve(async (req) => {
 
     // Extract frames using ffmpeg via a remote service
     // We'll use replicate but with a more optimized approach, or fall back to direct extraction
-    const REPLICATE_API_KEY = Deno.env.get("REPLICATE_API_KEY");
+    const RUNPOD_API_KEY = Deno.env.get("RUNPOD_API_KEY");
+    const RUNPOD_ENDPOINT_ID = Deno.env.get("RUNPOD_ENDPOINT_ID") || "5d33e66s2crcer";
 
-    if (REPLICATE_API_KEY) {
-      // Fire-and-forget: create the Replicate prediction with a webhook URL so
-      // replicate-webhook handles the result asynchronously. Do NOT poll here —
-      // polling causes CPU timeout for videos longer than ~1 minute.
-      const webhookUrl = `${supabaseUrl}/functions/v1/replicate-webhook`;
-      const predictionId = await queueReplicatePrediction(
+    if (RUNPOD_API_KEY) {
+      const webhookUrl = `${supabaseUrl}/functions/v1/runpod-webhook`;
+      const jobId = await queueRunPodJob(
         accessibleVideoUrl,
         effectiveFps,
-        REPLICATE_API_KEY,
-        isLongVideo,
-        isVeryLongVideo,
+        RUNPOD_API_KEY,
+        RUNPOD_ENDPOINT_ID,
         webhookUrl,
         { courseId, recordId: targetId, tableName, step: 'extract_frames' },
-        actualFramesToExtract
       );
 
-      if (predictionId) {
-        console.log(`[extract-frames-ffmpeg] ✅ Prediction queued: ${predictionId}`);
-        console.log(`[extract-frames-ffmpeg] ⏳ Replicate will extract ~${actualFramesToExtract} frames from ${durationMin}min video`);
-        console.log(`[extract-frames-ffmpeg] 📡 Webhook will fire at: ${supabaseUrl}/functions/v1/replicate-webhook`);
+      if (jobId) {
+        console.log(`[extract-frames-ffmpeg] ✅ RunPod job queued: ${jobId}`);
+        console.log(`[extract-frames-ffmpeg] ⏳ FFmpeg will extract ~${actualFramesToExtract} frames from ${durationMin}min video`);
+        console.log(`[extract-frames-ffmpeg] 📡 Webhook will fire at: ${webhookUrl}`);
         return new Response(JSON.stringify({
           success: true,
           queued: true,
-          predictionId,
+          jobId,
           duration,
           estimatedFrames: actualFramesToExtract,
-          message: `Queued extraction of ~${actualFramesToExtract} frames from ${durationMin}min video. Replicate will call back when done.`,
+          message: `Queued RunPod FFmpeg extraction of ~${actualFramesToExtract} frames from ${durationMin}min video.`,
         }), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
     }
 
-    return new Response(JSON.stringify({ error: "Frame extraction failed — could not create Replicate prediction" }), {
+    return new Response(JSON.stringify({ error: "Frame extraction failed — RUNPOD_API_KEY not configured or job submission failed" }), {
       status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
 
@@ -259,54 +255,61 @@ async function getVideoDuration(videoUrl: string): Promise<number> {
   }
 }
 
-// Create a Replicate prediction and return immediately (fire-and-forget).
-// replicate-webhook will handle the result via callback when Replicate finishes.
-async function queueReplicatePrediction(
+// Submit a job to RunPod Serverless and return the job ID immediately (fire-and-forget).
+// The RunPod worker calls webhookUrl when done; runpod-webhook handles the result.
+async function queueRunPodJob(
   videoUrl: string,
   fps: number,
   apiKey: string,
-  isLongVideo: boolean = false,
-  isVeryLongVideo: boolean = false,
+  endpointId: string,
   webhookUrl: string,
-  webhookMetadata: Record<string, string>,
-  maxFrames: number
+  metadata: Record<string, string>,
 ): Promise<string | null> {
-  const Replicate = (await import("https://esm.sh/replicate@0.25.2")).default;
-  const replicate = new Replicate({ auth: apiKey });
-
-  const modelResponse = await fetch("https://api.replicate.com/v1/models/fofr/video-to-frames", {
-    headers: { "Authorization": `Bearer ${apiKey}` },
-  });
-  if (!modelResponse.ok) throw new Error(`Failed to fetch model info: ${modelResponse.status}`);
-  const modelData = await modelResponse.json();
-  const latestVersionId = modelData.latest_version?.id;
-  if (!latestVersionId) throw new Error("Could not find model version");
-
-  const resolution = isVeryLongVideo ? 540 : (isLongVideo ? 720 : 1080);
-  console.log(`[queueReplicatePrediction] Creating prediction: fps=${fps}, resolution=${resolution}`);
+  console.log(`[queueRunPodJob] Submitting RunPod job: fps=${fps}, endpoint=${endpointId}`);
 
   let retryAttempts = 0;
   const maxRetries = 5;
 
   while (retryAttempts < maxRetries) {
     try {
-      const prediction = await replicate.predictions.create({
-        version: latestVersionId,
-        input: {
-          video: videoUrl,
-          fps: duration > 0 ? Math.min(fps, 295 / duration) : fps,
-          webhook_metadata: webhookMetadata,
+      const response = await fetch(`https://api.runpod.ai/v2/${endpointId}/run`, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
         },
-        webhook: webhookUrl,
-        webhook_events_filter: ["completed"], // Only notify on completion
+        body: JSON.stringify({
+          input: {
+            videoUrl,
+            fps,
+            courseId: metadata.courseId,
+            recordId: metadata.recordId,
+            tableName: metadata.tableName,
+            step: metadata.step,
+            webhookUrl,
+          },
+        }),
       });
-      return prediction.id;
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        if (response.status === 429) {
+          const delay = 10000 * Math.pow(1.5, retryAttempts);
+          console.warn(`[queueRunPodJob] Rate limited, waiting ${delay}ms...`);
+          await new Promise(r => setTimeout(r, delay));
+          retryAttempts++;
+          continue;
+        }
+        throw new Error(`RunPod job submission failed: ${response.status} - ${errorText}`);
+      }
+
+      const data = await response.json();
+      console.log(`[queueRunPodJob] Job submitted: ${data.id} (status: ${data.status})`);
+      return data.id;
     } catch (error: any) {
-      if (error?.response?.status === 429) {
-        const delay = 10000 * Math.pow(1.5, retryAttempts);
-        console.log(`[queueReplicatePrediction] Rate limited, waiting ${delay}ms...`);
-        await new Promise(r => setTimeout(r, delay));
+      if (retryAttempts < maxRetries - 1) {
         retryAttempts++;
+        await new Promise(r => setTimeout(r, 5000 * retryAttempts));
       } else {
         throw error;
       }
