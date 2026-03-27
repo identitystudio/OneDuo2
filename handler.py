@@ -6,7 +6,9 @@ import requests
 import json
 import math
 
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+_raw_url = os.environ.get("SUPABASE_URL", "")
+# Ensure SUPABASE_URL always has https:// prefix
+SUPABASE_URL = _raw_url if _raw_url.startswith("http") else f"https://{_raw_url}"
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 
 
