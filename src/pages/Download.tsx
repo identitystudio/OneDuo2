@@ -8,7 +8,7 @@ import { generateMemoryPackage, ExportMode } from "@/lib/memoryExporter";
 import { toast } from "sonner";
 import { useAuth } from "@/components/AuthGuard";
 
-type ExportFormat = 'pdf' | 'memory-training' | 'memory-creative';
+type ExportFormat = 'pdf' | 'memory-training' | 'memory-creative' | 'visual-transcription';
 
 interface CourseData {
   id: string;
@@ -65,6 +65,7 @@ const DownloadPage = () => {
   const CHUNK_DURATION_SEC = 3600;
   const [downloadingChunkIdx, setDownloadingChunkIdx] = useState<number | null>(null);
   const [completedChunks, setCompletedChunks] = useState<Set<number>>(new Set());
+  const [visualTranscriptionQueued, setVisualTranscriptionQueued] = useState(false);
 
   useEffect(() => {
     if (!courseId) {
@@ -343,6 +344,30 @@ const DownloadPage = () => {
     }
   };
 
+  const handleVisualTranscriptionPDF = async () => {
+    if (!courseId) return;
+    setDownloading(true);
+    setDownloadStatus('Queuing Visual Transcription PDF — this runs in the background...');
+    try {
+      const { error } = await supabase.functions.invoke('generate-pdf-backend', {
+        body: {
+          courseId,
+          email: userEmail,
+          action: 'generateAll',
+          framesPerPart: 150,
+        },
+      });
+      if (error) throw error;
+      setVisualTranscriptionQueued(true);
+      toast.success("Visual Transcription PDF is being generated. You'll receive an email when ready!");
+    } catch (err: any) {
+      console.error('Visual transcription PDF failed:', err);
+      toast.error('Failed to start PDF generation. Please try again.');
+    } finally {
+      setDownloading(false);
+    }
+  };
+
   // Handle no data available state
   if (noDataAvailable) {
     return (
@@ -548,6 +573,22 @@ const DownloadPage = () => {
                       </div>
                     </div>
                   </button>
+
+                  <button
+                    onClick={() => setSelectedFormat('visual-transcription')}
+                    className={`p-3 rounded-lg border text-left transition-all ${selectedFormat === 'visual-transcription'
+                      ? 'border-blue-500 bg-blue-500/5'
+                      : 'border-border hover:border-blue-500/50'
+                      }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <Layers className="h-5 w-5 text-blue-400" />
+                      <div>
+                        <div className="font-medium">Visual Transcription PDF</div>
+                        <div className="text-xs text-muted-foreground">Every frame with AI visual analysis — emailed when ready</div>
+                      </div>
+                    </div>
+                  </button>
                 </div>
 
                 {/* Film Mode Toggle (only for Creative) */}
@@ -569,7 +610,38 @@ const DownloadPage = () => {
                 )}
               </div>
 
-              {isLongVideo && selectedFormat === 'pdf' ? (
+              {selectedFormat === 'visual-transcription' ? (
+                // Visual Transcription PDF — runs on backend, emails when done
+                visualTranscriptionQueued ? (
+                  <div className="p-4 rounded-lg bg-blue-500/10 border border-blue-500/20 text-center">
+                    <CheckCircle className="h-8 w-8 text-blue-400 mx-auto mb-2" />
+                    <p className="text-sm font-medium text-blue-400">Generating in background</p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      We'll email <span className="font-medium">{userEmail}</span> when your Visual Transcription PDF is ready.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="p-3 rounded-lg bg-blue-500/10 border border-blue-500/20 text-left">
+                      <p className="text-xs text-blue-400 font-medium">Every frame • AI visual analysis • Merged into 1 PDF</p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        This runs on our servers and may take 30–60 minutes. You'll receive an email when it's done.
+                      </p>
+                    </div>
+                    <Button
+                      onClick={handleVisualTranscriptionPDF}
+                      size="lg"
+                      className="w-full text-lg py-6 bg-blue-600 hover:bg-blue-700"
+                      disabled={downloading}
+                    >
+                      {downloading
+                        ? <><Loader2 className="h-5 w-5 mr-2 animate-spin" /> Queuing...</>
+                        : <><Layers className="h-5 w-5 mr-2" /> Generate &amp; Email PDF</>
+                      }
+                    </Button>
+                  </div>
+                )
+              ) : isLongVideo && selectedFormat === 'pdf' ? (
                 // Chunked download buttons for long videos
                 <div className="space-y-2">
                   <p className="text-sm font-medium text-left text-muted-foreground">
