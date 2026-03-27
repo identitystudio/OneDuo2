@@ -1445,6 +1445,24 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
     }
   };
 
+  // Visual Transcription PDF — every frame with LLaVA analysis, runs on backend, emails when done
+  const handleGenerateVisualTranscriptionPDF = async (courseId: string, courseTitle: string) => {
+    const userEmail = user?.email;
+    setGeneratingPDF(`vt-${courseId}`);
+    try {
+      const { error } = await supabase.functions.invoke('generate-pdf-backend', {
+        body: { courseId, email: userEmail, action: 'generateAll', framesPerPart: 150 },
+      });
+      if (error) throw error;
+      toast.success(`Visual Transcription PDF queued for "${courseTitle}". We'll email ${userEmail} when ready.`, { duration: 6000 });
+    } catch (err: any) {
+      console.error('Visual transcription PDF failed:', err);
+      toast.error('Failed to start PDF generation. Please try again.');
+    } finally {
+      setGeneratingPDF(null);
+    }
+  };
+
   // Export PDF for a single-module course (redirect to dedicated download page)
   const handleExportPDF = async (course: Course, moduleNumber: number, aiFidelityMode: boolean = false) => {
     navigate(`/download/${course.id}${aiFidelityMode ? '?fidelity=true' : ''}`);
@@ -2348,16 +2366,13 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                                   <Button
                                     size="sm"
                                     variant="outline"
-                                    disabled={generatingPDF === `block-${block.courses[0]?.id}`}
-                                    className={`relative gap-1.5 font-bold border-2 bg-transparent ${block.courses[0]?.pdf_revision_pending
-                                      ? 'border-blue-400 text-blue-400 hover:bg-blue-400/10'
-                                      : 'border-red-500 text-red-500 hover:bg-red-500/10'
-                                      }`}
-                                    onClick={() => handleExportCombinedPDF(block, true)}
-                                    title={block.courses[0]?.pdf_revision_pending ? 'Download Updated PDF' : 'Generate PDF'}
+                                    disabled={generatingPDF === `vt-${block.courses[0]?.id}`}
+                                    className="relative gap-1.5 font-bold border-2 bg-transparent border-red-500 text-red-500 hover:bg-red-500/10"
+                                    onClick={() => handleGenerateVisualTranscriptionPDF(block.courses[0]?.id, block.name || block.courses[0]?.title || 'Course')}
+                                    title="Generate Visual Transcription PDF — every frame with AI analysis, emailed when ready"
                                   >
-                                    {generatingPDF === `block-${block.courses[0]?.id}` ? (
-                                      <><Loader2 className="w-4 h-4 animate-spin" /><span className="hidden sm:inline">Generating...</span></>
+                                    {generatingPDF === `vt-${block.courses[0]?.id}` ? (
+                                      <><Loader2 className="w-4 h-4 animate-spin" /><span className="hidden sm:inline">Queuing...</span></>
                                     ) : (
                                       <>
                                         <Download className="w-4 h-4" />
