@@ -92,6 +92,8 @@ interface Course {
   last_heartbeat_at?: string;
   pdf_revision_pending?: boolean;
   knowledge_layer_status?: string;
+  pdf_generation_status?: string;
+  pdf_generation_progress?: { currentPart: number; totalParts: number; currentFrame: number; totalFrames: number; };
 }
 
 // Display item can be either a Course (single module) or a CourseModule (part of multi-module course)
@@ -2363,26 +2365,47 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                               {/* Actions - Only show when ALL modules completed */}
                               {block.allCompleted && (
                                 <>
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    disabled={generatingPDF === `vt-${block.courses[0]?.id}`}
-                                    className="relative gap-1.5 font-bold border-2 bg-transparent border-red-500 text-red-500 hover:bg-red-500/10"
-                                    onClick={() => handleGenerateVisualTranscriptionPDF(block.courses[0]?.id, block.name || block.courses[0]?.title || 'Course')}
-                                    title="Generate Visual Transcription PDF — every frame with AI analysis, emailed when ready"
-                                  >
-                                    {generatingPDF === `vt-${block.courses[0]?.id}` ? (
-                                      <><Loader2 className="w-4 h-4 animate-spin" /><span className="hidden sm:inline">Queuing...</span></>
-                                    ) : (
-                                      <>
-                                        <Download className="w-4 h-4" />
-                                        <span className="hidden sm:inline">Generate PDF</span>
-                                        {block.courses[0]?.pdf_revision_pending && (
-                                          <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-blue-400 rounded-full animate-pulse" />
+                                  {(() => {
+                                    const course0 = block.courses[0];
+                                    const pdfStatus = course0?.pdf_generation_status;
+                                    const pdfProgress = course0?.pdf_generation_progress;
+                                    const isGenerating = pdfStatus === 'generating';
+                                    const isQueuing = generatingPDF === `vt-${course0?.id}`;
+                                    return (
+                                      <div className="flex flex-col items-end gap-0.5">
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          disabled={isQueuing || isGenerating}
+                                          className="relative gap-1.5 font-bold border-2 bg-transparent border-red-500 text-red-500 hover:bg-red-500/10"
+                                          onClick={() => handleGenerateVisualTranscriptionPDF(course0?.id, block.name || course0?.title || 'Course')}
+                                          title="Generate Visual Transcription PDF — every frame with AI analysis, emailed when ready"
+                                        >
+                                          {isQueuing ? (
+                                            <><Loader2 className="w-4 h-4 animate-spin" /><span className="hidden sm:inline">Queuing...</span></>
+                                          ) : isGenerating ? (
+                                            <><Loader2 className="w-4 h-4 animate-spin" /><span className="hidden sm:inline">Generating...</span></>
+                                          ) : (
+                                            <>
+                                              <Download className="w-4 h-4" />
+                                              <span className="hidden sm:inline">{pdfStatus === 'complete' ? 'Re-generate PDF' : 'Generate PDF'}</span>
+                                              {course0?.pdf_revision_pending && (
+                                                <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-blue-400 rounded-full animate-pulse" />
+                                              )}
+                                            </>
+                                          )}
+                                        </Button>
+                                        {isGenerating && pdfProgress && (
+                                          <span className="text-xs text-orange-400 font-mono">
+                                            {pdfProgress.currentFrame}/{pdfProgress.totalFrames} frames · Part {pdfProgress.currentPart}/{pdfProgress.totalParts}
+                                          </span>
                                         )}
-                                      </>
-                                    )}
-                                  </Button>
+                                        {pdfStatus === 'complete' && !isGenerating && (
+                                          <span className="text-xs text-green-400">PDF ready · emailed</span>
+                                        )}
+                                      </div>
+                                    );
+                                  })()}
                                   {/* Txt File — generate or download depending on status */}
                                   {block.courses[0]?.knowledge_layer_status === 'generating' ? (
                                     <Button size="sm" variant="outline" disabled className="gap-1.5 border-emerald-500/30 text-emerald-400">

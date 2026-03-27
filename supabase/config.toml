@@ -162,3 +162,9 @@ verify_jwt = false
 
 [functions.generate-knowledge-layer]
 verify_jwt = false
+
+[functions.generate-pdf-backend]
+verify_jwt = false
+
+[functions.runpod-webhook]
+verify_jwt = false

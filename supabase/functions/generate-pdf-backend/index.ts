@@ -1033,6 +1033,9 @@ async function buildPartPDF(
     userEmail: string,
     transcript: any[],
     replicate: any,
+    courseId?: string,
+    supabaseClient?: any,
+    totalAllFrames?: number,
 ): Promise<Uint8Array> {
     const pdfDoc = await PDFDocument.create();
     const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
@@ -1198,7 +1201,20 @@ async function buildPartPDF(
             }
         }));
         analyses.push(...batchResults);
-        console.log(`[buildPartPDF] Part ${partNumber}: analysed ${Math.min(i + BATCH, frameUrls.length)}/${frameUrls.length} frames`);
+        const framesAnalysed = Math.min(i + BATCH, frameUrls.length);
+        console.log(`[buildPartPDF] Part ${partNumber}: analysed ${framesAnalysed}/${frameUrls.length} frames`);
+        if (courseId && supabaseClient && totalAllFrames) {
+            const globalFramesDone = globalFrameOffset + framesAnalysed;
+            await supabaseClient.from('courses').update({
+                pdf_generation_progress: {
+                    currentPart: partNumber,
+                    totalParts,
+                    currentFrame: globalFramesDone,
+                    totalFrames: totalAllFrames,
+                    startedAt: new Date().toISOString(),
+                },
+            }).eq('id', courseId);
+        }
     }
 
     // ---- Render each frame ----
@@ -1379,6 +1395,12 @@ serve(async (req) => {
 
                     console.log(`[generate-pdf-backend] generateAll: ${totalFrames} frames → ${totalParts} parts × ${framesPerPart} frames`);
 
+                    // Mark as generating
+                    await supabase.from('courses').update({
+                        pdf_generation_status: 'generating',
+                        pdf_generation_progress: { currentPart: 0, totalParts, currentFrame: 0, totalFrames, startedAt: new Date().toISOString() },
+                    }).eq('id', courseId);
+
                     const partPdfBytesArray: Uint8Array[] = [];
 
                     for (let part = 1; part <= totalParts; part++) {
@@ -1387,6 +1409,11 @@ serve(async (req) => {
                         const partFrameUrls = allFrameUrls.slice(startIdx, endIdx);
 
                         console.log(`[generate-pdf-backend] Generating part ${part}/${totalParts} (frames ${startIdx + 1}–${endIdx})`);
+
+                        // Update progress before building part
+                        await supabase.from('courses').update({
+                            pdf_generation_progress: { currentPart: part, totalParts, currentFrame: startIdx, totalFrames, startedAt: new Date().toISOString() },
+                        }).eq('id', courseId);
 
                         const partBytes = await buildPartPDF(
                             course.title,
@@ -1399,10 +1426,18 @@ serve(async (req) => {
                             userEmail,
                             transcript,
                             replicate,
+                            courseId,
+                            supabase,
+                            totalFrames,
                         );
 
                         partPdfBytesArray.push(partBytes);
                         console.log(`[generate-pdf-backend] Part ${part} built: ${partBytes.length} bytes`);
+
+                        // Update progress after part is done
+                        await supabase.from('courses').update({
+                            pdf_generation_progress: { currentPart: part, totalParts, currentFrame: endIdx, totalFrames, startedAt: new Date().toISOString() },
+                        }).eq('id', courseId);
                     }
 
                     // Merge all parts
@@ -1444,6 +1479,8 @@ serve(async (req) => {
                         ],
                         pdf_revision_pending: false,
                         share_enabled: true,
+                        pdf_generation_status: 'complete',
+                        pdf_generation_progress: { currentPart: totalParts, totalParts, currentFrame: totalFrames, totalFrames, completedAt: new Date().toISOString() },
                     }).eq('id', courseId);
 
                     console.log(`[generate-pdf-backend] Visual Transcription PDF uploaded: ${storagePath}`);
@@ -1468,6 +1505,9 @@ serve(async (req) => {
                     console.log(`[generate-pdf-backend] COMPLETE — ${totalParts} parts merged into final PDF`);
                 } catch (error) {
                     console.error("[generate-pdf-backend] generateAll failed:", error);
+                    await supabase.from('courses').update({
+                        pdf_generation_status: 'failed',
+                    }).eq('id', courseId);
                 }
                 return;
             }
