@@ -1022,6 +1022,179 @@ async function buildPDF(
 // PART PDF BUILDER (visual transcription only)
 // ============================================
 
+// ============================================
+// PREAMBLE PDF (Cover + AI Knowledge Layer + Full Verbatim Transcript)
+// ============================================
+
+async function buildPreamblePDF(
+    courseTitle: string,
+    modules: any[],
+    userEmail: string,
+): Promise<Uint8Array> {
+    const pdfDoc = await PDFDocument.create();
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+    const italicFont = await pdfDoc.embedFont(StandardFonts.HelveticaOblique);
+
+    const PAGE_WIDTH = 595.28;
+    const PAGE_HEIGHT = 841.89;
+    const MARGIN = 42;
+    const CONTENT_WIDTH = PAGE_WIDTH - MARGIN * 2;
+    const FOOTER_Y = 30;
+
+    let currentPage = pdfDoc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+    let y = PAGE_HEIGHT - MARGIN;
+    const watermarkTimestamp = new Date().toISOString().replace('T', ' ').substring(0, 19) + ' UTC';
+
+    const addFooter = (page: any) => {
+        page.drawText(`Proprietary Intel: OneDuo Thinking Layer | Authorized User: ${safeText(userEmail)} | Distilled: ${watermarkTimestamp}`, {
+            x: MARGIN, y: FOOTER_Y, size: 6, font, color: rgb(0.6, 0.6, 0.6),
+        });
+        page.drawText('This artifact is for private authorized educational use only.', {
+            x: PAGE_WIDTH / 2 - 120, y: FOOTER_Y - 8, size: 5, font, color: rgb(0.5, 0.5, 0.5),
+        });
+    };
+
+    const newPage = () => {
+        addFooter(currentPage);
+        currentPage = pdfDoc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+        y = PAGE_HEIGHT - MARGIN;
+        return currentPage;
+    };
+
+    const ensureSpace = (needed: number) => {
+        if (y - needed < FOOTER_Y + 20) newPage();
+    };
+
+    const drawWrappedText = (text: string, opts: { x?: number; size?: number; usedFont?: any; color?: any; maxWidth?: number } = {}) => {
+        const { x = MARGIN, size = 9, usedFont = font, color = rgb(0, 0, 0), maxWidth = CONTENT_WIDTH } = opts;
+        const t = safeText(text);
+        if (!t) return;
+        const words = t.split(' ');
+        let line = '';
+        for (const word of words) {
+            const testLine = line ? `${line} ${word}` : word;
+            if (usedFont.widthOfTextAtSize(testLine, size) > maxWidth && line) {
+                ensureSpace(size * 1.4);
+                currentPage.drawText(line, { x, y, size, font: usedFont, color });
+                y -= size * 1.4;
+                line = word;
+            } else {
+                line = testLine;
+            }
+        }
+        if (line) {
+            ensureSpace(size * 1.4);
+            currentPage.drawText(line, { x, y, size, font: usedFont, color });
+            y -= size * 1.4;
+        }
+    };
+
+    // ---- COVER PAGE ----
+    y = PAGE_HEIGHT - 120;
+    currentPage.drawText(safeText(courseTitle), { x: MARGIN, y, size: 28, font: boldFont, color: rgb(0, 0, 0) });
+    y -= 50;
+    currentPage.drawText('MASTER COURSE ORIGIN LOG - ONE DUO ORIGIN', { x: MARGIN, y, size: 12, font, color: rgb(0.3, 0.3, 0.3) });
+    y -= 20;
+    const totalDuration = modules.reduce((sum: number, m: any) => sum + sanitizeDuration(m.video_duration_seconds || 0, (m.frame_urls || []).length), 0);
+    currentPage.drawText(safeText(`${modules.length} Chapters (Modules) | Verbatim Transcripts Included`), { x: MARGIN, y, size: 10, font, color: rgb(0.4, 0.4, 0.4) });
+    y -= 14;
+    currentPage.drawText(safeText(`Total Duration: ${formatTime(totalDuration)}`), { x: MARGIN, y, size: 10, font, color: rgb(0.4, 0.4, 0.4) });
+    addFooter(currentPage);
+
+    // ---- TABLE OF CONTENTS ----
+    newPage();
+    currentPage.drawText('Table of Contents', { x: MARGIN, y, size: 20, font: boldFont, color: rgb(0, 0, 0) });
+    y -= 25;
+    for (let i = 0; i < modules.length; i++) {
+        const mod = modules[i];
+        currentPage.drawText(safeText(`Chapter ${mod.module_number || i + 1}: ${mod.title || `Module ${i + 1}`}`), { x: MARGIN, y, size: 11, font, color: rgb(0, 0, 0) });
+        y -= 16;
+    }
+
+    // ---- PER-MODULE: AI Knowledge Layer + Full Verbatim Transcript ----
+    const klSections = [
+        { key: 'primary_topic',        label: 'PRIMARY TOPIC' },
+        { key: 'outcome',              label: 'OUTCOME' },
+        { key: 'executive_summary',    label: 'EXECUTIVE SUMMARY' },
+        { key: 'core_concepts',        label: 'CORE CONCEPTS' },
+        { key: 'frameworks',           label: 'FRAMEWORKS / MODELS' },
+        { key: 'visual_segments',      label: 'VISUAL SEGMENTS' },
+        { key: 'key_claims',           label: 'KEY CLAIMS / THESIS' },
+        { key: 'questions',            label: 'QUESTIONS THIS MODULE ANSWERS' },
+        { key: 'actionable_takeaways', label: 'ACTIONABLE TAKEAWAYS' },
+        { key: 'cross_module_links',   label: 'CROSS-MODULE LINK OPPORTUNITIES' },
+        { key: 'important_quotes',     label: 'IMPORTANT QUOTES' },
+        { key: 'prompt_starters',      label: 'PROMPT STARTERS FOR AI' },
+        { key: 'decision_rules',       label: 'DECISION RULES' },
+        { key: 'retrieval_tags',       label: 'RETRIEVAL TAGS' },
+    ];
+
+    for (let i = 0; i < modules.length; i++) {
+        const mod = modules[i];
+        newPage();
+
+        // Chapter header bar
+        currentPage.drawRectangle({ x: MARGIN, y: y - 5, width: CONTENT_WIDTH, height: 22, color: rgb(0, 0.7, 1) });
+        currentPage.drawText(safeText(`Chapter ${mod.module_number || i + 1}: ${mod.title || `Module ${i + 1}`}`), {
+            x: MARGIN + 5, y: y + 2, size: 14, font: boldFont, color: rgb(1, 1, 1),
+        });
+        y -= 32;
+
+        const correctedDur = sanitizeDuration(mod.video_duration_seconds || 0, (mod.frame_urls || []).length);
+        if (correctedDur > 0) {
+            currentPage.drawText(safeText(`Duration: ${formatTime(correctedDur)}`), { x: MARGIN, y, size: 9, font, color: rgb(0.4, 0.4, 0.4) });
+            y -= 18;
+        }
+
+        // AI KNOWLEDGE LAYER
+        const kl = mod.knowledge_layer;
+        if (kl) {
+            ensureSpace(30);
+            currentPage.drawLine({ start: { x: MARGIN, y }, end: { x: MARGIN + CONTENT_WIDTH, y }, thickness: 0.5, color: rgb(0, 0, 0) });
+            y -= 10;
+            currentPage.drawText('AI KNOWLEDGE LAYER', { x: MARGIN, y, size: 13, font: boldFont, color: rgb(0, 0, 0) });
+            y -= 14;
+
+            for (const { key, label } of klSections) {
+                const rawVal = (kl as any)[key];
+                if (!rawVal) continue;
+                const val = Array.isArray(rawVal) ? rawVal.join('\n') : String(rawVal);
+                if (!val.trim()) continue;
+
+                ensureSpace(20);
+                currentPage.drawText(label, { x: MARGIN, y, size: 11, font: boldFont, color: rgb(0, 0, 0) });
+                y -= 12;
+                drawWrappedText(val, { x: MARGIN + 3, size: 9, color: rgb(0.1, 0.1, 0.1) });
+                y -= 6;
+            }
+            y -= 6;
+
+            // Divider before transcript
+            ensureSpace(10);
+            currentPage.drawLine({ start: { x: MARGIN, y }, end: { x: MARGIN + CONTENT_WIDTH, y }, thickness: 0.3, color: rgb(0.7, 0.7, 0.7) });
+            y -= 8;
+        }
+
+        // FULL VERBATIM TRANSCRIPT
+        const transcript = mod.transcript || [];
+        if (transcript.length > 0) {
+            ensureSpace(30);
+            currentPage.drawText('Full Verbatim Transcript', { x: MARGIN, y, size: 14, font: boldFont, color: rgb(0, 0, 0) });
+            y -= 16;
+            for (const seg of transcript) {
+                const ts = formatTime(seg.start || 0);
+                const speaker = seg.speaker ? `${seg.speaker}: ` : '';
+                drawWrappedText(`[${ts}] ${speaker}${seg.text || ''}`, { x: MARGIN, size: 8, color: rgb(0.1, 0.1, 0.1) });
+                y -= 2;
+            }
+        }
+    }
+
+    addFooter(currentPage);
+    return pdfDoc.save();
+}
+
 async function buildPartPDF(
     courseTitle: string,
     partNumber: number,
@@ -1356,14 +1529,14 @@ serve(async (req) => {
             const fetchCourseData = async () => {
                 const { data: course, error: courseError } = await supabase
                     .from("courses")
-                    .select("id, title, email, share_token, share_enabled, course_files, video_duration_seconds, transcript, frame_urls, frame_analyses, audio_events, prosody_annotations")
+                    .select("id, title, email, share_token, share_enabled, course_files, video_duration_seconds, transcript, frame_urls, frame_analyses, audio_events, prosody_annotations, knowledge_layer")
                     .eq("id", courseId)
                     .single();
                 if (courseError || !course) throw new Error("Course not found");
 
                 const { data: courseModules } = await supabase
                     .from("course_modules")
-                    .select(`id, title, module_number, video_duration_seconds, transcript, frame_urls, frame_analyses, audio_events, prosody_annotations,
+                    .select(`id, title, module_number, video_duration_seconds, transcript, frame_urls, frame_analyses, audio_events, prosody_annotations, knowledge_layer,
                         transformation_artifacts(key_moments_index, concepts_frameworks, hidden_patterns, implementation_steps, quality_report, action_sops)`)
                     .eq("course_id", courseId)
                     .order("module_number");
@@ -1382,13 +1555,18 @@ serve(async (req) => {
                     ? (course.transcript || [])
                     : courseModules!.flatMap((m: any) => m.transcript || []);
 
-                return { course, isSingleModule, courseModules, allFrameUrls, allFrameAnalyses, videoDuration, transcript };
+                // Build modules array for preamble (cover + KL + transcript)
+                const preambleModules: any[] = isSingleModule
+                    ? [{ ...course, module_number: 1 }]
+                    : courseModules!.map((m: any) => ({ ...m, knowledge_layer: m.knowledge_layer || null }));
+
+                return { course, isSingleModule, courseModules, allFrameUrls, allFrameAnalyses, videoDuration, transcript, preambleModules };
             };
 
             // ========== ACTION: generateAll ==========
             if (action === 'generateAll' || action === 'generate') {
                 try {
-                    const { course, allFrameUrls, allFrameAnalyses, videoDuration, transcript } = await fetchCourseData();
+                    const { course, allFrameUrls, allFrameAnalyses, videoDuration, transcript, preambleModules } = await fetchCourseData();
                     const userEmail = email || course.email || '';
                     const totalFrames = allFrameUrls.length;
                     const totalParts = Math.ceil(totalFrames / framesPerPart);
@@ -1440,9 +1618,13 @@ serve(async (req) => {
                         }).eq('id', courseId);
                     }
 
-                    // Merge all parts
-                    console.log(`[generate-pdf-backend] Merging ${totalParts} parts...`);
-                    const mergedBytes = await mergePartPDFs(partPdfBytesArray);
+                    // Build preamble (Cover + AI Knowledge Layer + Full Verbatim Transcript)
+                    console.log(`[generate-pdf-backend] Building preamble (Knowledge Layer + Transcript)...`);
+                    const preambleBytes = await buildPreamblePDF(course.title, preambleModules, userEmail);
+
+                    // Merge: preamble + all visual transcription parts
+                    console.log(`[generate-pdf-backend] Merging preamble + ${totalParts} parts...`);
+                    const mergedBytes = await mergePartPDFs([preambleBytes, ...partPdfBytesArray]);
                     console.log(`[generate-pdf-backend] Merged PDF: ${mergedBytes.length} bytes`);
 
                     // Upload final PDF
