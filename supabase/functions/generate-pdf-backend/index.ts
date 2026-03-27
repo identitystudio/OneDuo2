@@ -1490,7 +1490,7 @@ async function mergePartPDFs(partPdfBytes: Uint8Array[]): Promise<Uint8Array> {
     const mergedDoc = await PDFDocument.create();
     for (const partBytes of partPdfBytes) {
         const partDoc = await PDFDocument.load(partBytes);
-        const pages = await mergedDoc.copyPagesFrom(partDoc, partDoc.getPageIndices());
+        const pages = await mergedDoc.copyPages(partDoc, partDoc.getPageIndices());
         for (const page of pages) mergedDoc.addPage(page);
     }
     return mergedDoc.save();
