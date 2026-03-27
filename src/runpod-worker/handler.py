@@ -80,7 +80,7 @@ def extract_frames(video_path: str, frames_dir: str, fps: int) -> list:
 
 def upload_frame_to_supabase(local_path: str, storage_path: str) -> str | None:
     """Upload a single frame to Supabase Storage and return its public URL."""
-    url = f"{SUPABASE_URL}/storage/v1/object/course-frames/{storage_path}"
+    url = f"{SUPABASE_URL}/storage/v1/object/course-videos/{storage_path}"
     headers = {
         "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
         "Content-Type": "image/jpeg",
@@ -90,7 +90,7 @@ def upload_frame_to_supabase(local_path: str, storage_path: str) -> str | None:
         with open(local_path, "rb") as f:
             resp = requests.post(url, headers=headers, data=f, timeout=30)
         if resp.status_code in (200, 201):
-            return f"{SUPABASE_URL}/storage/v1/object/public/course-frames/{storage_path}"
+            return f"{SUPABASE_URL}/storage/v1/object/public/course-videos/{storage_path}"
         else:
             log(f"Upload failed for {storage_path}: {resp.status_code} {resp.text[:100]}")
             return None
