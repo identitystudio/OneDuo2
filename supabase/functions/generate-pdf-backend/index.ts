@@ -1018,13 +1018,302 @@ async function buildPDF(
 // MAIN HANDLER
 // ============================================
 
+// ============================================
+// PART PDF BUILDER (visual transcription only)
+// ============================================
+
+async function buildPartPDF(
+    courseTitle: string,
+    partNumber: number,
+    totalParts: number,
+    frameUrls: string[],        // already sliced to this part's frames
+    frameAnalyses: any[],       // cached analyses for ALL frames (indexed by global frame index)
+    globalFrameOffset: number,  // index of first frame in this part (e.g. 150 for part 2)
+    videoDurationSeconds: number,
+    userEmail: string,
+    transcript: any[],
+    replicate: any,
+): Promise<Uint8Array> {
+    const pdfDoc = await PDFDocument.create();
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+    const italicFont = await pdfDoc.embedFont(StandardFonts.HelveticaOblique);
+
+    const PAGE_WIDTH = 595.28;
+    const PAGE_HEIGHT = 841.89;
+    const MARGIN = 42;
+    const CONTENT_WIDTH = PAGE_WIDTH - MARGIN * 2;
+    const FOOTER_Y = 30;
+
+    const watermarkTimestamp = new Date().toISOString().replace('T', ' ').substring(0, 19) + ' UTC';
+    let currentPage = pdfDoc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+    let y = PAGE_HEIGHT - MARGIN;
+
+    const addFooter = (page: any) => {
+        if (!userEmail) return;
+        page.drawText(`Proprietary Intel: OneDuo Thinking Layer | ${userEmail} | ${watermarkTimestamp}`, {
+            x: MARGIN, y: FOOTER_Y, size: 6, font, color: rgb(0.6, 0.6, 0.6),
+        });
+        page.drawText('This artifact is for private authorized educational use only.', {
+            x: PAGE_WIDTH / 2 - 120, y: FOOTER_Y - 8, size: 5, font, color: rgb(0.5, 0.5, 0.5),
+        });
+    };
+
+    const newPage = () => {
+        addFooter(currentPage);
+        currentPage = pdfDoc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+        y = PAGE_HEIGHT - MARGIN;
+    };
+
+    const ensureSpace = (needed: number) => {
+        if (y - needed < FOOTER_Y + 20) newPage();
+    };
+
+    const drawWrappedText = (text: string, options: { x?: number; size?: number; usedFont?: any; color?: any; maxWidth?: number } = {}) => {
+        const { x = MARGIN, size = 9, usedFont = font, color = rgb(0, 0, 0), maxWidth = CONTENT_WIDTH } = options;
+        const safeT = safeText(text);
+        if (!safeT) return;
+        const lineSpacing = size * 1.3;
+        const words = safeT.split(' ');
+        let line = '';
+        for (const word of words) {
+            const testLine = line ? `${line} ${word}` : word;
+            if (usedFont.widthOfTextAtSize(testLine, size) > maxWidth && line) {
+                ensureSpace(lineSpacing);
+                currentPage.drawText(line, { x, y, size, font: usedFont, color });
+                y -= lineSpacing;
+                line = word;
+            } else {
+                line = testLine;
+            }
+        }
+        if (line) {
+            ensureSpace(lineSpacing);
+            currentPage.drawText(line, { x, y, size, font: usedFont, color });
+            y -= lineSpacing;
+        }
+    };
+
+    // ---- Cover page for this part ----
+    y = PAGE_HEIGHT - 120;
+    currentPage.drawText(safeText(courseTitle), { x: MARGIN, y, size: 20, font: boldFont, color: rgb(0, 0, 0) });
+    y -= 30;
+    currentPage.drawText(safeText(`Visual Transcription — Part ${partNumber} of ${totalParts}`), {
+        x: MARGIN, y, size: 14, font, color: rgb(0.2, 0.2, 0.2),
+    });
+    y -= 18;
+    const startFrame = globalFrameOffset + 1;
+    const endFrame = globalFrameOffset + frameUrls.length;
+    currentPage.drawText(safeText(`Frames ${startFrame}–${endFrame} | Generated: ${watermarkTimestamp}`), {
+        x: MARGIN, y, size: 9, font, color: rgb(0.4, 0.4, 0.4),
+    });
+    addFooter(currentPage);
+
+    // ---- Analyse frames (use cache if available, else run LLaVA) ----
+    const totalFrames = videoDurationSeconds > 0 ? Math.ceil(videoDurationSeconds) : frameUrls.length;
+    const frameDuration = totalFrames > 0 ? videoDurationSeconds / Math.max(totalFrames, 1) : 1;
+
+    // Build transcript lookup: timestamp (rounded to nearest second) → text
+    const transcriptMap: Record<number, string> = {};
+    for (const seg of (transcript || [])) {
+        const sec = Math.round(seg.start || 0);
+        transcriptMap[sec] = (transcriptMap[sec] ? transcriptMap[sec] + ' ' : '') + (seg.text || '');
+    }
+
+    // Check how many frames already have cached analyses
+    const cachedCount = frameUrls.filter((_, i) => frameAnalyses[globalFrameOffset + i]).length;
+    console.log(`[buildPartPDF] Part ${partNumber}: ${frameUrls.length} frames, ${cachedCount} cached analyses`);
+
+    // Run LLaVA only on frames missing analyses (batch of 5 in parallel)
+    const analyses: any[] = [];
+    const BATCH = 5;
+    for (let i = 0; i < frameUrls.length; i += BATCH) {
+        const batch = frameUrls.slice(i, i + BATCH);
+        const batchResults = await Promise.all(batch.map(async (frameUrl, bi) => {
+            const globalIdx = globalFrameOffset + i + bi;
+            if (frameAnalyses[globalIdx]) return frameAnalyses[globalIdx]; // use cache
+
+            const timestamp = (globalIdx) * frameDuration;
+            const transcriptContext = transcriptMap[Math.round(timestamp)] || '';
+
+            if (!replicate) {
+                return { frameIndex: globalIdx, timestamp, text: '', visualDescription: '', keyElements: [], emphasisFlags: {}, instructorIntent: '', dependsOnPrevious: false };
+            }
+
+            try {
+                const output = await replicate.run(
+                    "yorickvp/llava-v1.6-vicuna-13b:0603dec596080fa084e26f0ae6d605fc5788ed2b1a0358cd25010619487eae63",
+                    {
+                        input: {
+                            image: frameUrl,
+                            prompt: `You are an expert observer watching a masterclass. Describe this moment exactly as a human expert would, focusing on what matters most.
+
+                                 PSYCHOLOGICAL & ARCHITECTURAL PERCEPTION:
+                                 1. Cognitive & Visual State: Identify if this is a "Static UI" (slide/document), "Dynamic UI" (tool/code interaction), or "Talking Head".
+                                 2. Social Posture: Interpret the instructor's "stance" towards the audience.
+                                 3. FOCUS INTENSITY: Capture cursor placement, text highlights, and specific UI elements being discussed.
+                                 4. OCR QUALITY: Assess the readability of the text on screen.
+
+                                 CRITICAL: Detect whenever the UI state changes (e.g. from slide to code).
+
+                                 ${transcriptContext ? `Context from transcript: "${transcriptContext.substring(0, 500)}"` : ''}
+
+                                 Return ONLY a JSON object in this format:
+                                 {
+                                   "text": "all OCR text relevant to this moment",
+                                   "ocr_confidence": 0-1,
+                                   "ui_state": "slide|code|ui|walking|demonstration",
+                                   "visualDescription": "High-fidelity psychological narrative.",
+                                   "emphasisFlags": {
+                                     "highlight_detected": boolean,
+                                     "cursor_pause": boolean,
+                                     "zoom_focus": boolean,
+                                     "text_selected": boolean,
+                                     "lingering_frame": boolean,
+                                     "bold_text": boolean,
+                                     "underline_detected": boolean
+                                   },
+                                   "keyElements": ["list", "of", "critical", "elements"],
+                                   "instructorIntent": "The deeper 'why' and actionable build instruction",
+                                   "dependsOnPrevious": boolean
+                                 }`,
+                            max_new_tokens: 1024,
+                            history: []
+                        }
+                    }
+                );
+                let resultText = Array.isArray(output) ? output.join('') : String(output);
+                if (resultText.includes('```json')) resultText = resultText.split('```json')[1].split('```')[0].trim();
+                else if (resultText.includes('```')) resultText = resultText.split('```')[1].split('```')[0].trim();
+                const parsed = JSON.parse(resultText);
+                return {
+                    frameIndex: globalIdx, timestamp,
+                    text: parsed.text || '', visualDescription: parsed.visualDescription || '',
+                    keyElements: parsed.keyElements || [], instructorIntent: parsed.instructorIntent || '',
+                    emphasisFlags: parsed.emphasisFlags || {},
+                    dependsOnPrevious: !!parsed.dependsOnPrevious,
+                };
+            } catch {
+                return { frameIndex: globalIdx, timestamp, text: '', visualDescription: '[Analysis unavailable]', keyElements: [], emphasisFlags: {}, instructorIntent: '', dependsOnPrevious: false };
+            }
+        }));
+        analyses.push(...batchResults);
+        console.log(`[buildPartPDF] Part ${partNumber}: analysed ${Math.min(i + BATCH, frameUrls.length)}/${frameUrls.length} frames`);
+    }
+
+    // ---- Render each frame ----
+    for (let fi = 0; fi < frameUrls.length; fi++) {
+        const frameUrl = frameUrls[fi];
+        const analysis = analyses[fi];
+        const globalIdx = globalFrameOffset + fi;
+        const timestamp = globalIdx * frameDuration;
+
+        newPage();
+
+        // Frame header
+        currentPage.drawText(safeText(`Frame ${globalIdx + 1} | ${formatTime(timestamp)}`), {
+            x: MARGIN, y, size: 7, font: boldFont, color: rgb(0.4, 0.4, 0.4),
+        });
+        y -= 10;
+
+        // Embed image
+        try {
+            const response = await fetch(frameUrl, { signal: AbortSignal.timeout(10000) });
+            if (response.ok) {
+                const imageBytes = new Uint8Array(await response.arrayBuffer());
+                const contentType = response.headers.get('content-type') || '';
+                const image = contentType.includes('png') || frameUrl.includes('.png')
+                    ? await pdfDoc.embedPng(imageBytes)
+                    : await pdfDoc.embedJpg(imageBytes);
+                const imgWidth = Math.min(CONTENT_WIDTH, 400);
+                const imgHeight = imgWidth * (image.height / image.width);
+                ensureSpace(imgHeight + 20);
+                currentPage.drawImage(image, { x: MARGIN, y: y - imgHeight, width: imgWidth, height: imgHeight });
+                y -= imgHeight + 5;
+            }
+        } catch {
+            currentPage.drawText('[Frame could not be loaded]', { x: MARGIN, y, size: 7, font: italicFont, color: rgb(0.7, 0.3, 0.3) });
+            y -= 12;
+        }
+
+        // Visual transcription caption
+        const captionParts: string[] = [];
+        if (analysis?.visualDescription) captionParts.push(analysis.visualDescription);
+        if (analysis?.keyElements?.length > 0) captionParts.push(`[On-screen: ${analysis.keyElements.slice(0, 4).join(', ')}]`);
+        if (analysis?.instructorIntent) captionParts.push(`[Intent: ${analysis.instructorIntent}]`);
+        if (analysis?.emphasisFlags) {
+            const notes: string[] = [];
+            if (analysis.emphasisFlags.highlight_detected) notes.push('text highlighted');
+            if (analysis.emphasisFlags.cursor_pause) notes.push('cursor paused');
+            if (analysis.emphasisFlags.zoom_focus) notes.push('zoomed/focused');
+            if (notes.length > 0) captionParts.push(`[Interaction: ${notes.join('; ')}]`);
+        }
+
+        // Transcript text at this timestamp
+        const transcriptText = transcriptMap[Math.round(timestamp)];
+        if (transcriptText) captionParts.push(`[Transcript: "${transcriptText.substring(0, 200)}"]`);
+
+        const caption = captionParts.map(p =>
+            p.replace(/Note: The image is a screenshot from a tutorial video, showing /gi, '')
+             .replace(/This frame shows /gi, '')
+             .replace(/In this frame, /gi, '')
+             .replace(/The image shows /gi, '')
+             .trim()
+        ).filter(p => p.length > 0).join(' | ');
+
+        if (caption) {
+            const hasFocus = analysis?.emphasisFlags?.cursor_pause || analysis?.emphasisFlags?.zoom_focus;
+            const truncated = caption.length > 500 ? caption.substring(0, 497) + '...' : caption;
+            const label = hasFocus ? 'ONE DUO SENSORY DATA [CRITICAL FOCUS]:' : 'ONE DUO SENSORY DATA:';
+            const textToDraw = `${label} "${truncated}"`;
+            const fontSize = 7;
+            const words = textToDraw.split(' ');
+            let lines = 0, line = '';
+            for (const word of words) {
+                const testLine = line ? `${line} ${word}` : word;
+                if (font.widthOfTextAtSize(testLine, fontSize) > CONTENT_WIDTH - 10) { lines++; line = word; }
+                else line = testLine;
+            }
+            if (line) lines++;
+            const rectHeight = (lines * (fontSize * 1.3)) + 8;
+            ensureSpace(rectHeight + 5);
+            currentPage.drawRectangle({
+                x: MARGIN, y: y - rectHeight, width: CONTENT_WIDTH, height: rectHeight,
+                color: hasFocus ? rgb(1, 1, 0.94) : rgb(0.98, 0.98, 1),
+                borderColor: hasFocus ? rgb(0.8, 0.7, 0) : rgb(0.8, 0.8, 1),
+                borderWidth: 0.5,
+            });
+            y -= 2;
+            drawWrappedText(textToDraw, { x: MARGIN + 5, size: fontSize, usedFont: italicFont, color: hasFocus ? rgb(0.4, 0.2, 0) : rgb(0.2, 0.2, 0.4), maxWidth: CONTENT_WIDTH - 10 });
+            y -= 4;
+        }
+    }
+
+    addFooter(currentPage);
+    return pdfDoc.save();
+}
+
+// ============================================
+// PDF MERGE (combine all parts into one)
+// ============================================
+
+async function mergePartPDFs(partPdfBytes: Uint8Array[]): Promise<Uint8Array> {
+    const mergedDoc = await PDFDocument.create();
+    for (const partBytes of partPdfBytes) {
+        const partDoc = await PDFDocument.load(partBytes);
+        const pages = await mergedDoc.copyPagesFrom(partDoc, partDoc.getPageIndices());
+        for (const page of pages) mergedDoc.addPage(page);
+    }
+    return mergedDoc.save();
+}
+
 serve(async (req) => {
     if (req.method === "OPTIONS") {
         return new Response(null, { headers: corsHeaders });
     }
 
     try {
-        const { courseId, email, aiFidelityMode = false } = await req.json();
+        const { courseId, email, aiFidelityMode = false, action = 'generate', framesPerPart = 150, partNumber } = await req.json();
 
         if (!courseId) {
             return new Response(
@@ -1033,7 +1322,7 @@ serve(async (req) => {
             );
         }
 
-        console.log(`[generate-pdf-backend] Starting for course ${courseId}, email: ${email}`);
+        console.log(`[generate-pdf-backend] action=${action} course=${courseId} framesPerPart=${framesPerPart}`);
 
         // Immediately respond to the client so they can close the tab
         const responsePromise = new Response(
@@ -1044,6 +1333,146 @@ serve(async (req) => {
         // Do the heavy work in the background
         const backgroundWork = async () => {
             const supabase = createClient(supabaseUrl, supabaseServiceKey);
+            const REPLICATE_API_TOKEN = Deno.env.get("REPLICATE_API_TOKEN") || Deno.env.get("REPLICATE_API_KEY");
+            const replicate = REPLICATE_API_TOKEN ? new Replicate({ auth: REPLICATE_API_TOKEN }) : null;
+
+            // ========== SHARED: FETCH COURSE + MODULES ==========
+            const fetchCourseData = async () => {
+                const { data: course, error: courseError } = await supabase
+                    .from("courses")
+                    .select("id, title, email, share_token, share_enabled, course_files, video_duration_seconds, transcript, frame_urls, frame_analyses, audio_events, prosody_annotations")
+                    .eq("id", courseId)
+                    .single();
+                if (courseError || !course) throw new Error("Course not found");
+
+                const { data: courseModules } = await supabase
+                    .from("course_modules")
+                    .select(`id, title, module_number, video_duration_seconds, transcript, frame_urls, frame_analyses, audio_events, prosody_annotations,
+                        transformation_artifacts(key_moments_index, concepts_frameworks, hidden_patterns, implementation_steps, quality_report, action_sops)`)
+                    .eq("course_id", courseId)
+                    .order("module_number");
+
+                const isSingleModule = !courseModules || courseModules.length === 0;
+                const allFrameUrls: string[] = isSingleModule
+                    ? (course.frame_urls || [])
+                    : courseModules!.flatMap((m: any) => m.frame_urls || []);
+                const allFrameAnalyses: any[] = isSingleModule
+                    ? (course.frame_analyses || [])
+                    : courseModules!.flatMap((m: any) => m.frame_analyses || []);
+                const videoDuration: number = isSingleModule
+                    ? sanitizeDuration(course.video_duration_seconds || 0, allFrameUrls.length)
+                    : courseModules!.reduce((sum: number, m: any) => sum + sanitizeDuration(m.video_duration_seconds || 0, (m.frame_urls || []).length), 0);
+                const transcript: any[] = isSingleModule
+                    ? (course.transcript || [])
+                    : courseModules!.flatMap((m: any) => m.transcript || []);
+
+                return { course, isSingleModule, courseModules, allFrameUrls, allFrameAnalyses, videoDuration, transcript };
+            };
+
+            // ========== ACTION: generateAll ==========
+            if (action === 'generateAll' || action === 'generate') {
+                try {
+                    const { course, allFrameUrls, allFrameAnalyses, videoDuration, transcript } = await fetchCourseData();
+                    const userEmail = email || course.email || '';
+                    const totalFrames = allFrameUrls.length;
+                    const totalParts = Math.ceil(totalFrames / framesPerPart);
+
+                    console.log(`[generate-pdf-backend] generateAll: ${totalFrames} frames → ${totalParts} parts × ${framesPerPart} frames`);
+
+                    const partPdfBytesArray: Uint8Array[] = [];
+
+                    for (let part = 1; part <= totalParts; part++) {
+                        const startIdx = (part - 1) * framesPerPart;
+                        const endIdx = Math.min(startIdx + framesPerPart, totalFrames);
+                        const partFrameUrls = allFrameUrls.slice(startIdx, endIdx);
+
+                        console.log(`[generate-pdf-backend] Generating part ${part}/${totalParts} (frames ${startIdx + 1}–${endIdx})`);
+
+                        const partBytes = await buildPartPDF(
+                            course.title,
+                            part,
+                            totalParts,
+                            partFrameUrls,
+                            allFrameAnalyses,
+                            startIdx,
+                            videoDuration,
+                            userEmail,
+                            transcript,
+                            replicate,
+                        );
+
+                        partPdfBytesArray.push(partBytes);
+                        console.log(`[generate-pdf-backend] Part ${part} built: ${partBytes.length} bytes`);
+                    }
+
+                    // Merge all parts
+                    console.log(`[generate-pdf-backend] Merging ${totalParts} parts...`);
+                    const mergedBytes = await mergePartPDFs(partPdfBytesArray);
+                    console.log(`[generate-pdf-backend] Merged PDF: ${mergedBytes.length} bytes`);
+
+                    // Upload final PDF
+                    const timestamp = Date.now();
+                    const storagePath = `exports/${courseId}/${timestamp}_visual_transcription.pdf`;
+                    const filename = `${course.title} - Visual Transcription.pdf`;
+
+                    const { error: uploadError } = await supabase.storage
+                        .from('course-files')
+                        .upload(storagePath, mergedBytes, { contentType: 'application/pdf', upsert: true });
+
+                    if (uploadError) {
+                        console.error("[generate-pdf-backend] Upload failed:", uploadError);
+                        return;
+                    }
+
+                    // Update course_files
+                    const existingFiles = (course.course_files as any[]) || [];
+                    await supabase.from('courses').update({
+                        course_files: [
+                            ...existingFiles.filter((f: any) => f?.type !== 'visual_transcription_pdf'),
+                            {
+                                type: 'visual_transcription_pdf',
+                                name: filename,
+                                filename,
+                                storagePath,
+                                storage_path: `course-files/${storagePath}`,
+                                size: mergedBytes.length,
+                                uploaded_at: new Date().toISOString(),
+                                total_parts: totalParts,
+                                total_frames: totalFrames,
+                                generated_by: 'backend',
+                            }
+                        ],
+                        pdf_revision_pending: false,
+                        share_enabled: true,
+                    }).eq('id', courseId);
+
+                    console.log(`[generate-pdf-backend] Visual Transcription PDF uploaded: ${storagePath}`);
+
+                    // Send email
+                    if (userEmail) {
+                        const functionsUrl = supabaseUrl.replace('.supabase.co', '.functions.supabase.co');
+                        const shareToken = course.share_token;
+                        const downloadUrl = `${functionsUrl}/track-download?courseId=${courseId}&source=email${shareToken ? `&token=${shareToken}` : ''}`;
+                        try {
+                            await fetch(`${supabaseUrl}/functions/v1/send-pdf-email`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${supabaseServiceKey}` },
+                                body: JSON.stringify({ email: userEmail, courseTitle: course.title, downloadUrl, courseId }),
+                            });
+                            console.log(`[generate-pdf-backend] Email sent to ${userEmail}`);
+                        } catch (emailError) {
+                            console.error("[generate-pdf-backend] Email failed:", emailError);
+                        }
+                    }
+
+                    console.log(`[generate-pdf-backend] COMPLETE — ${totalParts} parts merged into final PDF`);
+                } catch (error) {
+                    console.error("[generate-pdf-backend] generateAll failed:", error);
+                }
+                return;
+            }
+
+            // ========== LEGACY: original full PDF generation (kept intact) ==========
 
             try {
                 // ========== 1. FETCH COURSE DATA ==========
@@ -1145,12 +1574,7 @@ serve(async (req) => {
                 console.log(`[generate-pdf-backend] ${modules.length} module(s), single=${isSingleModule}`);
 
                 // ========== 3. RUN FRAME OCR IF NOT CACHED ==========
-                const REPLICATE_API_TOKEN = Deno.env.get("REPLICATE_API_TOKEN") || Deno.env.get("REPLICATE_API_KEY");
-                let replicate: any = null;
-
-                if (REPLICATE_API_TOKEN) {
-                    replicate = new Replicate({ auth: REPLICATE_API_TOKEN });
-                }
+                // replicate is already initialised at the top of backgroundWork
 
                 for (const mod of modules) {
                     const frameUrls = mod.frame_urls || [];
