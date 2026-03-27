@@ -188,16 +188,8 @@ const DownloadPage = () => {
     fetchData();
   }, [courseId, moduleParam, userEmail, salvageMode]);
 
-  // Auto-trigger download when data loads (only for short videos — long ones use chunk buttons)
-  useEffect(() => {
-    const hasData = module || (course && course.frame_urls?.length);
-    const totalDuration = module?.video_duration_seconds || course?.video_duration_seconds || 0;
-    const isLongVideo = totalDuration > CHUNK_DURATION_SEC;
-    if (hasData && !isLongVideo && !hasAutoTriggered.current && !downloading && !downloadComplete) {
-      hasAutoTriggered.current = true;
-      handleDownload();
-    }
-  }, [course, module]);
+  // Auto-trigger disabled — user must select format and click the button
+  // (Previously auto-triggered handleDownload on load, bypassing format selection)
 
   const handleDownload = async () => {
     // Use module data if available, otherwise course data
