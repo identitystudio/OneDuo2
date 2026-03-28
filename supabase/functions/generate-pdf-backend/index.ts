@@ -1374,19 +1374,28 @@ async function buildPartPDF(
             }
         }));
         analyses.push(...batchResults);
+        // Cache new analyses in the shared array so restarts skip re-analysis
+        batchResults.forEach((result, bi) => {
+            frameAnalyses[globalFrameOffset + i + bi] = result;
+        });
         const framesAnalysed = Math.min(i + BATCH, frameUrls.length);
         console.log(`[buildPartPDF] Part ${partNumber}: analysed ${framesAnalysed}/${frameUrls.length} frames`);
         if (courseId && supabaseClient && totalAllFrames) {
             const globalFramesDone = globalFrameOffset + framesAnalysed;
-            await supabaseClient.from('courses').update({
-                pdf_generation_progress: {
-                    currentPart: partNumber,
-                    totalParts,
-                    currentFrame: globalFramesDone,
-                    totalFrames: totalAllFrames,
-                    startedAt: new Date().toISOString(),
-                },
-            }).eq('id', courseId);
+            try {
+                await supabaseClient.from('courses').update({
+                    pdf_generation_progress: {
+                        currentPart: partNumber,
+                        totalParts,
+                        currentFrame: globalFramesDone,
+                        totalFrames: totalAllFrames,
+                        startedAt: new Date().toISOString(),
+                    },
+                    frame_analyses: frameAnalyses,
+                }).eq('id', courseId);
+            } catch (e) {
+                console.error(`[buildPartPDF] Progress save failed: ${e}`);
+            }
         }
     }
 

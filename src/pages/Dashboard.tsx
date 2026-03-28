@@ -249,10 +249,11 @@ export default function Dashboard() {
       const currentCourses = coursesRef.current;
       const hasProcessing = currentCourses.some(c =>
         !['completed', 'failed'].includes(c.status) ||
-        c.modules?.some(m => !['completed', 'failed'].includes(m.status))
+        c.modules?.some(m => !['completed', 'failed'].includes(m.status)) ||
+        c.pdf_generation_status === 'generating'
       );
 
-      // Fast poll (2s) when processing, slow poll (10s) when idle
+      // Fast poll (2s) when processing or PDF generating, slow poll (10s) when idle
       const nextDelay = hasProcessing ? 2000 : 10000;
 
       loadCourses(false);

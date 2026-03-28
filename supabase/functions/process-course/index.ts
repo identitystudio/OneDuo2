@@ -1555,7 +1555,7 @@ serve(async (req) => {
         // GOVERNANCE: Filter out purged records (soft-deleted via execution_frames)
         const { data: courses, error } = await supabase
           .from("courses")
-          .select("id, title, status, progress, progress_step, error_message, created_at, completed_at, density_mode, fps_target, is_multi_module, module_count, completed_modules, fix_attempts, last_fix_strategy, video_duration_seconds, share_enabled, share_token, last_heartbeat_at, pdf_revision_pending, course_files, project_id, knowledge_layer_status")
+          .select("id, title, status, progress, progress_step, error_message, created_at, completed_at, density_mode, fps_target, is_multi_module, module_count, completed_modules, fix_attempts, last_fix_strategy, video_duration_seconds, share_enabled, share_token, last_heartbeat_at, pdf_revision_pending, course_files, project_id, knowledge_layer_status, pdf_generation_status, pdf_generation_progress")
           .eq("email", email)
           .eq("purged", false)
           .order("created_at", { ascending: false });
