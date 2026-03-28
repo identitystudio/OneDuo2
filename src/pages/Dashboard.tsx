@@ -253,6 +253,19 @@ export default function Dashboard() {
         c.pdf_generation_status === 'generating'
       );
 
+      // Auto-retry stalled PDF generation (function timed out silently)
+      for (const c of currentCourses) {
+        if (c.pdf_generation_status === 'generating' && c.pdf_generation_progress?.startedAt) {
+          const stalledMs = Date.now() - new Date(c.pdf_generation_progress.startedAt).getTime();
+          if (stalledMs > 3 * 60 * 1000) {
+            console.log(`[dashboard] PDF stalled for ${c.title}, auto-retrying...`);
+            supabase.functions.invoke('generate-pdf-backend', {
+              body: { courseId: c.id, email, action: 'generateAll', framesPerPart: 150 },
+            }).catch(() => {});
+          }
+        }
+      }
+
       // Fast poll (2s) when processing or PDF generating, slow poll (10s) when idle
       const nextDelay = hasProcessing ? 2000 : 10000;
 
