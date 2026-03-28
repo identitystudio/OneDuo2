@@ -5,6 +5,7 @@ import tempfile
 import requests
 import json
 import math
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
@@ -166,26 +167,35 @@ def handler(job):
         total_frames = len(frame_paths)
         update_db_progress(table_name, record_id, 40, total_frames)
 
-        # 4. Upload frames to Supabase Storage
+        # 4. Upload frames to Supabase Storage (parallel, 20 workers)
         log(f"Uploading {total_frames} frames to Supabase Storage...")
-        frame_urls = []
+        frame_urls_map = {}  # index -> url
         failed_count = 0
+        UPLOAD_WORKERS = 20
 
-        for i, local_path in enumerate(frame_paths):
+        def upload_one(args):
+            i, local_path = args
             storage_path = f"{record_id}/frame_{i:05d}.jpg"
-            public_url = upload_frame_to_supabase(local_path, storage_path)
+            url = upload_frame_to_supabase(local_path, storage_path)
+            return i, url
 
-            if public_url:
-                frame_urls.append(public_url)
-            else:
-                failed_count += 1
+        completed = 0
+        with ThreadPoolExecutor(max_workers=UPLOAD_WORKERS) as executor:
+            futures = {executor.submit(upload_one, (i, p)): i for i, p in enumerate(frame_paths)}
+            for future in as_completed(futures):
+                i, url = future.result()
+                if url:
+                    frame_urls_map[i] = url
+                else:
+                    failed_count += 1
+                completed += 1
+                if completed % 100 == 0:
+                    pct = 40 + int((completed / total_frames) * 50)
+                    update_db_progress(table_name, record_id, min(pct, 89))
+                    log(f"Uploaded {completed}/{total_frames} frames ({failed_count} failed)")
 
-            # Log progress every 100 frames
-            if (i + 1) % 100 == 0:
-                pct = 40 + int(((i + 1) / total_frames) * 50)
-                update_db_progress(table_name, record_id, min(pct, 89))
-                log(f"Uploaded {i + 1}/{total_frames} frames ({failed_count} failed)")
-
+        # Rebuild ordered list
+        frame_urls = [frame_urls_map[i] for i in sorted(frame_urls_map)]
         log(f"Upload complete: {len(frame_urls)} succeeded, {failed_count} failed")
 
         # 5. Call webhook if provided
