@@ -1582,15 +1582,50 @@ serve(async (req) => {
 
                     console.log(`[generate-pdf-backend] generateAll: ${totalFrames} frames → ${totalParts} parts × ${framesPerPart} frames`);
 
-                    // Mark as generating
-                    await supabase.from('courses').update({
-                        pdf_generation_status: 'generating',
-                        pdf_generation_progress: { currentPart: 0, totalParts, currentFrame: 0, totalFrames, startedAt: new Date().toISOString() },
-                    }).eq('id', courseId);
+                    // ---- Resume: check which parts are already in storage ----
+                    const partPdfBytesArray: Uint8Array[] = new Array(totalParts);
+                    const completedPartsSet = new Set<number>();
 
-                    const partPdfBytesArray: Uint8Array[] = [];
+                    console.log(`[generate-pdf-backend] Checking storage for already-completed parts...`);
+                    for (let p = 1; p <= totalParts; p++) {
+                        const partStoragePath = `exports/${courseId}/parts/part_${p}_of_${totalParts}.pdf`;
+                        const { data: existingData } = await supabase.storage
+                            .from('course-files')
+                            .download(partStoragePath);
+                        if (existingData) {
+                            const buf = await existingData.arrayBuffer();
+                            partPdfBytesArray[p - 1] = new Uint8Array(buf);
+                            completedPartsSet.add(p);
+                            console.log(`[generate-pdf-backend] Part ${p}/${totalParts} already in storage — skipping.`);
+                        }
+                    }
+
+                    const firstPendingPart = [...Array(totalParts).keys()]
+                        .map(i => i + 1)
+                        .find(p => !completedPartsSet.has(p)) ?? (totalParts + 1);
+
+                    // Mark as generating (or resuming)
+                    if (completedPartsSet.size > 0) {
+                        const resumeFrame = Math.min(completedPartsSet.size * framesPerPart, totalFrames);
+                        console.log(`[generate-pdf-backend] Resuming from part ${firstPendingPart} (${completedPartsSet.size}/${totalParts} parts already done)`);
+                        await supabase.from('courses').update({
+                            pdf_generation_status: 'generating',
+                            pdf_generation_progress: { currentPart: completedPartsSet.size, totalParts, currentFrame: resumeFrame, totalFrames, resumedAt: new Date().toISOString() },
+                        }).eq('id', courseId);
+                    } else {
+                        await supabase.from('courses').update({
+                            pdf_generation_status: 'generating',
+                            pdf_generation_progress: { currentPart: 0, totalParts, currentFrame: 0, totalFrames, startedAt: new Date().toISOString() },
+                        }).eq('id', courseId);
+                    }
 
                     for (let part = 1; part <= totalParts; part++) {
+                        // Skip parts already loaded from storage
+                        if (completedPartsSet.has(part)) {
+                            console.log(`[generate-pdf-backend] Part ${part}/${totalParts} already completed — skipping.`);
+                            continue;
+                        }
+
                         const startIdx = (part - 1) * framesPerPart;
                         const endIdx = Math.min(startIdx + framesPerPart, totalFrames);
                         const partFrameUrls = allFrameUrls.slice(startIdx, endIdx);
@@ -1618,7 +1653,18 @@ serve(async (req) => {
                             totalFrames,
                         );
 
-                        partPdfBytesArray.push(partBytes);
+                        // Save part to storage immediately so retries can resume from here
+                        const partStoragePath = `exports/${courseId}/parts/part_${part}_of_${totalParts}.pdf`;
+                        const { error: partUploadErr } = await supabase.storage
+                            .from('course-files')
+                            .upload(partStoragePath, partBytes, { contentType: 'application/pdf', upsert: true });
+                        if (partUploadErr) {
+                            console.error(`[generate-pdf-backend] Failed to save part ${part} to storage:`, partUploadErr);
+                            throw partUploadErr;
+                        }
+                        console.log(`[generate-pdf-backend] Part ${part} saved to storage: ${partStoragePath}`);
+
+                        partPdfBytesArray[part - 1] = partBytes;
                         console.log(`[generate-pdf-backend] Part ${part} built: ${partBytes.length} bytes`);
 
                         // Update progress after part is done
@@ -1676,6 +1722,15 @@ serve(async (req) => {
 
                     console.log(`[generate-pdf-backend] Visual Transcription PDF uploaded: ${storagePath}`);
 
+                    // Clean up per-part checkpoint files now that final PDF is merged
+                    const partPaths = Array.from({ length: totalParts }, (_, i) =>
+                        `exports/${courseId}/parts/part_${i + 1}_of_${totalParts}.pdf`
+                    );
+                    await supabase.storage.from('course-files').remove(partPaths).catch((e: any) => {
+                        console.warn(`[generate-pdf-backend] Part cleanup warning (non-fatal):`, e);
+                    });
+                    console.log(`[generate-pdf-backend] Cleaned up ${totalParts} part checkpoint files.`);
+
                     // Send email
                     if (userEmail) {
                         const functionsUrl = supabaseUrl.replace('.supabase.co', '.functions.supabase.co');
@@ -1696,8 +1751,19 @@ serve(async (req) => {
                     console.log(`[generate-pdf-backend] COMPLETE — ${totalParts} parts merged into final PDF`);
                 } catch (error) {
                     console.error("[generate-pdf-backend] generateAll failed:", error);
+                    // Fetch current progress so we can preserve how far we got (completed parts remain in storage)
+                    const { data: progressRow } = await supabase
+                        .from('courses')
+                        .select('pdf_generation_progress')
+                        .eq('id', courseId)
+                        .single();
                     await supabase.from('courses').update({
                         pdf_generation_status: 'failed',
+                        pdf_generation_progress: {
+                            ...(progressRow?.pdf_generation_progress || {}),
+                            failedAt: new Date().toISOString(),
+                            error: error instanceof Error ? error.message : String(error),
+                        },
                     }).eq('id', courseId);
                 }
                 return;
