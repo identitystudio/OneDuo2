@@ -1582,23 +1582,27 @@ serve(async (req) => {
 
                     console.log(`[generate-pdf-backend] generateAll: ${totalFrames} frames → ${totalParts} parts × ${framesPerPart} frames`);
 
-                    // ---- Resume: check which parts are already in storage ----
-                    const partPdfBytesArray: Uint8Array[] = new Array(totalParts);
+                    // ---- Resume: lightweight list() to detect completed parts (no downloads yet) ----
                     const completedPartsSet = new Set<number>();
 
                     console.log(`[generate-pdf-backend] Checking storage for already-completed parts...`);
-                    for (let p = 1; p <= totalParts; p++) {
-                        const partStoragePath = `exports/${courseId}/parts/part_${p}_of_${totalParts}.pdf`;
-                        const { data: existingData } = await supabase.storage
-                            .from('course-files')
-                            .download(partStoragePath);
-                        if (existingData) {
-                            const buf = await existingData.arrayBuffer();
-                            partPdfBytesArray[p - 1] = new Uint8Array(buf);
-                            completedPartsSet.add(p);
-                            console.log(`[generate-pdf-backend] Part ${p}/${totalParts} already in storage — skipping.`);
+                    const { data: existingPartFiles } = await supabase.storage
+                        .from('course-files')
+                        .list(`exports/${courseId}/parts`);
+
+                    if (existingPartFiles) {
+                        for (let p = 1; p <= totalParts; p++) {
+                            const expectedName = `part_${p}_of_${totalParts}.pdf`;
+                            if (existingPartFiles.some((f: any) => f.name === expectedName)) {
+                                completedPartsSet.add(p);
+                                console.log(`[generate-pdf-backend] Part ${p}/${totalParts} found in storage — will download at merge time.`);
+                            }
                         }
                     }
+
+                    // partPdfBytesArray is populated lazily: built parts stored immediately,
+                    // completed parts downloaded only at merge time below.
+                    const partPdfBytesArray: Uint8Array[] = new Array(totalParts);
 
                     const firstPendingPart = [...Array(totalParts).keys()]
                         .map(i => i + 1)
@@ -1671,6 +1675,22 @@ serve(async (req) => {
                         await supabase.from('courses').update({
                             pdf_generation_progress: { currentPart: part, totalParts, currentFrame: endIdx, totalFrames, startedAt: new Date().toISOString() },
                         }).eq('id', courseId);
+                    }
+
+                    // Download completed parts from storage now (lazy — only at merge time)
+                    console.log(`[generate-pdf-backend] Downloading ${completedPartsSet.size} completed part(s) from storage for merge...`);
+                    for (const p of completedPartsSet) {
+                        if (partPdfBytesArray[p - 1]) continue; // already in memory from this run
+                        const partStoragePath = `exports/${courseId}/parts/part_${p}_of_${totalParts}.pdf`;
+                        const { data: partData, error: partDownloadErr } = await supabase.storage
+                            .from('course-files')
+                            .download(partStoragePath);
+                        if (partDownloadErr || !partData) {
+                            console.error(`[generate-pdf-backend] Failed to download part ${p} for merge:`, partDownloadErr);
+                            throw new Error(`Missing part ${p} for merge`);
+                        }
+                        partPdfBytesArray[p - 1] = new Uint8Array(await partData.arrayBuffer());
+                        console.log(`[generate-pdf-backend] Downloaded part ${p} for merge.`);
                     }
 
                     // Build preamble (Cover + AI Knowledge Layer + Full Verbatim Transcript)
