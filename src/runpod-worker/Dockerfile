@@ -6,7 +6,7 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
-RUN pip install --no-cache-dir runpod requests
+RUN pip install --no-cache-dir runpod requests pypdf
 
 WORKDIR /app
 COPY handler.py .

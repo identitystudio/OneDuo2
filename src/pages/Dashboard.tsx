@@ -2409,6 +2409,17 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                                                 <Loader2 className="w-4 h-4 animate-spin" />
                                                 <span className="hidden sm:inline">Generating...</span>
                                               </Button>
+                                              {pdfProgress?.currentPart >= pdfProgress?.totalParts && pdfProgress?.totalParts > 0 && (
+                                                <Button
+                                                  size="sm"
+                                                  variant="outline"
+                                                  className="gap-1.5 border-2 bg-transparent border-orange-500 text-orange-400 hover:bg-orange-500/10"
+                                                  onClick={() => handleGenerateVisualTranscriptionPDF(course0?.id, block.name || course0?.title || 'Course')}
+                                                  title="All parts are built — retry the merge step"
+                                                >
+                                                  <span className="hidden sm:inline">Retry Merge</span>
+                                                </Button>
+                                              )}
                                               <Button
                                                 size="sm"
                                                 variant="outline"

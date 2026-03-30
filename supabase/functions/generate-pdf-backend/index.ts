@@ -1497,14 +1497,19 @@ async function buildPartPDF(
 
 // Merge PDFs one at a time to avoid holding all parts in memory simultaneously.
 // partSupplier yields each part's bytes in order; each is loaded, copied, then released.
+// After save(), mergedDoc is explicitly nulled and we yield to the event loop so the GC
+// can collect the internal pdf-lib state before the caller uploads the result.
 async function mergePartPDFs(partSupplier: AsyncIterable<Uint8Array>): Promise<Uint8Array> {
-    const mergedDoc = await PDFDocument.create();
+    let mergedDoc: PDFDocument | null = await PDFDocument.create();
     for await (const partBytes of partSupplier) {
         const partDoc = await PDFDocument.load(partBytes);
-        const pages = await mergedDoc.copyPages(partDoc, partDoc.getPageIndices());
-        for (const page of pages) mergedDoc.addPage(page);
+        const pages = await mergedDoc!.copyPages(partDoc, partDoc.getPageIndices());
+        for (const page of pages) mergedDoc!.addPage(page);
     }
-    return mergedDoc.save();
+    const result = await mergedDoc!.save();
+    (mergedDoc as any) = null; // release internal pdf-lib state before caller upload
+    await new Promise<void>(resolve => setTimeout(resolve, 0)); // yield to event loop → GC opportunity
+    return result;
 }
 
 serve(async (req) => {
@@ -1577,7 +1582,7 @@ serve(async (req) => {
             // ========== ACTION: generateAll ==========
             if (action === 'generateAll' || action === 'generate') {
                 try {
-                    const { course, allFrameUrls, allFrameAnalyses, videoDuration, transcript, preambleModules } = await fetchCourseData();
+                    let { course, allFrameUrls, allFrameAnalyses, videoDuration, transcript, preambleModules } = await fetchCourseData();
                     const userEmail = email || course.email || '';
                     const totalFrames = allFrameUrls.length;
                     const totalParts = Math.ceil(totalFrames / framesPerPart);
@@ -1670,99 +1675,64 @@ serve(async (req) => {
                         }).eq('id', courseId);
                     }
 
-                    // Build preamble (Cover + AI Knowledge Layer + Full Verbatim Transcript)
+                    // Free large data before preamble build
+                    const courseTitle = course.title;
+                    for (const key of ['frame_urls', 'frame_analyses', 'transcript', 'audio_events', 'prosody_annotations', 'knowledge_layer'] as const) {
+                        (course as any)[key] = null;
+                    }
+                    (course as any) = null;
+                    (allFrameUrls as any) = null;
+                    (allFrameAnalyses as any) = null;
+                    (videoDuration as any) = null;
+                    (transcript as any) = null;
+
+                    // Build preamble (KL + Transcript) and upload to storage so RunPod can fetch it
                     console.log(`[generate-pdf-backend] Building preamble (Knowledge Layer + Transcript)...`);
-                    const preambleBytes = await buildPreamblePDF(course.title, preambleModules, userEmail);
+                    const preambleBytes = await buildPreamblePDF(courseTitle, preambleModules, userEmail);
+                    (preambleModules as any) = null;
 
-                    // Stream-merge: yield preamble then each part one at a time.
-                    // Parts are downloaded from storage on demand so only one part is in memory
-                    // at a time — avoids holding all ${totalParts} parts simultaneously.
-                    async function* partSupplier() {
-                        yield preambleBytes;
-                        for (let part = 1; part <= totalParts; part++) {
-                            console.log(`[generate-pdf-backend] Merging part ${part}/${totalParts}...`);
-                            const partStoragePath = `exports/${courseId}/parts/part_${part}_of_${totalParts}.pdf`;
-                            const { data: partData, error: partDownloadErr } = await supabase.storage
-                                .from('course-files')
-                                .download(partStoragePath);
-                            if (partDownloadErr || !partData) {
-                                throw new Error(`Missing part ${part} for merge: ${partDownloadErr?.message}`);
-                            }
-                            yield new Uint8Array(await partData.arrayBuffer());
-                        }
-                    }
-
-                    console.log(`[generate-pdf-backend] Merging preamble + ${totalParts} parts (streaming)...`);
-                    const mergedBytes = await mergePartPDFs(partSupplier());
-                    console.log(`[generate-pdf-backend] Merged PDF: ${mergedBytes.length} bytes`);
-
-                    // Upload final PDF
-                    const timestamp = Date.now();
-                    const storagePath = `exports/${courseId}/${timestamp}_visual_transcription.pdf`;
-                    const filename = `${course.title} - Visual Transcription.pdf`;
-
-                    const { error: uploadError } = await supabase.storage
+                    const preambleStoragePath = `exports/${courseId}/preamble.pdf`;
+                    const { error: preambleUploadErr } = await supabase.storage
                         .from('course-files')
-                        .upload(storagePath, mergedBytes, { contentType: 'application/pdf', upsert: true });
+                        .upload(preambleStoragePath, preambleBytes, { contentType: 'application/pdf', upsert: true });
+                    if (preambleUploadErr) throw new Error(`Preamble upload failed: ${preambleUploadErr.message}`);
+                    console.log(`[generate-pdf-backend] Preamble uploaded — handing merge off to RunPod`);
 
-                    if (uploadError) {
-                        console.error("[generate-pdf-backend] Upload failed:", uploadError);
-                        return;
+                    // Submit merge job to RunPod — no memory constraint there
+                    const RUNPOD_API_KEY = Deno.env.get('RUNPOD_API_KEY');
+                    const RUNPOD_ENDPOINT_ID = Deno.env.get('RUNPOD_ENDPOINT_ID') || '5d33e66s2crcer';
+                    const webhookUrl = `${supabaseUrl}/functions/v1/runpod-webhook`;
+
+                    const runpodResp = await fetch(`https://api.runpod.ai/v2/${RUNPOD_ENDPOINT_ID}/run`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${RUNPOD_API_KEY}` },
+                        body: JSON.stringify({
+                            input: {
+                                action: 'merge_pdf',
+                                courseId,
+                                totalParts,
+                                totalFrames,
+                                courseTitle,
+                                userEmail,
+                                webhookUrl,
+                            },
+                        }),
+                    });
+
+                    if (!runpodResp.ok) {
+                        const errText = await runpodResp.text();
+                        throw new Error(`RunPod submit failed: ${runpodResp.status} ${errText}`);
                     }
 
-                    // Update course_files
-                    const existingFiles = (course.course_files as any[]) || [];
+                    const runpodJob = await runpodResp.json();
+                    console.log(`[generate-pdf-backend] RunPod merge job submitted: ${runpodJob.id}`);
+
                     await supabase.from('courses').update({
-                        course_files: [
-                            ...existingFiles.filter((f: any) => f?.type !== 'visual_transcription_pdf'),
-                            {
-                                type: 'visual_transcription_pdf',
-                                name: filename,
-                                filename,
-                                storagePath,
-                                storage_path: `course-files/${storagePath}`,
-                                size: mergedBytes.length,
-                                uploaded_at: new Date().toISOString(),
-                                total_parts: totalParts,
-                                total_frames: totalFrames,
-                                generated_by: 'backend',
-                            }
-                        ],
-                        pdf_revision_pending: false,
-                        share_enabled: true,
-                        pdf_generation_status: 'complete',
-                        pdf_generation_progress: { currentPart: totalParts, totalParts, currentFrame: totalFrames, totalFrames, completedAt: new Date().toISOString() },
+                        pdf_generation_status: 'generating',
+                        pdf_generation_progress: { currentPart: totalParts, totalParts, currentFrame: totalFrames, totalFrames, mergingViaRunpod: true, runpodJobId: runpodJob.id, submittedAt: new Date().toISOString() },
                     }).eq('id', courseId);
 
-                    console.log(`[generate-pdf-backend] Visual Transcription PDF uploaded: ${storagePath}`);
-
-                    // Clean up per-part checkpoint files now that final PDF is merged
-                    const partPaths = Array.from({ length: totalParts }, (_, i) =>
-                        `exports/${courseId}/parts/part_${i + 1}_of_${totalParts}.pdf`
-                    );
-                    await supabase.storage.from('course-files').remove(partPaths).catch((e: any) => {
-                        console.warn(`[generate-pdf-backend] Part cleanup warning (non-fatal):`, e);
-                    });
-                    console.log(`[generate-pdf-backend] Cleaned up ${totalParts} part checkpoint files.`);
-
-                    // Send email
-                    if (userEmail) {
-                        const functionsUrl = supabaseUrl.replace('.supabase.co', '.functions.supabase.co');
-                        const shareToken = course.share_token;
-                        const downloadUrl = `${functionsUrl}/track-download?courseId=${courseId}&source=email${shareToken ? `&token=${shareToken}` : ''}`;
-                        try {
-                            await fetch(`${supabaseUrl}/functions/v1/send-pdf-email`, {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${supabaseServiceKey}` },
-                                body: JSON.stringify({ email: userEmail, courseTitle: course.title, downloadUrl, courseId }),
-                            });
-                            console.log(`[generate-pdf-backend] Email sent to ${userEmail}`);
-                        } catch (emailError) {
-                            console.error("[generate-pdf-backend] Email failed:", emailError);
-                        }
-                    }
-
-                    console.log(`[generate-pdf-backend] COMPLETE — ${totalParts} parts merged into final PDF`);
+                    console.log(`[generate-pdf-backend] Merge handed off to RunPod — webhook will complete when done`);
                 } catch (error) {
                     console.error("[generate-pdf-backend] generateAll failed:", error);
                     // Fetch current progress so we can preserve how far we got (completed parts remain in storage)

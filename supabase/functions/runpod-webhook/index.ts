@@ -107,6 +107,91 @@ serve(async (req: Request) => {
       metadata: { status, course_id: courseId, record_id: recordId, table_name: tableName, frame_count: frameCount },
     });
 
+    // ========== merge_pdf COMPLETION ==========
+    if (output.step === "merge_pdf") {
+      const storagePath: string = output.storagePath;
+      const courseTitle: string = output.courseTitle || "";
+      const userEmail: string   = output.userEmail || "";
+      const totalParts: number  = output.totalParts || 0;
+      const totalFrames: number = output.totalFrames || 0;
+      const mergedSize: number  = output.mergedSize || 0;
+
+      if (status === "error" || status === "FAILED") {
+        console.error(`[runpod-webhook] merge_pdf failed: ${output.error || "unknown"}`);
+        await supabase.from("courses").update({
+          pdf_generation_status: "failed",
+          pdf_generation_progress: { failedAt: new Date().toISOString(), error: output.error || "RunPod merge failed" },
+        }).eq("id", courseId);
+        return new Response(JSON.stringify({ received: true, status: "merge_failed" }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      const filename = `${courseTitle} - Visual Transcription.pdf`;
+
+      // Fetch existing course_files and share_token for email URL
+      const { data: courseRow } = await supabase.from("courses")
+        .select("course_files, share_token, email")
+        .eq("id", courseId)
+        .single();
+
+      const existingFiles: any[] = (courseRow?.course_files as any[]) || [];
+      const shareToken: string = courseRow?.share_token || "";
+
+      await supabase.from("courses").update({
+        course_files: [
+          ...existingFiles.filter((f: any) => f?.type !== "visual_transcription_pdf"),
+          {
+            type: "visual_transcription_pdf",
+            name: filename,
+            filename,
+            storagePath,
+            storage_path: `course-files/${storagePath}`,
+            size: mergedSize,
+            uploaded_at: new Date().toISOString(),
+            total_parts: totalParts,
+            total_frames: totalFrames,
+            generated_by: "runpod",
+          },
+        ],
+        pdf_revision_pending: false,
+        share_enabled: true,
+        pdf_generation_status: "complete",
+        pdf_generation_progress: { currentPart: totalParts, totalParts, currentFrame: totalFrames, totalFrames, completedAt: new Date().toISOString() },
+      }).eq("id", courseId);
+
+      console.log(`[runpod-webhook] merge_pdf complete — ${storagePath}`);
+
+      // Clean up preamble + part checkpoint files
+      const cleanupPaths = [
+        `exports/${courseId}/preamble.pdf`,
+        ...Array.from({ length: totalParts }, (_, i) => `exports/${courseId}/parts/part_${i + 1}_of_${totalParts}.pdf`),
+      ];
+      await supabase.storage.from("course-files").remove(cleanupPaths).catch((e: any) => {
+        console.warn(`[runpod-webhook] Cleanup warning (non-fatal):`, e);
+      });
+
+      // Send email
+      if (userEmail) {
+        try {
+          const functionsUrl = supabaseUrl.replace(".supabase.co", ".functions.supabase.co");
+          const downloadUrl = `${functionsUrl}/track-download?courseId=${courseId}&source=email${shareToken ? `&token=${shareToken}` : ""}`;
+          await fetch(`${supabaseUrl}/functions/v1/send-pdf-email`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "Authorization": `Bearer ${supabaseServiceKey}` },
+            body: JSON.stringify({ email: userEmail, courseTitle, downloadUrl, courseId }),
+          });
+          console.log(`[runpod-webhook] Email sent to ${userEmail}`);
+        } catch (emailError) {
+          console.error("[runpod-webhook] Email failed:", emailError);
+        }
+      }
+
+      return new Response(JSON.stringify({ received: true, status: "merge_complete" }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     // ========== ERROR HANDLING ==========
     if (status === "error" || status === "FAILED") {
       console.error(`[runpod-webhook] Job failed: ${errorMsg}`);

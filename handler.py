@@ -78,6 +78,130 @@ def extract_frames(video_path: str, frames_dir: str, fps: int) -> list:
     return frames
 
 
+def download_from_supabase(storage_path: str, local_path: str, bucket: str = "course-files") -> bool:
+    """Download a file from Supabase Storage to a local path."""
+    url = f"{SUPABASE_URL}/storage/v1/object/{bucket}/{storage_path}"
+    headers = {"Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}"}
+    try:
+        with requests.get(url, headers=headers, stream=True, timeout=300) as r:
+            r.raise_for_status()
+            with open(local_path, "wb") as f:
+                for chunk in r.iter_content(chunk_size=8 * 1024 * 1024):
+                    f.write(chunk)
+        size_mb = os.path.getsize(local_path) / (1024 * 1024)
+        log(f"Downloaded {storage_path} ({size_mb:.1f} MB)")
+        return True
+    except Exception as e:
+        log(f"Download failed for {storage_path}: {e}")
+        return False
+
+
+def upload_to_supabase(local_path: str, storage_path: str, bucket: str = "course-files") -> bool:
+    """Upload a local file to Supabase Storage."""
+    url = f"{SUPABASE_URL}/storage/v1/object/{bucket}/{storage_path}"
+    headers = {
+        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+        "Content-Type": "application/pdf",
+        "x-upsert": "true",
+    }
+    try:
+        with open(local_path, "rb") as f:
+            resp = requests.post(url, headers=headers, data=f, timeout=300)
+        if resp.status_code in (200, 201):
+            log(f"Uploaded {storage_path}")
+            return True
+        log(f"Upload failed for {storage_path}: {resp.status_code} {resp.text[:200]}")
+        return False
+    except Exception as e:
+        log(f"Upload exception for {storage_path}: {e}")
+        return False
+
+
+def handle_merge_pdf(job_input: dict, webhook_url: str) -> dict:
+    """
+    Merge preamble + all part PDFs into one final PDF using pypdf.
+    Files are downloaded from Supabase Storage one at a time to keep memory low.
+    """
+    from pypdf import PdfWriter, PdfReader
+    import time
+
+    course_id   = job_input.get("courseId")
+    total_parts = int(job_input.get("totalParts", 0))
+    course_title = job_input.get("courseTitle", "Course")
+    user_email  = job_input.get("userEmail", "")
+    total_frames = int(job_input.get("totalFrames", 0))
+
+    if not course_id or not total_parts:
+        return {"error": "Missing courseId or totalParts"}
+
+    log(f"merge_pdf: courseId={course_id}, totalParts={total_parts}")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        writer = PdfWriter()
+
+        # Preamble
+        preamble_local = os.path.join(tmpdir, "preamble.pdf")
+        if not download_from_supabase(f"exports/{course_id}/preamble.pdf", preamble_local):
+            return {"error": "Failed to download preamble"}
+        reader = PdfReader(preamble_local)
+        for page in reader.pages:
+            writer.add_page(page)
+        log(f"Added preamble ({len(reader.pages)} pages)")
+        os.remove(preamble_local)
+
+        # Parts — download, add, delete immediately to keep disk usage low
+        for part in range(1, total_parts + 1):
+            part_local = os.path.join(tmpdir, f"part_{part}.pdf")
+            part_path  = f"exports/{course_id}/parts/part_{part}_of_{total_parts}.pdf"
+            if not download_from_supabase(part_path, part_local):
+                return {"error": f"Failed to download part {part}"}
+            reader = PdfReader(part_local)
+            for page in reader.pages:
+                writer.add_page(page)
+            log(f"Added part {part}/{total_parts} ({len(reader.pages)} pages)")
+            os.remove(part_local)
+
+        # Write merged PDF
+        timestamp = int(time.time() * 1000)
+        merged_local   = os.path.join(tmpdir, "merged.pdf")
+        storage_path   = f"exports/{course_id}/{timestamp}_visual_transcription.pdf"
+        log("Writing merged PDF...")
+        with open(merged_local, "wb") as f:
+            writer.write(f)
+        merged_size = os.path.getsize(merged_local)
+        log(f"Merged PDF: {merged_size / (1024*1024):.1f} MB")
+
+        # Upload
+        if not upload_to_supabase(merged_local, storage_path):
+            return {"error": "Failed to upload merged PDF"}
+
+        result = {
+            "step": "merge_pdf",
+            "courseId": course_id,
+            "storagePath": storage_path,
+            "mergedSize": merged_size,
+            "totalParts": total_parts,
+            "totalFrames": total_frames,
+            "courseTitle": course_title,
+            "userEmail": user_email,
+        }
+
+        if webhook_url:
+            try:
+                log(f"Calling webhook: {webhook_url[:80]}")
+                requests.post(
+                    webhook_url,
+                    json={"output": result, "status": "completed", "source": "runpod-ffmpeg"},
+                    timeout=30,
+                    headers={"Content-Type": "application/json"},
+                )
+                log("Webhook called successfully")
+            except Exception as e:
+                log(f"Webhook call failed: {e}")
+
+        return result
+
+
 def upload_frame_to_supabase(local_path: str, storage_path: str) -> str | None:
     """Upload a single frame to Supabase Storage and return its public URL."""
     url = f"{SUPABASE_URL}/storage/v1/object/course-videos/{storage_path}"
@@ -132,6 +256,11 @@ def handler(job):
     }
     """
     job_input = job.get("input", {})
+    action = job_input.get("action", "extract_frames")
+    webhook_url = job_input.get("webhookUrl")
+
+    if action == "merge_pdf":
+        return handle_merge_pdf(job_input, webhook_url)
 
     video_url  = job_input.get("videoUrl")
     fps        = int(job_input.get("fps", 1))
