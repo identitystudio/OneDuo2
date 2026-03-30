@@ -1479,6 +1479,15 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
     }
   };
 
+  const handleCancelPDFGeneration = async (courseId: string) => {
+    try {
+      await supabase.from('courses').update({ pdf_generation_status: 'cancelled' }).eq('id', courseId);
+      toast.success('PDF generation cancelled.');
+    } catch (err: any) {
+      toast.error('Failed to cancel.');
+    }
+  };
+
   // Export PDF for a single-module course (redirect to dedicated download page)
   const handleExportPDF = async (course: Course, moduleNumber: number, aiFidelityMode: boolean = false) => {
     navigate(`/download/${course.id}${aiFidelityMode ? '?fidelity=true' : ''}`);
@@ -2384,35 +2393,64 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                                     const pdfStatus = course0?.pdf_generation_status;
                                     const pdfProgress = course0?.pdf_generation_progress;
                                     const isGenerating = pdfStatus === 'generating';
+                                    const isFailed = pdfStatus === 'failed';
                                     const isQueuing = generatingPDF === `vt-${course0?.id}`;
                                     return (
                                       <div className="flex flex-col items-end gap-0.5">
-                                        <Button
-                                          size="sm"
-                                          variant="outline"
-                                          disabled={isQueuing || isGenerating}
-                                          className="relative gap-1.5 font-bold border-2 bg-transparent border-red-500 text-red-500 hover:bg-red-500/10"
-                                          onClick={() => handleGenerateVisualTranscriptionPDF(course0?.id, block.name || course0?.title || 'Course')}
-                                          title="Generate Visual Transcription PDF — every frame with AI analysis, emailed when ready"
-                                        >
-                                          {isQueuing ? (
-                                            <><Loader2 className="w-4 h-4 animate-spin" /><span className="hidden sm:inline">Queuing...</span></>
-                                          ) : isGenerating ? (
-                                            <><Loader2 className="w-4 h-4 animate-spin" /><span className="hidden sm:inline">Generating...</span></>
-                                          ) : (
+                                        <div className="flex items-center gap-1.5">
+                                          {isGenerating ? (
                                             <>
-                                              <Download className="w-4 h-4" />
-                                              <span className="hidden sm:inline">{pdfStatus === 'complete' ? 'Re-generate PDF' : 'Generate PDF'}</span>
-                                              {course0?.pdf_revision_pending && (
-                                                <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-blue-400 rounded-full animate-pulse" />
-                                              )}
+                                              <Button
+                                                size="sm"
+                                                variant="outline"
+                                                disabled
+                                                className="gap-1.5 font-bold border-2 bg-transparent border-red-500 text-red-500"
+                                              >
+                                                <Loader2 className="w-4 h-4 animate-spin" />
+                                                <span className="hidden sm:inline">Generating...</span>
+                                              </Button>
+                                              <Button
+                                                size="sm"
+                                                variant="outline"
+                                                className="gap-1.5 border-2 bg-transparent border-zinc-500 text-zinc-400 hover:bg-zinc-500/10 hover:text-zinc-300"
+                                                onClick={() => handleCancelPDFGeneration(course0?.id)}
+                                                title="Cancel PDF generation"
+                                              >
+                                                <span className="hidden sm:inline">Cancel</span>
+                                              </Button>
                                             </>
+                                          ) : (
+                                            <Button
+                                              size="sm"
+                                              variant="outline"
+                                              disabled={isQueuing}
+                                              className="relative gap-1.5 font-bold border-2 bg-transparent border-red-500 text-red-500 hover:bg-red-500/10"
+                                              onClick={() => handleGenerateVisualTranscriptionPDF(course0?.id, block.name || course0?.title || 'Course')}
+                                              title="Generate Visual Transcription PDF — every frame with AI analysis, emailed when ready"
+                                            >
+                                              {isQueuing ? (
+                                                <><Loader2 className="w-4 h-4 animate-spin" /><span className="hidden sm:inline">Queuing...</span></>
+                                              ) : (
+                                                <>
+                                                  <Download className="w-4 h-4" />
+                                                  <span className="hidden sm:inline">
+                                                    {isFailed ? 'Retry Merge' : pdfStatus === 'complete' ? 'Re-generate PDF' : 'Generate PDF'}
+                                                  </span>
+                                                  {course0?.pdf_revision_pending && (
+                                                    <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-blue-400 rounded-full animate-pulse" />
+                                                  )}
+                                                </>
+                                              )}
+                                            </Button>
                                           )}
-                                        </Button>
+                                        </div>
                                         {isGenerating && pdfProgress && (
                                           <span className="text-xs text-orange-400 font-mono">
                                             {pdfProgress.currentFrame}/{pdfProgress.totalFrames} frames · Part {pdfProgress.currentPart}/{pdfProgress.totalParts}
                                           </span>
+                                        )}
+                                        {isFailed && (
+                                          <span className="text-xs text-red-400">Generation failed · retry to resume</span>
                                         )}
                                         {pdfStatus === 'complete' && !isGenerating && (
                                           <span className="text-xs text-green-400">PDF ready · emailed</span>

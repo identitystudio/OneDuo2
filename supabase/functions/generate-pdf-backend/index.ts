@@ -1495,9 +1495,11 @@ async function buildPartPDF(
 // PDF MERGE (combine all parts into one)
 // ============================================
 
-async function mergePartPDFs(partPdfBytes: Uint8Array[]): Promise<Uint8Array> {
+// Merge PDFs one at a time to avoid holding all parts in memory simultaneously.
+// partSupplier yields each part's bytes in order; each is loaded, copied, then released.
+async function mergePartPDFs(partSupplier: AsyncIterable<Uint8Array>): Promise<Uint8Array> {
     const mergedDoc = await PDFDocument.create();
-    for (const partBytes of partPdfBytes) {
+    for await (const partBytes of partSupplier) {
         const partDoc = await PDFDocument.load(partBytes);
         const pages = await mergedDoc.copyPages(partDoc, partDoc.getPageIndices());
         for (const page of pages) mergedDoc.addPage(page);
@@ -1600,10 +1602,6 @@ serve(async (req) => {
                         }
                     }
 
-                    // partPdfBytesArray is populated lazily: built parts stored immediately,
-                    // completed parts downloaded only at merge time below.
-                    const partPdfBytesArray: Uint8Array[] = new Array(totalParts);
-
                     const firstPendingPart = [...Array(totalParts).keys()]
                         .map(i => i + 1)
                         .find(p => !completedPartsSet.has(p)) ?? (totalParts + 1);
@@ -1623,10 +1621,10 @@ serve(async (req) => {
                         }).eq('id', courseId);
                     }
 
+                    // Build any missing parts first (storage uploads happen inline so retries can resume)
                     for (let part = 1; part <= totalParts; part++) {
-                        // Skip parts already loaded from storage
                         if (completedPartsSet.has(part)) {
-                            console.log(`[generate-pdf-backend] Part ${part}/${totalParts} already completed — skipping.`);
+                            console.log(`[generate-pdf-backend] Part ${part}/${totalParts} already completed — skipping build.`);
                             continue;
                         }
 
@@ -1636,7 +1634,6 @@ serve(async (req) => {
 
                         console.log(`[generate-pdf-backend] Generating part ${part}/${totalParts} (frames ${startIdx + 1}–${endIdx})`);
 
-                        // Update progress before building part
                         await supabase.from('courses').update({
                             pdf_generation_progress: { currentPart: part, totalParts, currentFrame: startIdx, totalFrames, startedAt: new Date().toISOString() },
                         }).eq('id', courseId);
@@ -1657,7 +1654,6 @@ serve(async (req) => {
                             totalFrames,
                         );
 
-                        // Save part to storage immediately so retries can resume from here
                         const partStoragePath = `exports/${courseId}/parts/part_${part}_of_${totalParts}.pdf`;
                         const { error: partUploadErr } = await supabase.storage
                             .from('course-files')
@@ -1666,40 +1662,38 @@ serve(async (req) => {
                             console.error(`[generate-pdf-backend] Failed to save part ${part} to storage:`, partUploadErr);
                             throw partUploadErr;
                         }
-                        console.log(`[generate-pdf-backend] Part ${part} saved to storage: ${partStoragePath}`);
+                        console.log(`[generate-pdf-backend] Part ${part} saved to storage (${partBytes.length} bytes).`);
+                        completedPartsSet.add(part);
 
-                        partPdfBytesArray[part - 1] = partBytes;
-                        console.log(`[generate-pdf-backend] Part ${part} built: ${partBytes.length} bytes`);
-
-                        // Update progress after part is done
                         await supabase.from('courses').update({
                             pdf_generation_progress: { currentPart: part, totalParts, currentFrame: endIdx, totalFrames, startedAt: new Date().toISOString() },
                         }).eq('id', courseId);
-                    }
-
-                    // Download completed parts from storage now (lazy — only at merge time)
-                    console.log(`[generate-pdf-backend] Downloading ${completedPartsSet.size} completed part(s) from storage for merge...`);
-                    for (const p of completedPartsSet) {
-                        if (partPdfBytesArray[p - 1]) continue; // already in memory from this run
-                        const partStoragePath = `exports/${courseId}/parts/part_${p}_of_${totalParts}.pdf`;
-                        const { data: partData, error: partDownloadErr } = await supabase.storage
-                            .from('course-files')
-                            .download(partStoragePath);
-                        if (partDownloadErr || !partData) {
-                            console.error(`[generate-pdf-backend] Failed to download part ${p} for merge:`, partDownloadErr);
-                            throw new Error(`Missing part ${p} for merge`);
-                        }
-                        partPdfBytesArray[p - 1] = new Uint8Array(await partData.arrayBuffer());
-                        console.log(`[generate-pdf-backend] Downloaded part ${p} for merge.`);
                     }
 
                     // Build preamble (Cover + AI Knowledge Layer + Full Verbatim Transcript)
                     console.log(`[generate-pdf-backend] Building preamble (Knowledge Layer + Transcript)...`);
                     const preambleBytes = await buildPreamblePDF(course.title, preambleModules, userEmail);
 
-                    // Merge: preamble + all visual transcription parts
-                    console.log(`[generate-pdf-backend] Merging preamble + ${totalParts} parts...`);
-                    const mergedBytes = await mergePartPDFs([preambleBytes, ...partPdfBytesArray]);
+                    // Stream-merge: yield preamble then each part one at a time.
+                    // Parts are downloaded from storage on demand so only one part is in memory
+                    // at a time — avoids holding all ${totalParts} parts simultaneously.
+                    async function* partSupplier() {
+                        yield preambleBytes;
+                        for (let part = 1; part <= totalParts; part++) {
+                            console.log(`[generate-pdf-backend] Merging part ${part}/${totalParts}...`);
+                            const partStoragePath = `exports/${courseId}/parts/part_${part}_of_${totalParts}.pdf`;
+                            const { data: partData, error: partDownloadErr } = await supabase.storage
+                                .from('course-files')
+                                .download(partStoragePath);
+                            if (partDownloadErr || !partData) {
+                                throw new Error(`Missing part ${part} for merge: ${partDownloadErr?.message}`);
+                            }
+                            yield new Uint8Array(await partData.arrayBuffer());
+                        }
+                    }
+
+                    console.log(`[generate-pdf-backend] Merging preamble + ${totalParts} parts (streaming)...`);
+                    const mergedBytes = await mergePartPDFs(partSupplier());
                     console.log(`[generate-pdf-backend] Merged PDF: ${mergedBytes.length} bytes`);
 
                     // Upload final PDF
