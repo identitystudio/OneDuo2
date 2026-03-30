@@ -129,7 +129,7 @@ async function callReplicate(
   return String(output ?? "");
 }
 
-// ── Extraction prompt (the 17-section spec from the client brief) ─────────────
+// ── Extraction prompt (the 21-section spec — Knowledge + Reasoning Layer) ─────
 
 function buildSystemPrompt(fps: number): string {
   return `You are enhancing the existing OneDuo artifact pipeline.
@@ -178,7 +178,7 @@ ${transcriptChunk}
 
 ---
 
-Now produce the structured knowledge layer using EXACTLY these 16 sections:
+Now produce the structured knowledge layer using EXACTLY these 21 sections:
 
 ## MODULE TITLE
 ## DURATION
@@ -222,6 +222,37 @@ Now produce the structured knowledge layer using EXACTLY these 16 sections:
   → THEN [recommended action or decision]
   WHY: [one-sentence rationale]
 Produce 5–10 decision rules. These turn knowledge into executable logic for AI reasoning.)
+
+## REASONING PATTERNS
+(The mental models and thinking strategies the speaker demonstrates — not just what they teach, but HOW they think.
+Format each as:
+  Pattern name: [name]
+  Description: [how the speaker reasons through problems]
+  Example from module: [specific moment where this is used]
+Produce 3–7 patterns.)
+
+## SPEAKER BELIEF SYSTEM
+(The core assumptions, worldview, and operating principles the speaker holds — often implicit, not stated directly.
+Format as bullet points:
+  • [Belief] — [Evidence from the module])
+
+## CAUSE & EFFECT CHAINS
+(Explicit cause-and-effect logic the speaker teaches. Format each as:
+  [Trigger/Cause] → [Action/Mechanism] → [Result/Effect]
+  Context: [when this chain applies]
+Produce 3–8 chains.)
+
+## HIDDEN PATTERNS
+(Insights NOT explicitly stated in the transcript — persuasion techniques, psychological principles, structural patterns.
+Format each as:
+  Pattern type: [persuasion | psychology | efficiency | strategy | structure]
+  Observation: [what's happening beneath the surface]
+  Why it matters: [implication for the learner])
+
+## CONCEPT TAGS
+(Structured tags for AI cross-referencing across multiple OneDuos. Format as:
+  [concept] | [category: strategy | mindset | framework | tactic | principle | tool] | [strength: core | supporting | mentioned]
+List 10–20 tags.)
 
 ## RETRIEVAL TAGS
 (Flat comma-separated tag list for semantic retrieval)
@@ -448,6 +479,11 @@ function parseMarkdownToJson(md: string, title: string, duration: string): Recor
     "IMPORTANT QUOTES",
     "PROMPT STARTERS FOR AI",
     "DECISION RULES",
+    "REASONING PATTERNS",
+    "SPEAKER BELIEF SYSTEM",
+    "CAUSE & EFFECT CHAINS",
+    "HIDDEN PATTERNS",
+    "CONCEPT TAGS",
     "RETRIEVAL TAGS",
     "FULL CLEANED TRANSCRIPT",
   ];
@@ -492,6 +528,11 @@ function parseMarkdownToJson(md: string, title: string, duration: string): Recor
     important_quotes: sections["IMPORTANT QUOTES"] || "",
     prompt_starters: sections["PROMPT STARTERS FOR AI"] || "",
     decision_rules: sections["DECISION RULES"] || "",
+    reasoning_patterns: sections["REASONING PATTERNS"] || "",
+    speaker_belief_system: sections["SPEAKER BELIEF SYSTEM"] || "",
+    cause_effect_chains: sections["CAUSE & EFFECT CHAINS"] || "",
+    hidden_patterns: sections["HIDDEN PATTERNS"] || "",
+    concept_tags: sections["CONCEPT TAGS"] || "",
     retrieval_tags: tags,
     full_transcript: sections["FULL CLEANED TRANSCRIPT"] || "",
     generated_at: new Date().toISOString(),

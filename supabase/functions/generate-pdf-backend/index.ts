@@ -1127,6 +1127,11 @@ async function buildPreamblePDF(
         { key: 'important_quotes',     label: 'IMPORTANT QUOTES' },
         { key: 'prompt_starters',      label: 'PROMPT STARTERS FOR AI' },
         { key: 'decision_rules',       label: 'DECISION RULES' },
+        { key: 'reasoning_patterns',   label: 'REASONING PATTERNS' },
+        { key: 'speaker_belief_system',label: 'SPEAKER BELIEF SYSTEM' },
+        { key: 'cause_effect_chains',  label: 'CAUSE & EFFECT CHAINS' },
+        { key: 'hidden_patterns',      label: 'HIDDEN PATTERNS' },
+        { key: 'concept_tags',         label: 'CONCEPT TAGS' },
         { key: 'retrieval_tags',       label: 'RETRIEVAL TAGS' },
     ];
 
