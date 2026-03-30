@@ -122,7 +122,12 @@ def handle_merge_pdf(job_input: dict, webhook_url: str) -> dict:
     Merge preamble + all part PDFs into one final PDF using pypdf.
     Files are downloaded from Supabase Storage one at a time to keep memory low.
     """
-    from pypdf import PdfWriter, PdfReader
+    try:
+        from pypdf import PdfWriter, PdfReader
+    except ImportError:
+        import subprocess
+        subprocess.run(["pip", "install", "--quiet", "pypdf"], check=True)
+        from pypdf import PdfWriter, PdfReader
     import time
 
     course_id   = job_input.get("courseId")
