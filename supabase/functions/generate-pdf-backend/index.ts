@@ -1587,6 +1587,33 @@ serve(async (req) => {
             // ========== ACTION: generateAll ==========
             if (action === 'generateAll' || action === 'generate') {
                 try {
+                    // Auto-generate knowledge layer if not already complete
+                    const { data: klCheck } = await supabase
+                        .from('courses')
+                        .select('knowledge_layer_status')
+                        .eq('id', courseId)
+                        .single();
+
+                    if (klCheck?.knowledge_layer_status !== 'complete') {
+                        console.log(`[generate-pdf-backend] Knowledge layer not ready (${klCheck?.knowledge_layer_status}) — auto-generating...`);
+                        try {
+                            const klResp = await fetch(`${supabaseUrl}/functions/v1/generate-knowledge-layer`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${supabaseServiceKey}` },
+                                body: JSON.stringify({ courseId }),
+                            });
+                            if (klResp.ok) {
+                                console.log(`[generate-pdf-backend] Knowledge layer auto-generated successfully`);
+                            } else {
+                                console.warn(`[generate-pdf-backend] Knowledge layer auto-generation failed (non-blocking): ${await klResp.text()}`);
+                            }
+                        } catch (klErr) {
+                            console.warn(`[generate-pdf-backend] Knowledge layer auto-generation error (non-blocking):`, klErr);
+                        }
+                    } else {
+                        console.log(`[generate-pdf-backend] Knowledge layer already complete — skipping auto-generation`);
+                    }
+
                     let { course, allFrameUrls, allFrameAnalyses, videoDuration, transcript, preambleModules } = await fetchCourseData();
                     const userEmail = email || course.email || '';
                     const totalFrames = allFrameUrls.length;
