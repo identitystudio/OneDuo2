@@ -1120,12 +1120,15 @@ async function buildPreamblePDF(
         { key: 'important_quotes',     label: 'IMPORTANT QUOTES' },
         { key: 'prompt_starters',      label: 'PROMPT STARTERS FOR AI' },
         { key: 'decision_rules',       label: 'DECISION RULES' },
-        { key: 'reasoning_patterns',   label: 'REASONING PATTERNS' },
-        { key: 'speaker_belief_system',label: 'SPEAKER BELIEF SYSTEM' },
-        { key: 'cause_effect_chains',  label: 'CAUSE & EFFECT CHAINS' },
-        { key: 'hidden_patterns',      label: 'HIDDEN PATTERNS' },
-        { key: 'concept_tags',         label: 'CONCEPT TAGS' },
         { key: 'retrieval_tags',       label: 'RETRIEVAL TAGS' },
+    ];
+
+    const reasoningSections = [
+        { key: 'reasoning_patterns',    label: 'REASONING PATTERNS' },
+        { key: 'speaker_belief_system', label: 'SPEAKER BELIEF SYSTEM' },
+        { key: 'cause_effect_chains',   label: 'CAUSE & EFFECT CHAINS' },
+        { key: 'hidden_patterns',       label: 'HIDDEN PATTERNS' },
+        { key: 'concept_tags',          label: 'CONCEPT TAGS' },
     ];
 
     for (let i = 0; i < modules.length; i++) {
@@ -1145,14 +1148,13 @@ async function buildPreamblePDF(
             y -= 18;
         }
 
-        // AI KNOWLEDGE LAYER
+        // ── AI KNOWLEDGE LAYER ───────────────────────────────────────────────
         const kl = mod.knowledge_layer;
         if (kl) {
-            ensureSpace(30);
-            currentPage.drawLine({ start: { x: MARGIN, y }, end: { x: MARGIN + CONTENT_WIDTH, y }, thickness: 0.5, color: rgb(0, 0, 0) });
-            y -= 10;
-            currentPage.drawText('AI KNOWLEDGE LAYER', { x: MARGIN, y, size: 13, font: boldFont, color: rgb(0, 0, 0) });
-            y -= 14;
+            newPage();
+            currentPage.drawRectangle({ x: MARGIN, y: y - 5, width: CONTENT_WIDTH, height: 24, color: rgb(0, 0.47, 0.75) });
+            currentPage.drawText('AI KNOWLEDGE LAYER', { x: MARGIN + 5, y: y + 3, size: 13, font: boldFont, color: rgb(1, 1, 1) });
+            y -= 30;
 
             for (const { key, label } of klSections) {
                 const rawVal = (kl as any)[key];
@@ -1161,12 +1163,39 @@ async function buildPreamblePDF(
                 if (!val.trim()) continue;
 
                 ensureSpace(20);
-                currentPage.drawText(label, { x: MARGIN, y, size: 11, font: boldFont, color: rgb(0, 0, 0) });
+                currentPage.drawText(label, { x: MARGIN, y, size: 11, font: boldFont, color: rgb(0, 0.47, 0.75) });
                 y -= 12;
                 drawWrappedText(val, { x: MARGIN + 3, size: 9, color: rgb(0.1, 0.1, 0.1) });
                 y -= 6;
             }
-            y -= 6;
+            y -= 10;
+
+            // ── REASONING LAYER ──────────────────────────────────────────────
+            const hasReasoningData = reasoningSections.some(({ key }) => {
+                const v = (kl as any)[key];
+                return v && String(v).trim().length > 0;
+            });
+
+            if (hasReasoningData) {
+                newPage();
+                currentPage.drawRectangle({ x: MARGIN, y: y - 5, width: CONTENT_WIDTH, height: 24, color: rgb(0.4, 0.1, 0.7) });
+                currentPage.drawText('REASONING LAYER', { x: MARGIN + 5, y: y + 3, size: 13, font: boldFont, color: rgb(1, 1, 1) });
+                y -= 30;
+
+                for (const { key, label } of reasoningSections) {
+                    const rawVal = (kl as any)[key];
+                    if (!rawVal) continue;
+                    const val = Array.isArray(rawVal) ? rawVal.join('\n') : String(rawVal);
+                    if (!val.trim()) continue;
+
+                    ensureSpace(20);
+                    currentPage.drawText(label, { x: MARGIN, y, size: 11, font: boldFont, color: rgb(0.4, 0.1, 0.7) });
+                    y -= 12;
+                    drawWrappedText(val, { x: MARGIN + 3, size: 9, color: rgb(0.1, 0.1, 0.1) });
+                    y -= 6;
+                }
+                y -= 10;
+            }
 
             // Divider before transcript
             ensureSpace(10);
