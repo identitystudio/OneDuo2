@@ -1379,6 +1379,23 @@ async function buildPartPDF(
             y -= 12;
         }
 
+        // ── Subtitle: what was said at this exact frame ──────────────────────
+        const transcriptText = transcriptMap[Math.round(timestamp)];
+        if (transcriptText) {
+            const subtitleText = safeText(`"${transcriptText.substring(0, 300)}"`);
+            const subtitleFontSize = 9;
+            const estLines = Math.ceil(font.widthOfTextAtSize(subtitleText, subtitleFontSize) / (CONTENT_WIDTH - 20)) + 1;
+            const subtitleHeight = estLines * (subtitleFontSize * 1.4) + 10;
+            ensureSpace(subtitleHeight + 6);
+            currentPage.drawRectangle({
+                x: MARGIN, y: y - subtitleHeight, width: CONTENT_WIDTH, height: subtitleHeight,
+                color: rgb(0.05, 0.05, 0.05),
+            });
+            y -= 2;
+            drawWrappedText(subtitleText, { x: MARGIN + 8, size: subtitleFontSize, usedFont: italicFont, color: rgb(1, 1, 1), maxWidth: CONTENT_WIDTH - 16 });
+            y -= 6;
+        }
+
     }
 
     addFooter(currentPage);
