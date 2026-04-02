@@ -29,7 +29,7 @@ async function analyzeFramesWithReplicate(
     videoDuration: number,
     transcriptContext: string,
     replicate: any,
-    batchSize: number = 5
+    batchSize: number = 20
 ): Promise<any[]> {
     const results: any[] = [];
     const safeDuration = sanitizeDuration(videoDuration, frameUrls.length);
@@ -44,43 +44,11 @@ async function analyzeFramesWithReplicate(
 
             try {
                 const output = await replicate.run(
-                    "yorickvp/llava-v1.6-vicuna-13b:0603dec596080fa084e26f0ae6d605fc5788ed2b1a0358cd25010619487eae63",
+                    "vikhyatk/moondream2:72ccb656353c348c1385df54b4adcaee5096a064d272f816d793fa0f4aae4c52",
                     {
                         input: {
                             image: frameUrl,
-                            prompt: `You are an expert observer watching a masterclass. Describe this moment exactly as a human expert would, focusing on what matters most.
-
-                                 PSYCHOLOGICAL & ARCHITECTURAL PERCEPTION:
-                                 1. Cognitive & Visual State: Identify if this is a "Static UI" (slide/document), "Dynamic UI" (tool/code interaction), or "Talking Head".
-                                 2. Social Posture: Interpret the instructor's "stance" towards the audience. 
-                                 3. FOCUS INTENSITY: Capture cursor placement, text highlights, and specific UI elements being discussed.
-                                 4. OCR QUALITY: Assess the readability of the text on screen. 
-
-                                 CRITICAL: Detect whenever the UI state changes (e.g. from slide to code).
-                                 
-                                 ${transcriptContext ? `Context from transcript: "${transcriptContext.substring(0, 500)}"` : ''}
-
-                                 Return ONLY a JSON object in this format:
-                                 {
-                                   "text": "all OCR text relevant to this moment",
-                                   "ocr_confidence": 0-1,
-                                   "ui_state": "slide|code|ui|walking|demonstration",
-                                   "visualDescription": "High-fidelity psychological narrative.",
-                                   "emphasisFlags": {
-                                     "highlight_detected": boolean,
-                                     "cursor_pause": boolean,
-                                     "zoom_focus": boolean,
-                                     "text_selected": boolean,
-                                     "lingering_frame": boolean,
-                                     "bold_text": boolean,
-                                     "underline_detected": boolean
-                                   },
-                                   "keyElements": ["list", "of", "critical", "elements"],
-                                   "instructorIntent": "The deeper 'why' and actionable build instruction",
-                                   "dependsOnPrevious": boolean
-                                 }`,
-                            max_new_tokens: 1024,
-                            history: []
+                            question: `You are watching a masterclass video frame by frame.${transcriptContext ? ` At this moment the speaker says: "${transcriptContext.substring(0, 300)}"` : ''} Analyze this frame and return ONLY a JSON object: {"text":"all visible text on screen","ocr_confidence":0.0,"ui_state":"slide|code|ui|talking_head|demonstration","visualDescription":"what is shown and what the instructor is doing","emphasisFlags":{"highlight_detected":false,"cursor_pause":false,"zoom_focus":false,"text_selected":false,"lingering_frame":false,"bold_text":false,"underline_detected":false},"keyElements":[],"instructorIntent":"the teaching purpose of this moment","dependsOnPrevious":false}`,
                         }
                     }
                 );
@@ -1305,9 +1273,9 @@ async function buildPartPDF(
     const cachedCount = frameUrls.filter((_, i) => frameAnalyses[globalFrameOffset + i]).length;
     console.log(`[buildPartPDF] Part ${partNumber}: ${frameUrls.length} frames, ${cachedCount} cached analyses`);
 
-    // Run LLaVA only on frames missing analyses (batch of 5 in parallel)
+    // Run moondream2 only on frames missing analyses (batch of 20 in parallel)
     const analyses: any[] = [];
-    const BATCH = 5;
+    const BATCH = 20;
     for (let i = 0; i < frameUrls.length; i += BATCH) {
         const batch = frameUrls.slice(i, i + BATCH);
         const batchResults = await Promise.all(batch.map(async (frameUrl, bi) => {
@@ -1323,43 +1291,11 @@ async function buildPartPDF(
 
             try {
                 const output = await replicate.run(
-                    "yorickvp/llava-v1.6-vicuna-13b:0603dec596080fa084e26f0ae6d605fc5788ed2b1a0358cd25010619487eae63",
+                    "vikhyatk/moondream2:72ccb656353c348c1385df54b4adcaee5096a064d272f816d793fa0f4aae4c52",
                     {
                         input: {
                             image: frameUrl,
-                            prompt: `You are an expert observer watching a masterclass. Describe this moment exactly as a human expert would, focusing on what matters most.
-
-                                 PSYCHOLOGICAL & ARCHITECTURAL PERCEPTION:
-                                 1. Cognitive & Visual State: Identify if this is a "Static UI" (slide/document), "Dynamic UI" (tool/code interaction), or "Talking Head".
-                                 2. Social Posture: Interpret the instructor's "stance" towards the audience.
-                                 3. FOCUS INTENSITY: Capture cursor placement, text highlights, and specific UI elements being discussed.
-                                 4. OCR QUALITY: Assess the readability of the text on screen.
-
-                                 CRITICAL: Detect whenever the UI state changes (e.g. from slide to code).
-
-                                 ${transcriptContext ? `Context from transcript: "${transcriptContext.substring(0, 500)}"` : ''}
-
-                                 Return ONLY a JSON object in this format:
-                                 {
-                                   "text": "all OCR text relevant to this moment",
-                                   "ocr_confidence": 0-1,
-                                   "ui_state": "slide|code|ui|walking|demonstration",
-                                   "visualDescription": "High-fidelity psychological narrative.",
-                                   "emphasisFlags": {
-                                     "highlight_detected": boolean,
-                                     "cursor_pause": boolean,
-                                     "zoom_focus": boolean,
-                                     "text_selected": boolean,
-                                     "lingering_frame": boolean,
-                                     "bold_text": boolean,
-                                     "underline_detected": boolean
-                                   },
-                                   "keyElements": ["list", "of", "critical", "elements"],
-                                   "instructorIntent": "The deeper 'why' and actionable build instruction",
-                                   "dependsOnPrevious": boolean
-                                 }`,
-                            max_new_tokens: 1024,
-                            history: []
+                            question: `You are watching a masterclass video frame by frame.${transcriptContext ? ` At this moment the speaker says: "${transcriptContext.substring(0, 300)}"` : ''} Analyze this frame and return ONLY a JSON object: {"text":"all visible text on screen","ocr_confidence":0.0,"ui_state":"slide|code|ui|talking_head|demonstration","visualDescription":"what is shown and what the instructor is doing","emphasisFlags":{"highlight_detected":false,"cursor_pause":false,"zoom_focus":false,"text_selected":false,"lingering_frame":false,"bold_text":false,"underline_detected":false},"keyElements":[],"instructorIntent":"the teaching purpose of this moment","dependsOnPrevious":false}`,
                         }
                     }
                 );
@@ -1920,7 +1856,7 @@ serve(async (req) => {
                                 sanitizeDuration(mod.video_duration_seconds || 0, sampledForOcr.length),
                                 transcriptContext,
                                 replicate,
-                                5 // batch size
+                                20 // batch size — moondream2 supports 20 concurrent
                             );
 
                             mod.frame_analyses = analyses;
