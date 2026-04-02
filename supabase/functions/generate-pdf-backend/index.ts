@@ -48,48 +48,20 @@ async function analyzeFramesWithReplicate(
                     {
                         input: {
                             image: frameUrl,
-                            question: `You are watching a masterclass video frame by frame.${transcriptContext ? ` At this moment the speaker says: "${transcriptContext.substring(0, 300)}"` : ''} Analyze this frame and return ONLY a JSON object: {"text":"all visible text on screen","ocr_confidence":0.0,"ui_state":"slide|code|ui|talking_head|demonstration","visualDescription":"what is shown and what the instructor is doing","emphasisFlags":{"highlight_detected":false,"cursor_pause":false,"zoom_focus":false,"text_selected":false,"lingering_frame":false,"bold_text":false,"underline_detected":false},"keyElements":[],"instructorIntent":"the teaching purpose of this moment","dependsOnPrevious":false}`,
+                            question: `You are watching a masterclass video frame by frame.${transcriptContext ? ` At this moment the speaker says: "${transcriptContext.substring(0, 300)}"` : ''} Describe exactly what is on screen: any visible text, what the instructor is showing or doing, and the type of content (slide, code, browser, talking head, etc).`,
                         }
                     }
                 );
 
-                let resultText = Array.isArray(output) ? output.join('') : String(output);
-
-                if (resultText.includes('```json')) {
-                    resultText = resultText.split('```json')[1].split('```')[0].trim();
-                } else if (resultText.includes('```')) {
-                    resultText = resultText.split('```')[1].split('```')[0].trim();
-                }
-
-                const parsed = JSON.parse(resultText);
-
-                return {
-                    frameIndex,
-                    timestamp,
-                    text: parsed.text || '',
-                    visualDescription: parsed.visualDescription || '',
-                    textType: parsed.textType || 'other',
-                    emphasisFlags: {
-                        highlight_detected: !!parsed.emphasisFlags?.highlight_detected,
-                        cursor_pause: !!parsed.emphasisFlags?.cursor_pause,
-                        zoom_focus: !!parsed.emphasisFlags?.zoom_focus,
-                        text_selected: !!parsed.emphasisFlags?.text_selected,
-                        lingering_frame: !!parsed.emphasisFlags?.lingering_frame,
-                        bold_text: !!parsed.emphasisFlags?.bold_text,
-                        underline_detected: !!parsed.emphasisFlags?.underline_detected,
-                    },
-                    keyElements: parsed.keyElements || [],
-                    instructorIntent: parsed.instructorIntent || '',
-                    prosody: parsed.prosody || { tone: 'neutral', pacing: 'normal', volume: 'normal', parenthetical: '' },
-                    dependsOnPrevious: !!parsed.dependsOnPrevious
-                };
+                const resultText = Array.isArray(output) ? output.join('') : String(output);
+                return parseMoondreamResponse(resultText, frameIndex, timestamp);
             } catch (error) {
                 console.error(`[generate-pdf-backend] Frame ${frameIndex} analysis failed:`, error);
                 return {
                     frameIndex,
                     timestamp,
-                    text: '[Analysis failed]',
-                    visualDescription: 'Error during analysis',
+                    text: '',
+                    visualDescription: '',
                     textType: 'other',
                     emphasisFlags: { highlight_detected: false, cursor_pause: false, zoom_focus: false, text_selected: false, lingering_frame: false, bold_text: false, underline_detected: false },
                     keyElements: [],
@@ -105,6 +77,59 @@ async function analyzeFramesWithReplicate(
     }
 
     return results;
+}
+
+// ============================================
+// MOONDREAM2 PLAIN TEXT PARSER
+// moondream2 returns plain text, not JSON.
+// This converts it into the same structure LLaVA produced.
+// ============================================
+
+function parseMoondreamResponse(rawText: string, frameIndex: number, timestamp: number) {
+    const text = rawText.trim();
+
+    // Detect ui_state from keywords in the response
+    let ui_state = 'slide';
+    const lower = text.toLowerCase();
+    if (lower.includes('code') || lower.includes('terminal') || lower.includes('editor') || lower.includes('script')) {
+        ui_state = 'code';
+    } else if (lower.includes('person') || lower.includes('speaker') || lower.includes('instructor') || lower.includes('talking') || lower.includes('face')) {
+        ui_state = 'talking_head';
+    } else if (lower.includes('demo') || lower.includes('demonstration') || lower.includes('screen share') || lower.includes('browser')) {
+        ui_state = 'demonstration';
+    } else if (lower.includes('slide') || lower.includes('presentation') || lower.includes('bullet') || lower.includes('title')) {
+        ui_state = 'slide';
+    }
+
+    // Extract visible text — look for quoted strings or text after "shows", "reads", "says", "text:"
+    const quotedMatches = text.match(/"([^"]{3,})"/g) || [];
+    const visibleText = quotedMatches.map(q => q.replace(/"/g, '')).join(' ');
+
+    // Extract key elements — noun phrases (simple heuristic: capitalised words)
+    const keyElements = [...new Set(
+        (text.match(/\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*/g) || []).slice(0, 8)
+    )];
+
+    return {
+        frameIndex,
+        timestamp,
+        text: visibleText || '',
+        visualDescription: text,
+        textType: 'other',
+        emphasisFlags: {
+            highlight_detected: lower.includes('highlight') || lower.includes('highlighted'),
+            cursor_pause: lower.includes('cursor') || lower.includes('pointer'),
+            zoom_focus: lower.includes('zoom') || lower.includes('focus') || lower.includes('close-up'),
+            text_selected: lower.includes('selected') || lower.includes('selection'),
+            lingering_frame: false,
+            bold_text: lower.includes('bold') || lower.includes('heading'),
+            underline_detected: lower.includes('underline') || lower.includes('underlined'),
+        },
+        keyElements,
+        instructorIntent: text,
+        prosody: { tone: 'neutral', pacing: 'normal', volume: 'normal', parenthetical: '' },
+        dependsOnPrevious: false,
+    };
 }
 
 // ============================================
@@ -1295,23 +1320,14 @@ async function buildPartPDF(
                     {
                         input: {
                             image: frameUrl,
-                            question: `You are watching a masterclass video frame by frame.${transcriptContext ? ` At this moment the speaker says: "${transcriptContext.substring(0, 300)}"` : ''} Analyze this frame and return ONLY a JSON object: {"text":"all visible text on screen","ocr_confidence":0.0,"ui_state":"slide|code|ui|talking_head|demonstration","visualDescription":"what is shown and what the instructor is doing","emphasisFlags":{"highlight_detected":false,"cursor_pause":false,"zoom_focus":false,"text_selected":false,"lingering_frame":false,"bold_text":false,"underline_detected":false},"keyElements":[],"instructorIntent":"the teaching purpose of this moment","dependsOnPrevious":false}`,
+                            question: `You are watching a masterclass video frame by frame.${transcriptContext ? ` At this moment the speaker says: "${transcriptContext.substring(0, 300)}"` : ''} Describe exactly what is on screen: any visible text, what the instructor is showing or doing, and the type of content (slide, code, browser, talking head, etc).`,
                         }
                     }
                 );
-                let resultText = Array.isArray(output) ? output.join('') : String(output);
-                if (resultText.includes('```json')) resultText = resultText.split('```json')[1].split('```')[0].trim();
-                else if (resultText.includes('```')) resultText = resultText.split('```')[1].split('```')[0].trim();
-                const parsed = JSON.parse(resultText);
-                return {
-                    frameIndex: globalIdx, timestamp,
-                    text: parsed.text || '', visualDescription: parsed.visualDescription || '',
-                    keyElements: parsed.keyElements || [], instructorIntent: parsed.instructorIntent || '',
-                    emphasisFlags: parsed.emphasisFlags || {},
-                    dependsOnPrevious: !!parsed.dependsOnPrevious,
-                };
+                const resultText = Array.isArray(output) ? output.join('') : String(output);
+                return parseMoondreamResponse(resultText, globalIdx, timestamp);
             } catch {
-                return { frameIndex: globalIdx, timestamp, text: '', visualDescription: '[Analysis unavailable]', keyElements: [], emphasisFlags: {}, instructorIntent: '', dependsOnPrevious: false };
+                return { frameIndex: globalIdx, timestamp, text: '', visualDescription: '', keyElements: [], emphasisFlags: {}, instructorIntent: '', dependsOnPrevious: false };
             }
         }));
         analyses.push(...batchResults);
