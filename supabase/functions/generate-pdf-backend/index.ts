@@ -1391,6 +1391,22 @@ async function buildPartPDF(
             y -= 12;
         }
 
+        // ── Subtitle: what was said at this exact frame ──────────────────────
+        const transcriptText = transcriptMap[Math.round(timestamp)];
+        if (transcriptText) {
+            const subtitleText = safeText(`"${transcriptText.substring(0, 300)}"`);
+            const subtitleFontSize = 9;
+            const subtitleHeight = Math.ceil(font.widthOfTextAtSize(subtitleText, subtitleFontSize) / (CONTENT_WIDTH - 20)) * (subtitleFontSize * 1.4) + 10;
+            ensureSpace(subtitleHeight + 6);
+            currentPage.drawRectangle({
+                x: MARGIN, y: y - subtitleHeight, width: CONTENT_WIDTH, height: subtitleHeight,
+                color: rgb(0.05, 0.05, 0.05),
+            });
+            y -= 2;
+            drawWrappedText(subtitleText, { x: MARGIN + 8, size: subtitleFontSize, usedFont: italicFont, color: rgb(1, 1, 1), maxWidth: CONTENT_WIDTH - 16 });
+            y -= 6;
+        }
+
         // Visual transcription caption
         const captionParts: string[] = [];
         if (analysis?.visualDescription) captionParts.push(analysis.visualDescription);
@@ -1403,10 +1419,6 @@ async function buildPartPDF(
             if (analysis.emphasisFlags.zoom_focus) notes.push('zoomed/focused');
             if (notes.length > 0) captionParts.push(`[Interaction: ${notes.join('; ')}]`);
         }
-
-        // Transcript text at this timestamp
-        const transcriptText = transcriptMap[Math.round(timestamp)];
-        if (transcriptText) captionParts.push(`[Transcript: "${transcriptText.substring(0, 200)}"]`);
 
         const caption = captionParts.map(p =>
             p.replace(/Note: The image is a screenshot from a tutorial video, showing /gi, '')
