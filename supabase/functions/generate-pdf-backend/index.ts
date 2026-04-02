@@ -1294,72 +1294,11 @@ async function buildPartPDF(
         transcriptMap[sec] = (transcriptMap[sec] ? transcriptMap[sec] + ' ' : '') + (seg.text || '');
     }
 
-    // Check how many frames already have cached analyses
-    const cachedCount = frameUrls.filter((_, i) => frameAnalyses[globalFrameOffset + i]).length;
-    console.log(`[buildPartPDF] Part ${partNumber}: ${frameUrls.length} frames, ${cachedCount} cached analyses`);
-
-    // Run moondream2 only on frames missing analyses (batch of 20 in parallel)
-    const analyses: any[] = [];
-    const BATCH = 20;
-    for (let i = 0; i < frameUrls.length; i += BATCH) {
-        const batch = frameUrls.slice(i, i + BATCH);
-        const batchResults = await Promise.all(batch.map(async (frameUrl, bi) => {
-            const globalIdx = globalFrameOffset + i + bi;
-            if (frameAnalyses[globalIdx]) return frameAnalyses[globalIdx]; // use cache
-
-            const timestamp = (globalIdx) * frameDuration;
-            const transcriptContext = transcriptMap[Math.round(timestamp)] || '';
-
-            if (!replicate) {
-                return { frameIndex: globalIdx, timestamp, text: '', visualDescription: '', keyElements: [], emphasisFlags: {}, instructorIntent: '', dependsOnPrevious: false };
-            }
-
-            try {
-                const output = await replicate.run(
-                    "vikhyatk/moondream2:72ccb656353c348c1385df54b4adcaee5096a064d272f816d793fa0f4aae4c52",
-                    {
-                        input: {
-                            image: frameUrl,
-                            question: `You are watching a masterclass video frame by frame.${transcriptContext ? ` At this moment the speaker says: "${transcriptContext.substring(0, 300)}"` : ''} Describe exactly what is on screen: any visible text, what the instructor is showing or doing, and the type of content (slide, code, browser, talking head, etc).`,
-                        }
-                    }
-                );
-                const resultText = Array.isArray(output) ? output.join('') : String(output);
-                return parseMoondreamResponse(resultText, globalIdx, timestamp);
-            } catch {
-                return { frameIndex: globalIdx, timestamp, text: '', visualDescription: '', keyElements: [], emphasisFlags: {}, instructorIntent: '', dependsOnPrevious: false };
-            }
-        }));
-        analyses.push(...batchResults);
-        // Cache new analyses in the shared array so restarts skip re-analysis
-        batchResults.forEach((result, bi) => {
-            frameAnalyses[globalFrameOffset + i + bi] = result;
-        });
-        const framesAnalysed = Math.min(i + BATCH, frameUrls.length);
-        console.log(`[buildPartPDF] Part ${partNumber}: analysed ${framesAnalysed}/${frameUrls.length} frames`);
-        if (courseId && supabaseClient && totalAllFrames) {
-            const globalFramesDone = globalFrameOffset + framesAnalysed;
-            try {
-                await supabaseClient.from('courses').update({
-                    pdf_generation_progress: {
-                        currentPart: partNumber,
-                        totalParts,
-                        currentFrame: globalFramesDone,
-                        totalFrames: totalAllFrames,
-                        startedAt: new Date().toISOString(),
-                    },
-                    frame_analyses: frameAnalyses,
-                }).eq('id', courseId);
-            } catch (e) {
-                console.error(`[buildPartPDF] Progress save failed: ${e}`);
-            }
-        }
-    }
+    console.log(`[buildPartPDF] Part ${partNumber}: ${frameUrls.length} frames — using AssemblyAI transcript anchoring (no AI vision calls)`);
 
     // ---- Render each frame ----
     for (let fi = 0; fi < frameUrls.length; fi++) {
         const frameUrl = frameUrls[fi];
-        const analysis = analyses[fi];
         const globalIdx = globalFrameOffset + fi;
         const timestamp = globalIdx * frameDuration;
 
@@ -1391,69 +1330,6 @@ async function buildPartPDF(
             y -= 12;
         }
 
-        // ── Subtitle: what was said at this exact frame ──────────────────────
-        const transcriptText = transcriptMap[Math.round(timestamp)];
-        if (transcriptText) {
-            const subtitleText = safeText(`"${transcriptText.substring(0, 300)}"`);
-            const subtitleFontSize = 9;
-            const subtitleHeight = Math.ceil(font.widthOfTextAtSize(subtitleText, subtitleFontSize) / (CONTENT_WIDTH - 20)) * (subtitleFontSize * 1.4) + 10;
-            ensureSpace(subtitleHeight + 6);
-            currentPage.drawRectangle({
-                x: MARGIN, y: y - subtitleHeight, width: CONTENT_WIDTH, height: subtitleHeight,
-                color: rgb(0.05, 0.05, 0.05),
-            });
-            y -= 2;
-            drawWrappedText(subtitleText, { x: MARGIN + 8, size: subtitleFontSize, usedFont: italicFont, color: rgb(1, 1, 1), maxWidth: CONTENT_WIDTH - 16 });
-            y -= 6;
-        }
-
-        // Visual transcription caption
-        const captionParts: string[] = [];
-        if (analysis?.visualDescription) captionParts.push(analysis.visualDescription);
-        if (analysis?.keyElements?.length > 0) captionParts.push(`[On-screen: ${analysis.keyElements.slice(0, 4).join(', ')}]`);
-        if (analysis?.instructorIntent) captionParts.push(`[Intent: ${analysis.instructorIntent}]`);
-        if (analysis?.emphasisFlags) {
-            const notes: string[] = [];
-            if (analysis.emphasisFlags.highlight_detected) notes.push('text highlighted');
-            if (analysis.emphasisFlags.cursor_pause) notes.push('cursor paused');
-            if (analysis.emphasisFlags.zoom_focus) notes.push('zoomed/focused');
-            if (notes.length > 0) captionParts.push(`[Interaction: ${notes.join('; ')}]`);
-        }
-
-        const caption = captionParts.map(p =>
-            p.replace(/Note: The image is a screenshot from a tutorial video, showing /gi, '')
-             .replace(/This frame shows /gi, '')
-             .replace(/In this frame, /gi, '')
-             .replace(/The image shows /gi, '')
-             .trim()
-        ).filter(p => p.length > 0).join(' | ');
-
-        if (caption) {
-            const hasFocus = analysis?.emphasisFlags?.cursor_pause || analysis?.emphasisFlags?.zoom_focus;
-            const truncated = caption.length > 500 ? caption.substring(0, 497) + '...' : caption;
-            const label = hasFocus ? 'ONE DUO SENSORY DATA [CRITICAL FOCUS]:' : 'ONE DUO SENSORY DATA:';
-            const textToDraw = `${label} "${truncated}"`;
-            const fontSize = 7;
-            const words = textToDraw.split(' ');
-            let lines = 0, line = '';
-            for (const word of words) {
-                const testLine = line ? `${line} ${word}` : word;
-                if (font.widthOfTextAtSize(testLine, fontSize) > CONTENT_WIDTH - 10) { lines++; line = word; }
-                else line = testLine;
-            }
-            if (line) lines++;
-            const rectHeight = (lines * (fontSize * 1.3)) + 8;
-            ensureSpace(rectHeight + 5);
-            currentPage.drawRectangle({
-                x: MARGIN, y: y - rectHeight, width: CONTENT_WIDTH, height: rectHeight,
-                color: hasFocus ? rgb(1, 1, 0.94) : rgb(0.98, 0.98, 1),
-                borderColor: hasFocus ? rgb(0.8, 0.7, 0) : rgb(0.8, 0.8, 1),
-                borderWidth: 0.5,
-            });
-            y -= 2;
-            drawWrappedText(textToDraw, { x: MARGIN + 5, size: fontSize, usedFont: italicFont, color: hasFocus ? rgb(0.4, 0.2, 0) : rgb(0.2, 0.2, 0.4), maxWidth: CONTENT_WIDTH - 10 });
-            y -= 4;
-        }
     }
 
     addFooter(currentPage);
