@@ -1323,9 +1323,28 @@ async function buildPartPDF(
         transcriptMap[sec] = (transcriptMap[sec] ? transcriptMap[sec] + ' ' : '') + (seg.text || '');
     }
 
-    console.log(`[buildPartPDF] Part ${partNumber}: ${frameUrls.length} frames — using AssemblyAI transcript anchoring (no AI vision calls)`);
+    console.log(`[buildPartPDF] Part ${partNumber}: ${frameUrls.length} frames — pre-fetching images in parallel (20 at a time)`);
 
-    // ---- Render each frame ----
+    // ---- Pre-fetch all images in parallel batches of 20 ----
+    const FETCH_BATCH = 20;
+    const fetchedImages: (Uint8Array | null)[] = new Array(frameUrls.length).fill(null);
+
+    for (let i = 0; i < frameUrls.length; i += FETCH_BATCH) {
+        const batch = frameUrls.slice(i, i + FETCH_BATCH);
+        const batchResults = await Promise.all(batch.map(async (url) => {
+            try {
+                const response = await fetch(url, { signal: AbortSignal.timeout(15000) });
+                if (response.ok) return new Uint8Array(await response.arrayBuffer());
+                return null;
+            } catch {
+                return null;
+            }
+        }));
+        batchResults.forEach((bytes, bi) => { fetchedImages[i + bi] = bytes; });
+        console.log(`[buildPartPDF] Part ${partNumber}: fetched ${Math.min(i + FETCH_BATCH, frameUrls.length)}/${frameUrls.length} images`);
+    }
+
+    // ---- Render each frame (images already in memory) ----
     for (let fi = 0; fi < frameUrls.length; fi++) {
         const frameUrl = frameUrls[fi];
         const globalIdx = globalFrameOffset + fi;
@@ -1339,13 +1358,11 @@ async function buildPartPDF(
         });
         y -= 10;
 
-        // Embed image
-        try {
-            const response = await fetch(frameUrl, { signal: AbortSignal.timeout(10000) });
-            if (response.ok) {
-                const imageBytes = new Uint8Array(await response.arrayBuffer());
-                const contentType = response.headers.get('content-type') || '';
-                const image = contentType.includes('png') || frameUrl.includes('.png')
+        // Embed image (already fetched)
+        const imageBytes = fetchedImages[fi];
+        if (imageBytes) {
+            try {
+                const image = frameUrl.includes('.png')
                     ? await pdfDoc.embedPng(imageBytes)
                     : await pdfDoc.embedJpg(imageBytes);
                 const imgWidth = Math.min(CONTENT_WIDTH, 400);
@@ -1353,8 +1370,11 @@ async function buildPartPDF(
                 ensureSpace(imgHeight + 20);
                 currentPage.drawImage(image, { x: MARGIN, y: y - imgHeight, width: imgWidth, height: imgHeight });
                 y -= imgHeight + 5;
+            } catch {
+                currentPage.drawText('[Frame could not be embedded]', { x: MARGIN, y, size: 7, font: italicFont, color: rgb(0.7, 0.3, 0.3) });
+                y -= 12;
             }
-        } catch {
+        } else {
             currentPage.drawText('[Frame could not be loaded]', { x: MARGIN, y, size: 7, font: italicFont, color: rgb(0.7, 0.3, 0.3) });
             y -= 12;
         }
