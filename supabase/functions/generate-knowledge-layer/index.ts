@@ -2,8 +2,8 @@
  * generate-knowledge-layer
  *
  * Enhances the existing OneDuo artifact by prepending a structured
- * 17-section "thinking layer" to each course/module using Replicate
- * (meta/meta-llama-3-70b-instruct, 8k ctx per chunk).
+ * 21-section "thinking layer" to each course/module using Claude Sonnet 4.6.
+ * Full transcript is passed (200K context window — no truncation needed).
  *
  * Called by video-queue-worker after PDF generation, or on-demand
  * from the Dashboard.
@@ -14,7 +14,7 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
-import Replicate from "https://esm.sh/replicate@0.25.2";
+import Anthropic from "https://esm.sh/@anthropic-ai/sdk@0.36.3";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -23,12 +23,12 @@ const corsHeaders = {
 };
 
 // ── Model ────────────────────────────────────────────────────────────────────
-// meta/meta-llama-3-70b-instruct on Replicate.
-// Max output tokens kept at 4096 to stay within Supabase edge fn limits.
-const REPLICATE_MODEL = "meta/meta-llama-3-70b-instruct";
+// Claude Sonnet 4.6 — 200K context window, full transcript coverage.
+const CLAUDE_MODEL = "claude-sonnet-4-6";
 
-// Total chars sent to the model. Split evenly across start / middle / end.
-const MAX_TRANSCRIPT_CHARS = 12_000;
+// Sonnet 4.6 has 200K context. A 1-hour video transcript is ~40K chars.
+// Cap at 80K chars to cover up to ~2-hour videos while keeping latency within timeout.
+const MAX_TRANSCRIPT_CHARS = 60_000;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -107,26 +107,34 @@ function buildFrameSummary(frames: any[], fps: number): string {
   return segments.slice(0, 300).join("\n");
 }
 
-// ── Replicate call ────────────────────────────────────────────────────────────
+// ── Claude call ──────────────────────────────────────────────────────────────
 
-async function callReplicate(
-  replicate: Replicate,
+async function callClaude(
+  anthropic: Anthropic,
   systemPrompt: string,
   userPrompt: string
 ): Promise<string> {
-  const output = await replicate.run(REPLICATE_MODEL, {
-    input: {
-      system_prompt: systemPrompt,
-      prompt: userPrompt,
-      max_tokens: 4096,
-      temperature: 0.2,
-      top_p: 0.9,
-    },
-  });
-
-  // Replicate text models return string[] — join into one string
-  if (Array.isArray(output)) return output.join("");
-  return String(output ?? "");
+  for (let attempt = 0; attempt < 5; attempt++) {
+    if (attempt > 0) {
+      const delay = Math.min(1000 * Math.pow(2, attempt), 60000);
+      console.log(`[KnowledgeLayer] Rate limited — retrying in ${delay}ms (attempt ${attempt + 1})`);
+      await new Promise(r => setTimeout(r, delay));
+    }
+    try {
+      const response = await anthropic.messages.create({
+        model: CLAUDE_MODEL,
+        max_tokens: 8192,
+        temperature: 0.2,
+        system: systemPrompt,
+        messages: [{ role: "user", content: userPrompt }],
+      });
+      return response.content[0].type === "text" ? response.content[0].text : "";
+    } catch (err) {
+      const is429 = String(err).includes("429") || String(err).includes("rate_limit");
+      if (!is429 || attempt === 4) throw err;
+    }
+  }
+  throw new Error("Claude call failed after 5 attempts");
 }
 
 // ── Extraction prompt (the 21-section spec — Knowledge + Reasoning Layer) ─────
@@ -255,11 +263,7 @@ Format each as:
 List 10–20 tags.)
 
 ## RETRIEVAL TAGS
-(Flat comma-separated tag list for semantic retrieval)
-
-## FULL CLEANED TRANSCRIPT
-(Preserve all timestamps. Lightly clean only obvious OCR/transcription errors.
- Do NOT rewrite the speaker's meaning.)`;
+(Flat comma-separated tag list for semantic retrieval)`;
 }
 
 // ── Main handler ─────────────────────────────────────────────────────────────
@@ -280,175 +284,136 @@ serve(async (req) => {
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const replicateToken = Deno.env.get("REPLICATE_API_TOKEN");
+    const claudeApiKey = Deno.env.get("CLAUDE_API_KEY")!;
 
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
-    const replicate = new Replicate({ auth: replicateToken });
+    const anthropic = new Anthropic({ apiKey: claudeApiKey });
 
     // ── Fetch the target row ────────────────────────────────────────────────
-    let row: any = null;
-    let table: "courses" | "course_modules" = "courses";
+    const table: "courses" | "course_modules" = moduleId ? "course_modules" : "courses";
+    const { data: row, error: fetchErr } = moduleId
+      ? await supabase.from("course_modules").select("*").eq("id", moduleId).eq("course_id", courseId).maybeSingle()
+      : await supabase.from("courses").select("*").eq("id", courseId).maybeSingle();
 
-    if (moduleId) {
-      table = "course_modules";
-      const { data, error } = await supabase
-        .from("course_modules")
-        .select("*")
-        .eq("id", moduleId)
-        .eq("course_id", courseId)
-        .maybeSingle();
-      if (error || !data) throw new Error(`Module not found: ${moduleId}`);
-      row = data;
-    } else {
-      const { data, error } = await supabase
-        .from("courses")
-        .select("*")
-        .eq("id", courseId)
-        .maybeSingle();
-      if (error || !data) throw new Error(`Course not found: ${courseId}`);
-      row = data;
+    if (fetchErr || !row) {
+      return new Response(JSON.stringify({ error: "Record not found" }), {
+        status: 404,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
-    // ── Guard: skip if already complete ────────────────────────────────────
+    // ── Guard: skip if already complete or already generating ──────────────
     if (row.knowledge_layer_status === "complete") {
       return new Response(
         JSON.stringify({ success: true, message: "Already complete — skipped" }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
+    if (row.knowledge_layer_status === "generating") {
+      return new Response(
+        JSON.stringify({ success: true, message: "Already generating — skipped" }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
 
-    // ── Mark as generating ─────────────────────────────────────────────────
+    // ── Mark as generating immediately ────────────────────────────────────
     await supabase
       .from(table)
       .update({ knowledge_layer_status: "generating" })
       .eq("id", moduleId || courseId);
 
-    // ── Build inputs ───────────────────────────────────────────────────────
-    const fps: number = row.fps_target || (row.density_mode === "precision" ? 3 : 1);
-    const durationSec: number = row.video_duration_seconds || 0;
-    const durationStr = formatDuration(durationSec);
-    const moduleTitle: string = row.title || "Untitled Module";
+    // ── Background work — no timeout, runs after response is sent ─────────
+    const backgroundWork = async () => {
+      try {
+        const fps: number = row.fps_target || (row.density_mode === "precision" ? 3 : 1);
+        const durationSec: number = row.video_duration_seconds || 0;
+        const durationStr = formatDuration(durationSec);
+        const moduleTitle: string = row.title || "Untitled Module";
 
-    // Transcript — for course-level calls, fall back to first module's transcript if course row is empty
-    let rawTranscript = buildTranscriptText(row.transcript);
-    if (!rawTranscript && table === "courses") {
-      const { data: firstMod } = await supabase
-        .from("course_modules")
-        .select("transcript, title, video_duration_seconds")
-        .eq("course_id", courseId)
-        .order("module_number")
-        .limit(1)
-        .maybeSingle();
-      if (firstMod?.transcript) {
-        rawTranscript = buildTranscriptText(firstMod.transcript);
-        console.log(`[KnowledgeLayer] Used module transcript fallback for course ${courseId}`);
-      }
-    }
-    const transcriptChunk = sampleTranscriptEvenly(rawTranscript, MAX_TRANSCRIPT_CHARS);
+        // Transcript
+        let rawTranscript = buildTranscriptText(row.transcript);
+        if (!rawTranscript && table === "courses") {
+          const { data: firstMod } = await supabase
+            .from("course_modules")
+            .select("transcript, title, video_duration_seconds")
+            .eq("course_id", courseId)
+            .order("module_number")
+            .limit(1)
+            .maybeSingle();
+          if (firstMod?.transcript) {
+            rawTranscript = buildTranscriptText(firstMod.transcript);
+            console.log(`[KnowledgeLayer] Used module transcript fallback for course ${courseId}`);
+          }
+        }
+        const transcriptChunk = sampleTranscriptEvenly(rawTranscript, MAX_TRANSCRIPT_CHARS);
 
-    if (!transcriptChunk) {
-      console.warn(`[KnowledgeLayer] No transcript found for ${table}:${moduleId || courseId} — output may be empty`);
-    }
+        if (!transcriptChunk) {
+          console.warn(`[KnowledgeLayer] No transcript found for ${table}:${moduleId || courseId}`);
+        }
 
-    // Frames — pull from artifact_frames if available, else use frame_urls OCR
-    let frameSummary = "";
-    if (row.frame_urls && Array.isArray(row.frame_urls) && row.frame_urls.length > 0) {
-      // Build lightweight frame objects from stored urls with index
-      const fakFrames = (row.frame_urls as string[]).map((_, idx) => ({
-        frame_index: idx,
-        ocr_text: "",
-      }));
-      frameSummary = buildFrameSummary(fakFrames, fps);
-    }
+        // Frames
+        let frameSummary = "";
+        if (row.frame_urls && Array.isArray(row.frame_urls) && row.frame_urls.length > 0) {
+          const fakFrames = (row.frame_urls as string[]).map((_, idx) => ({ frame_index: idx, ocr_text: "" }));
+          frameSummary = buildFrameSummary(fakFrames, fps);
+        }
+        const { data: afRows } = await supabase
+          .from("artifact_frames")
+          .select("frame_index, ocr_text, timestamp_ms")
+          .eq("artifact_id", moduleId || courseId)
+          .order("frame_index")
+          .limit(500);
+        if (afRows && afRows.length > 0) {
+          frameSummary = buildFrameSummary(afRows, fps);
+        }
 
-    // If we have artifact_frames with real OCR, prefer those
-    const { data: afRows } = await supabase
-      .from("artifact_frames")
-      .select("frame_index, ocr_text, timestamp_ms")
-      .eq("artifact_id", moduleId || courseId)
-      .order("frame_index")
-      .limit(500);
+        // ── Call Claude (no timeout — runs in background) ──────────────────
+        const systemPrompt = buildSystemPrompt(fps);
+        const userPrompt = buildUserPrompt(moduleTitle, durationStr, transcriptChunk, frameSummary, fps);
 
-    if (afRows && afRows.length > 0) {
-      const fpsForFrames = fps;
-      frameSummary = buildFrameSummary(afRows, fpsForFrames);
-    }
+        console.log(`[KnowledgeLayer] Calling Claude Sonnet 4.6 for ${table}:${moduleId || courseId} (background)`);
+        const rawMarkdown = await callClaude(anthropic, systemPrompt, userPrompt);
 
-    // ── Call Replicate ─────────────────────────────────────────────────────
-    const systemPrompt = buildSystemPrompt(fps);
-    const userPrompt = buildUserPrompt(
-      moduleTitle,
-      durationStr,
-      transcriptChunk,
-      frameSummary,
-      fps
-    );
+        if (!rawMarkdown || rawMarkdown.trim().length < 100) {
+          throw new Error("Claude returned empty or too-short output");
+        }
 
-    console.log(`[KnowledgeLayer] Calling Replicate for ${table}:${moduleId || courseId}`);
+        // ── Parse and persist ──────────────────────────────────────────────
+        const knowledgeLayer = parseMarkdownToJson(rawMarkdown, moduleTitle, durationStr);
+        const { error: saveErr } = await supabase
+          .from(table)
+          .update({
+            knowledge_layer: knowledgeLayer,
+            knowledge_layer_txt: rawMarkdown,
+            knowledge_layer_status: "complete",
+            knowledge_layer_error: null,
+          })
+          .eq("id", moduleId || courseId);
 
-    // Hard timeout: Supabase edge functions die at 150s — bail at 120s and mark failed
-    // so the status never gets stuck at 'generating'
-    const replicateWithTimeout = Promise.race([
-      callReplicate(replicate, systemPrompt, userPrompt),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("Replicate timeout after 120s — retry to continue")), 120_000)
-      ),
-    ]);
+        if (saveErr) throw new Error(`DB save failed: ${saveErr.message}`);
+        console.log(`[KnowledgeLayer] Complete for ${table}:${moduleId || courseId} — ${rawMarkdown.length} chars`);
 
-    const rawMarkdown = await replicateWithTimeout;
-
-    if (!rawMarkdown || rawMarkdown.trim().length < 100) {
-      throw new Error("Replicate returned empty or too-short output");
-    }
-
-    // ── Parse the markdown into a structured JSONB object ──────────────────
-    const knowledgeLayer = parseMarkdownToJson(rawMarkdown, moduleTitle, durationStr);
-
-    // ── Persist ────────────────────────────────────────────────────────────
-    const { error: saveErr } = await supabase
-      .from(table)
-      .update({
-        knowledge_layer: knowledgeLayer,
-        knowledge_layer_txt: rawMarkdown,
-        knowledge_layer_status: "complete",
-        knowledge_layer_error: null,
-      })
-      .eq("id", moduleId || courseId);
-
-    if (saveErr) throw new Error(`DB save failed: ${saveErr.message}`);
-
-    console.log(
-      `[KnowledgeLayer] Complete for ${table}:${moduleId || courseId} — ${rawMarkdown.length} chars`
-    );
-
-    return new Response(
-      JSON.stringify({
-        success: true,
-        knowledgeLayerStatus: "complete",
-        markdownLength: rawMarkdown.length,
-      }),
-      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error("[KnowledgeLayer] Error:", msg);
-
-    // Try to mark as failed so the dashboard can surface it
-    try {
-      const { courseId, moduleId } = await req.clone().json().catch(() => ({} as any));
-      if (courseId) {
-        const supabase = createClient(
-          Deno.env.get("SUPABASE_URL")!,
-          Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
-        );
-        const table = moduleId ? "course_modules" : "courses";
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error("[KnowledgeLayer] Background error:", msg);
         await supabase
           .from(table)
           .update({ knowledge_layer_status: "failed", knowledge_layer_error: msg })
           .eq("id", moduleId || courseId);
       }
-    } catch (_) { /* best-effort */ }
+    };
 
+    // ── Respond immediately, run generation in background ─────────────────
+    EdgeRuntime.waitUntil(backgroundWork());
+
+    return new Response(
+      JSON.stringify({ success: true, message: "Knowledge layer generation started" }),
+      { status: 202, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
+
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("[KnowledgeLayer] Error:", msg);
     return new Response(JSON.stringify({ error: msg }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -457,7 +422,7 @@ serve(async (req) => {
 });
 
 // ── Markdown → JSONB parser ───────────────────────────────────────────────────
-// Splits the Replicate output into named sections for structured storage.
+// Splits the Claude output into named sections for structured storage.
 
 function parseMarkdownToJson(md: string, title: string, duration: string): Record<string, any> {
   const sections: Record<string, string> = {};

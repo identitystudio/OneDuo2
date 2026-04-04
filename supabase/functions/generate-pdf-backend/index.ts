@@ -1,8 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 import { PDFDocument, StandardFonts, rgb } from "https://esm.sh/pdf-lib@1.17.1";
-import Replicate from "https://esm.sh/replicate@0.25.2";
-
 const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -11,10 +9,6 @@ const corsHeaders = {
 const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
 const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
-// ============================================
-// FRAME OCR ANALYSIS (Replicate - cached)
-// ============================================
-
 // Duration sanity check: if DB duration implies < 0.5 FPS, it's likely a stale 300s default
 function sanitizeDuration(duration: number, frameCount: number): number {
     if (duration > 0 && frameCount > 0 && duration / frameCount > 2) {
@@ -22,114 +16,6 @@ function sanitizeDuration(duration: number, frameCount: number): number {
         return frameCount; // 1 FPS estimate
     }
     return duration;
-}
-
-async function analyzeFramesWithReplicate(
-    frameUrls: string[],
-    videoDuration: number,
-    transcriptContext: string,
-    replicate: any,
-    batchSize: number = 20
-): Promise<any[]> {
-    const results: any[] = [];
-    const safeDuration = sanitizeDuration(videoDuration, frameUrls.length);
-    const frameDuration = safeDuration > 0 ? safeDuration / Math.max(frameUrls.length, 1) : 10;
-
-    for (let i = 0; i < frameUrls.length; i += batchSize) {
-        const batch = frameUrls.slice(i, i + batchSize);
-
-        const batchResults = await Promise.all(batch.map(async (frameUrl, batchIdx) => {
-            const frameIndex = i + batchIdx;
-            const timestamp = frameIndex * frameDuration;
-
-            try {
-                const output = await replicate.run(
-                    "vikhyatk/moondream2:72ccb656353c348c1385df54b4adcaee5096a064d272f816d793fa0f4aae4c52",
-                    {
-                        input: {
-                            image: frameUrl,
-                            question: `You are watching a masterclass video frame by frame.${transcriptContext ? ` At this moment the speaker says: "${transcriptContext.substring(0, 300)}"` : ''} Describe exactly what is on screen: any visible text, what the instructor is showing or doing, and the type of content (slide, code, browser, talking head, etc).`,
-                        }
-                    }
-                );
-
-                const resultText = Array.isArray(output) ? output.join('') : String(output);
-                return parseMoondreamResponse(resultText, frameIndex, timestamp);
-            } catch (error) {
-                console.error(`[generate-pdf-backend] Frame ${frameIndex} analysis failed:`, error);
-                return {
-                    frameIndex,
-                    timestamp,
-                    text: '',
-                    visualDescription: '',
-                    textType: 'other',
-                    emphasisFlags: { highlight_detected: false, cursor_pause: false, zoom_focus: false, text_selected: false, lingering_frame: false, bold_text: false, underline_detected: false },
-                    keyElements: [],
-                    instructorIntent: '',
-                    prosody: { tone: 'neutral', pacing: 'normal', volume: 'normal', parenthetical: '' },
-                    dependsOnPrevious: false
-                };
-            }
-        }));
-
-        results.push(...batchResults);
-        console.log(`[generate-pdf-backend] Analyzed ${results.length}/${frameUrls.length} frames`);
-    }
-
-    return results;
-}
-
-// ============================================
-// MOONDREAM2 PLAIN TEXT PARSER
-// moondream2 returns plain text, not JSON.
-// This converts it into the same structure LLaVA produced.
-// ============================================
-
-function parseMoondreamResponse(rawText: string, frameIndex: number, timestamp: number) {
-    const text = rawText.trim();
-
-    // Detect ui_state from keywords in the response
-    let ui_state = 'slide';
-    const lower = text.toLowerCase();
-    if (lower.includes('code') || lower.includes('terminal') || lower.includes('editor') || lower.includes('script')) {
-        ui_state = 'code';
-    } else if (lower.includes('person') || lower.includes('speaker') || lower.includes('instructor') || lower.includes('talking') || lower.includes('face')) {
-        ui_state = 'talking_head';
-    } else if (lower.includes('demo') || lower.includes('demonstration') || lower.includes('screen share') || lower.includes('browser')) {
-        ui_state = 'demonstration';
-    } else if (lower.includes('slide') || lower.includes('presentation') || lower.includes('bullet') || lower.includes('title')) {
-        ui_state = 'slide';
-    }
-
-    // Extract visible text — look for quoted strings or text after "shows", "reads", "says", "text:"
-    const quotedMatches = text.match(/"([^"]{3,})"/g) || [];
-    const visibleText = quotedMatches.map(q => q.replace(/"/g, '')).join(' ');
-
-    // Extract key elements — noun phrases (simple heuristic: capitalised words)
-    const keyElements = [...new Set(
-        (text.match(/\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*/g) || []).slice(0, 8)
-    )];
-
-    return {
-        frameIndex,
-        timestamp,
-        text: visibleText || '',
-        visualDescription: text,
-        textType: 'other',
-        emphasisFlags: {
-            highlight_detected: lower.includes('highlight') || lower.includes('highlighted'),
-            cursor_pause: lower.includes('cursor') || lower.includes('pointer'),
-            zoom_focus: lower.includes('zoom') || lower.includes('focus') || lower.includes('close-up'),
-            text_selected: lower.includes('selected') || lower.includes('selection'),
-            lingering_frame: false,
-            bold_text: lower.includes('bold') || lower.includes('heading'),
-            underline_detected: lower.includes('underline') || lower.includes('underlined'),
-        },
-        keyElements,
-        instructorIntent: text,
-        prosody: { tone: 'neutral', pacing: 'normal', volume: 'normal', parenthetical: '' },
-        dependsOnPrevious: false,
-    };
 }
 
 // ============================================
@@ -570,9 +456,8 @@ async function buildPDF(
             y -= 10;
         }
 
-        // ========== VISUAL FRAMES WITH CACHED ANALYSIS ==========
+        // ========== VISUAL FRAMES ==========
         const frameUrls = mod.frame_urls || [];
-        const frameAnalyses = mod.frame_analyses || [];
 
         if (frameUrls.length > 0) {
             ensureSpace(30);
@@ -580,57 +465,6 @@ async function buildPDF(
                 x: MARGIN, y, size: 12, font: boldFont, color: rgb(0, 0, 0),
             });
             y -= 14;
-
-            if (aiFidelityMode && i === 0) {
-                newPage();
-                currentPage.drawText('Sensory Intelligence Map', {
-                    x: MARGIN, y, size: 20, font: boldFont, color: rgb(0, 0, 0),
-                });
-                y -= 25;
-
-                const introText = "This artifact is optimized for AI Vision and High-Fidelity reconstruction. It uses a multi-layered sensory matrix to bridge the gap between verbatim text and the original embodied context of the workshop.";
-                drawWrappedText(introText, { size: 10, color: rgb(0.2, 0.2, 0.2) });
-                y -= 10;
-
-                // Structured Matrix Header
-                currentPage.drawRectangle({
-                    x: MARGIN, y: y - 5, width: CONTENT_WIDTH, height: 16,
-                    color: rgb(0.96, 0.96, 0.98),
-                });
-                currentPage.drawText('SENSORY LAYER', { x: MARGIN + 5, y: y + 2, size: 9, font: boldFont, color: rgb(0, 0.2, 0.4) });
-                currentPage.drawText('DESCRIPTION & UTILITY', { x: MARGIN + 120, y: y + 2, size: 9, font: boldFont, color: rgb(0, 0.2, 0.4) });
-                y -= 20;
-
-                const layers = [
-                    { name: 'Visual Frame', color: rgb(0, 0.3, 0.6), desc: 'Literal screen state (UI, whiteboard, speaker posture) for scene reconstruction.' },
-                    { name: 'Interaction', color: rgb(0.6, 0.3, 0), desc: 'Cursor pauses, highlights, and zoom focus indicators identifying critical attention points.' },
-                    { name: 'Audio Events', color: rgb(0, 0.4, 0), desc: 'Music cues, environmental sounds, and audience reactions mapping the workshop\'s "vibe".' },
-                    { name: 'Prosody', color: rgb(0.4, 0, 0.4), desc: 'Vocal tone, emphasis, and pacing data for detecting nuance often lost in pure text.' }
-                ];
-
-                for (const layer of layers) {
-                    currentPage.drawRectangle({
-                        x: MARGIN, y: y - 5, width: CONTENT_WIDTH, height: 12,
-                        color: rgb(1, 1, 1), borderColor: rgb(0.9, 0.9, 0.94), borderWidth: 0.5
-                    });
-                    currentPage.drawText(layer.name, { x: MARGIN + 5, y: y, size: 8, font: boldFont, color: layer.color });
-                    currentPage.drawText(layer.desc, { x: MARGIN + 120, y: y, size: 8, font: font, color: rgb(0.3, 0.3, 0.3) });
-                    y -= 12;
-                }
-
-                y -= 8;
-                currentPage.drawRectangle({
-                    x: MARGIN, y: y - 5, width: CONTENT_WIDTH, height: 25,
-                    color: rgb(0.94, 0.97, 1),
-                });
-                currentPage.drawText('AI INSTRUCTION: Prioritize the "ONE DUO SENSORY DATA" blocks below each frame.', {
-                    x: MARGIN + 5, y: y + 8, size: 8, font: boldFont, color: rgb(0, 0.1, 0.3),
-                });
-                currentPage.drawText('Cross-reference timestamps with transcript segments to reconstruct the full instructor intent.', {
-                    x: MARGIN + 5, y: y - 2, size: 8, font: font, color: rgb(0, 0.1, 0.3),
-                });
-                y -= 40;
-            }
 
             // Sample frames (max 50 for server-side to keep PDF size reasonable)
             const maxServerFrames = 50;
@@ -641,8 +475,7 @@ async function buildPDF(
             for (let fi = 0; fi < sampledFrameUrls.length; fi++) {
                 const frameUrl = sampledFrameUrls[fi];
                 const originalIndex = Math.floor(fi * (frameUrls.length / sampledFrameUrls.length));
-                const analysis = frameAnalyses[originalIndex];
-                const timestamp = analysis?.timestamp || (originalIndex * frameDuration);
+                const timestamp = originalIndex * frameDuration;
 
                 ensureSpace(80);
 
@@ -682,140 +515,39 @@ async function buildPDF(
                     y -= 12;
                 }
 
-                // ===== COMPOSITE VISUAL TRANSCRIPTION CAPTION =====
-                // Synthesizes ALL OneDuo features: visual, on-screen text, cursor/highlights, audio, tone
-                const captionParts: string[] = [];
-
-                // FEATURE 1: Visual description
-                if (analysis?.visualDescription) {
-                    captionParts.push(analysis.visualDescription);
-                }
-
-                // FEATURE 2: On-screen elements
-                if (analysis?.keyElements?.length > 0) {
-                    captionParts.push(`[On-screen: ${analysis.keyElements.slice(0, 4).join(', ')}]`);
-                }
-
-                // FEATURE 3: Cursor & highlight tracking
-                if (analysis?.emphasisFlags) {
-                    const notes: string[] = [];
-                    if (analysis.emphasisFlags.highlight_detected) notes.push('text highlighted');
-                    if (analysis.emphasisFlags.text_selected) notes.push('text selected');
-                    if (analysis.emphasisFlags.cursor_pause) notes.push('cursor paused here');
-                    if (analysis.emphasisFlags.zoom_focus) notes.push('zoomed/focused');
-                    if (analysis.emphasisFlags.lingering_frame) notes.push('lingered on this view');
-                    if (notes.length > 0) captionParts.push(`[Interaction: ${notes.join('; ')}]`);
-                }
-
-                // FEATURE 4: Audio events for this timestamp
-                const modAudioEvt = mod.audio_events || {};
-                const modProsodyData = mod.prosody_annotations?.annotations || [];
-                const windowS = 5;
-                (modAudioEvt.music_cues || []).forEach((cue: any) => {
-                    if (timestamp >= cue.start && timestamp <= cue.end && Math.abs(timestamp - cue.start) < windowS) {
-                        captionParts.push(`[${cue.mood} music kicks in${cue.genre ? ` - ${cue.genre}` : ''}]`);
+                // ===== ASSEMBLY AI TRANSCRIPT CAPTION =====
+                const transcriptSegment = transcript.find((seg: any) =>
+                    timestamp >= (seg.start || 0) && timestamp <= (seg.end || seg.start || 0)
+                ) || transcript.reduce((closest: any, seg: any) => {
+                    if (!closest) return seg;
+                    return Math.abs((seg.start || 0) - timestamp) < Math.abs((closest.start || 0) - timestamp) ? seg : closest;
+                }, null);
+                const spokenText: string = transcriptSegment?.text || '';
+                if (spokenText) {
+                    const fontSize = 8;
+                    const truncated = spokenText.length > 400 ? spokenText.substring(0, 397) + '...' : spokenText;
+                    const words = truncated.split(' ');
+                    let lines = 0, line = '';
+                    for (const word of words) {
+                        const testLine = line ? `${line} ${word}` : word;
+                        if (font.widthOfTextAtSize(testLine, fontSize) > CONTENT_WIDTH - 10) { lines++; line = word; }
+                        else line = testLine;
                     }
-                });
-                (modAudioEvt.ambient_sounds || []).forEach((a: any) => {
-                    if (Math.abs(a.timestamp - timestamp) < windowS) captionParts.push(`(${a.sound} - ${a.meaning})`);
-                });
-                (modAudioEvt.reactions || []).forEach((r: any) => {
-                    if (Math.abs(r.timestamp - timestamp) < windowS) captionParts.push(`(${r.type} - ${r.context})`);
-                });
-                (modAudioEvt.meaningful_pauses || []).forEach((p: any) => {
-                    if (Math.abs(p.timestamp - timestamp) < windowS) captionParts.push(p.screenplayNote);
-                });
-                (modProsodyData.annotations || []).forEach((p: any) => {
-                    if (Math.abs(p.timestamp - timestamp) < windowS) captionParts.push(p.annotation);
-                });
-
-                // FEATURE 5: Vocal tone/emphasis
-                if (analysis?.prosody?.parenthetical?.length > 0) {
-                    captionParts.push(`(${analysis.prosody.parenthetical})`);
-                }
-
-                // Sanitize caption: remove AI filler/literalisms
-                const sanitizedParts = captionParts.map(part => {
-                    return part
-                        .replace(/Note: The image is a screenshot from a tutorial video, showing /gi, '')
-                        .replace(/This frame shows /gi, '')
-                        .replace(/In this frame, /gi, '')
-                        .replace(/The image shows /gi, '')
-                        .replace(/\. \(Note:.*?\)$/gi, '.')
-                        .trim();
-                }).filter(part => part.length > 0);
-
-                const compositeCaption = sanitizedParts.join(' | ');
-                if (compositeCaption) {
-                    if (aiFidelityMode) {
-                        const hasFocus = analysis?.emphasisFlags?.cursor_pause || analysis?.emphasisFlags?.zoom_focus;
-                        const truncated = compositeCaption.length > 500
-                            ? compositeCaption.substring(0, 497) + '...'
-                            : compositeCaption;
-
-                        const label = hasFocus ? 'ONE DUO SENSORY DATA [CRITICAL FOCUS]:' : 'ONE DUO SENSORY DATA:';
-                        const textToDraw = `${label} "${truncated}"`;
-                        const fontSize = 7;
-
-                        // Simple wrap logic to calculate box height
-                        const words = textToDraw.split(' ');
-                        let lines = 0;
-                        let line = '';
-                        for (const word of words) {
-                            const testLine = line ? `${line} ${word}` : word;
-                            if (font.widthOfTextAtSize(testLine, fontSize) > CONTENT_WIDTH - 10) {
-                                lines++;
-                                line = word;
-                            } else {
-                                line = testLine;
-                            }
-                        }
-                        if (line) lines++;
-
-                        const rectHeight = (lines * (fontSize * 1.3)) + 8;
-                        ensureSpace(rectHeight + 5);
-
-                        if (hasFocus) {
-                            currentPage.drawRectangle({
-                                x: MARGIN,
-                                y: y - rectHeight,
-                                width: CONTENT_WIDTH,
-                                height: rectHeight,
-                                color: rgb(1, 1, 0.94),
-                                borderColor: rgb(0.8, 0.7, 0),
-                                borderWidth: 0.5,
-                            });
-                        } else {
-                            currentPage.drawRectangle({
-                                x: MARGIN,
-                                y: y - rectHeight,
-                                width: CONTENT_WIDTH,
-                                height: rectHeight,
-                                color: rgb(0.98, 0.98, 1),
-                                borderColor: rgb(0.8, 0.8, 1),
-                                borderWidth: 0.5,
-                            });
-                        }
-
-                        y -= 2; // padding top
-                        drawWrappedText(textToDraw, {
-                            x: MARGIN + 5,
-                            size: fontSize,
-                            usedFont: italicFont,
-                            color: hasFocus ? rgb(0.4, 0.2, 0) : rgb(0.2, 0.2, 0.4),
-                            maxWidth: CONTENT_WIDTH - 10
-                        });
-                        y -= 4; // padding bottom
-                        y -= 4; // padding bottom
-                    } else {
-                        const truncated = compositeCaption.length > 300
-                            ? compositeCaption.substring(0, 297) + '...'
-                            : compositeCaption;
-                        drawWrappedText(`Visual Transcription: ${truncated}`, {
-                            size: 7, usedFont: italicFont, color: rgb(0.3, 0.3, 0.3),
-                        });
-                        y -= 5;
-                    }
+                    if (line) lines++;
+                    const rectHeight = (lines * (fontSize * 1.3)) + 8;
+                    ensureSpace(rectHeight + 5);
+                    currentPage.drawRectangle({
+                        x: MARGIN, y: y - rectHeight, width: CONTENT_WIDTH, height: rectHeight,
+                        color: rgb(0.95, 0.95, 0.95),
+                        borderColor: rgb(0.75, 0.75, 0.75),
+                        borderWidth: 0.5,
+                    });
+                    y -= 2;
+                    drawWrappedText(`"${truncated}"`, {
+                        x: MARGIN + 5, size: fontSize, usedFont: italicFont,
+                        color: rgb(0.15, 0.15, 0.15), maxWidth: CONTENT_WIDTH - 10,
+                    });
+                    y -= 4;
                 }
             }
         }
@@ -1105,7 +837,7 @@ async function buildPreamblePDF(
         y -= 16;
     }
 
-    // ---- PER-MODULE: AI Knowledge Layer + Full Verbatim Transcript ----
+    // ---- PER-MODULE: AI Knowledge Layer + Reasoning Layer + Full Verbatim Transcript ----
     const klSections = [
         { key: 'primary_topic',        label: 'PRIMARY TOPIC' },
         { key: 'outcome',              label: 'OUTCOME' },
@@ -1119,16 +851,16 @@ async function buildPreamblePDF(
         { key: 'cross_module_links',   label: 'CROSS-MODULE LINK OPPORTUNITIES' },
         { key: 'important_quotes',     label: 'IMPORTANT QUOTES' },
         { key: 'prompt_starters',      label: 'PROMPT STARTERS FOR AI' },
-        { key: 'decision_rules',       label: 'DECISION RULES' },
+        { key: 'concept_tags',         label: 'CONCEPT TAGS' },
         { key: 'retrieval_tags',       label: 'RETRIEVAL TAGS' },
     ];
 
     const reasoningSections = [
-        { key: 'reasoning_patterns',    label: 'REASONING PATTERNS' },
-        { key: 'speaker_belief_system', label: 'SPEAKER BELIEF SYSTEM' },
-        { key: 'cause_effect_chains',   label: 'CAUSE & EFFECT CHAINS' },
-        { key: 'hidden_patterns',       label: 'HIDDEN PATTERNS' },
-        { key: 'concept_tags',          label: 'CONCEPT TAGS' },
+        { key: 'decision_rules',       label: 'DECISION RULES' },
+        { key: 'reasoning_patterns',   label: 'REASONING PATTERNS' },
+        { key: 'speaker_belief_system',label: 'SPEAKER BELIEF SYSTEM' },
+        { key: 'cause_effect_chains',  label: 'CAUSE & EFFECT CHAINS' },
+        { key: 'hidden_patterns',      label: 'HIDDEN PATTERNS' },
     ];
 
     for (let i = 0; i < modules.length; i++) {
@@ -1148,13 +880,14 @@ async function buildPreamblePDF(
             y -= 18;
         }
 
-        // ── AI KNOWLEDGE LAYER ───────────────────────────────────────────────
+        // AI KNOWLEDGE LAYER
         const kl = mod.knowledge_layer;
         if (kl) {
-            newPage();
-            currentPage.drawRectangle({ x: MARGIN, y: y - 5, width: CONTENT_WIDTH, height: 24, color: rgb(0, 0.47, 0.75) });
-            currentPage.drawText('AI KNOWLEDGE LAYER', { x: MARGIN + 5, y: y + 3, size: 13, font: boldFont, color: rgb(1, 1, 1) });
-            y -= 30;
+            ensureSpace(30);
+            currentPage.drawLine({ start: { x: MARGIN, y }, end: { x: MARGIN + CONTENT_WIDTH, y }, thickness: 0.5, color: rgb(0, 0, 0) });
+            y -= 10;
+            currentPage.drawText('AI KNOWLEDGE LAYER', { x: MARGIN, y, size: 13, font: boldFont, color: rgb(0, 0, 0) });
+            y -= 14;
 
             for (const { key, label } of klSections) {
                 const rawVal = (kl as any)[key];
@@ -1163,24 +896,24 @@ async function buildPreamblePDF(
                 if (!val.trim()) continue;
 
                 ensureSpace(20);
-                currentPage.drawText(label, { x: MARGIN, y, size: 11, font: boldFont, color: rgb(0, 0.47, 0.75) });
+                currentPage.drawText(label, { x: MARGIN, y, size: 11, font: boldFont, color: rgb(0, 0, 0) });
                 y -= 12;
                 drawWrappedText(val, { x: MARGIN + 3, size: 9, color: rgb(0.1, 0.1, 0.1) });
                 y -= 6;
             }
-            y -= 10;
+            y -= 6;
 
-            // ── REASONING LAYER ──────────────────────────────────────────────
-            const hasReasoningData = reasoningSections.some(({ key }) => {
+            // REASONING LAYER
+            const hasReasoning = reasoningSections.some(({ key }) => {
                 const v = (kl as any)[key];
-                return v && String(v).trim().length > 0;
+                return v && String(v).trim();
             });
-
-            if (hasReasoningData) {
-                newPage();
-                currentPage.drawRectangle({ x: MARGIN, y: y - 5, width: CONTENT_WIDTH, height: 24, color: rgb(0.4, 0.1, 0.7) });
-                currentPage.drawText('REASONING LAYER', { x: MARGIN + 5, y: y + 3, size: 13, font: boldFont, color: rgb(1, 1, 1) });
-                y -= 30;
+            if (hasReasoning) {
+                ensureSpace(30);
+                currentPage.drawLine({ start: { x: MARGIN, y }, end: { x: MARGIN + CONTENT_WIDTH, y }, thickness: 0.5, color: rgb(0, 0, 0) });
+                y -= 10;
+                currentPage.drawText('REASONING LAYER', { x: MARGIN, y, size: 13, font: boldFont, color: rgb(0, 0, 0) });
+                y -= 14;
 
                 for (const { key, label } of reasoningSections) {
                     const rawVal = (kl as any)[key];
@@ -1189,12 +922,12 @@ async function buildPreamblePDF(
                     if (!val.trim()) continue;
 
                     ensureSpace(20);
-                    currentPage.drawText(label, { x: MARGIN, y, size: 11, font: boldFont, color: rgb(0.4, 0.1, 0.7) });
+                    currentPage.drawText(label, { x: MARGIN, y, size: 11, font: boldFont, color: rgb(0, 0, 0) });
                     y -= 12;
                     drawWrappedText(val, { x: MARGIN + 3, size: 9, color: rgb(0.1, 0.1, 0.1) });
                     y -= 6;
                 }
-                y -= 10;
+                y -= 6;
             }
 
             // Divider before transcript
@@ -1227,15 +960,10 @@ async function buildPartPDF(
     partNumber: number,
     totalParts: number,
     frameUrls: string[],        // already sliced to this part's frames
-    frameAnalyses: any[],       // cached analyses for ALL frames (indexed by global frame index)
     globalFrameOffset: number,  // index of first frame in this part (e.g. 150 for part 2)
     videoDurationSeconds: number,
     userEmail: string,
     transcript: any[],
-    replicate: any,
-    courseId?: string,
-    supabaseClient?: any,
-    totalAllFrames?: number,
 ): Promise<Uint8Array> {
     const pdfDoc = await PDFDocument.create();
     const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
@@ -1312,39 +1040,10 @@ async function buildPartPDF(
     });
     addFooter(currentPage);
 
-    // ---- Analyse frames (use cache if available, else run LLaVA) ----
-    const totalFrames = videoDurationSeconds > 0 ? Math.ceil(videoDurationSeconds) : frameUrls.length;
-    const frameDuration = totalFrames > 0 ? videoDurationSeconds / Math.max(totalFrames, 1) : 1;
+    const frameDuration = videoDurationSeconds > 0 ? videoDurationSeconds / Math.max(frameUrls.length, 1) : 1;
+    console.log(`[buildPartPDF] Part ${partNumber}: rendering ${frameUrls.length} frames`);
 
-    // Build transcript lookup: timestamp (rounded to nearest second) → text
-    const transcriptMap: Record<number, string> = {};
-    for (const seg of (transcript || [])) {
-        const sec = Math.round(seg.start || 0);
-        transcriptMap[sec] = (transcriptMap[sec] ? transcriptMap[sec] + ' ' : '') + (seg.text || '');
-    }
-
-    console.log(`[buildPartPDF] Part ${partNumber}: ${frameUrls.length} frames — pre-fetching images in parallel (20 at a time)`);
-
-    // ---- Pre-fetch all images in parallel batches of 20 ----
-    const FETCH_BATCH = 20;
-    const fetchedImages: (Uint8Array | null)[] = new Array(frameUrls.length).fill(null);
-
-    for (let i = 0; i < frameUrls.length; i += FETCH_BATCH) {
-        const batch = frameUrls.slice(i, i + FETCH_BATCH);
-        const batchResults = await Promise.all(batch.map(async (url) => {
-            try {
-                const response = await fetch(url, { signal: AbortSignal.timeout(15000) });
-                if (response.ok) return new Uint8Array(await response.arrayBuffer());
-                return null;
-            } catch {
-                return null;
-            }
-        }));
-        batchResults.forEach((bytes, bi) => { fetchedImages[i + bi] = bytes; });
-        console.log(`[buildPartPDF] Part ${partNumber}: fetched ${Math.min(i + FETCH_BATCH, frameUrls.length)}/${frameUrls.length} images`);
-    }
-
-    // ---- Render each frame (images already in memory) ----
+    // ---- Render each frame ----
     for (let fi = 0; fi < frameUrls.length; fi++) {
         const frameUrl = frameUrls[fi];
         const globalIdx = globalFrameOffset + fi;
@@ -1358,11 +1057,13 @@ async function buildPartPDF(
         });
         y -= 10;
 
-        // Embed image (already fetched)
-        const imageBytes = fetchedImages[fi];
-        if (imageBytes) {
-            try {
-                const image = frameUrl.includes('.png')
+        // Embed image
+        try {
+            const response = await fetch(frameUrl, { signal: AbortSignal.timeout(10000) });
+            if (response.ok) {
+                const imageBytes = new Uint8Array(await response.arrayBuffer());
+                const contentType = response.headers.get('content-type') || '';
+                const image = contentType.includes('png') || frameUrl.includes('.png')
                     ? await pdfDoc.embedPng(imageBytes)
                     : await pdfDoc.embedJpg(imageBytes);
                 const imgWidth = Math.min(CONTENT_WIDTH, 400);
@@ -1370,32 +1071,46 @@ async function buildPartPDF(
                 ensureSpace(imgHeight + 20);
                 currentPage.drawImage(image, { x: MARGIN, y: y - imgHeight, width: imgWidth, height: imgHeight });
                 y -= imgHeight + 5;
-            } catch {
-                currentPage.drawText('[Frame could not be embedded]', { x: MARGIN, y, size: 7, font: italicFont, color: rgb(0.7, 0.3, 0.3) });
-                y -= 12;
             }
-        } else {
+        } catch {
             currentPage.drawText('[Frame could not be loaded]', { x: MARGIN, y, size: 7, font: italicFont, color: rgb(0.7, 0.3, 0.3) });
             y -= 12;
         }
 
-        // ── Subtitle: what was said at this exact frame ──────────────────────
-        const transcriptText = transcriptMap[Math.round(timestamp)];
-        if (transcriptText) {
-            const subtitleText = safeText(`"${transcriptText.substring(0, 300)}"`);
-            const subtitleFontSize = 9;
-            const estLines = Math.ceil(font.widthOfTextAtSize(subtitleText, subtitleFontSize) / (CONTENT_WIDTH - 20)) + 1;
-            const subtitleHeight = estLines * (subtitleFontSize * 1.4) + 10;
-            ensureSpace(subtitleHeight + 6);
+        // ===== ASSEMBLY AI TRANSCRIPT CAPTION =====
+        const transcriptSegment = (transcript || []).find((seg: any) =>
+            timestamp >= (seg.start || 0) && timestamp <= (seg.end || seg.start || 0)
+        ) || (transcript || []).reduce((closest: any, seg: any) => {
+            if (!closest) return seg;
+            return Math.abs((seg.start || 0) - timestamp) < Math.abs((closest.start || 0) - timestamp) ? seg : closest;
+        }, null);
+        const spokenText: string = transcriptSegment?.text || '';
+        if (spokenText) {
+            const fontSize = 8;
+            const truncated = spokenText.length > 400 ? spokenText.substring(0, 397) + '...' : spokenText;
+            const words = truncated.split(' ');
+            let lines = 0, line = '';
+            for (const word of words) {
+                const testLine = line ? `${line} ${word}` : word;
+                if (font.widthOfTextAtSize(testLine, fontSize) > CONTENT_WIDTH - 10) { lines++; line = word; }
+                else line = testLine;
+            }
+            if (line) lines++;
+            const rectHeight = (lines * (fontSize * 1.3)) + 8;
+            ensureSpace(rectHeight + 5);
             currentPage.drawRectangle({
-                x: MARGIN, y: y - subtitleHeight, width: CONTENT_WIDTH, height: subtitleHeight,
-                color: rgb(0.05, 0.05, 0.05),
+                x: MARGIN, y: y - rectHeight, width: CONTENT_WIDTH, height: rectHeight,
+                color: rgb(0.95, 0.95, 0.95),
+                borderColor: rgb(0.75, 0.75, 0.75),
+                borderWidth: 0.5,
             });
             y -= 2;
-            drawWrappedText(subtitleText, { x: MARGIN + 8, size: subtitleFontSize, usedFont: italicFont, color: rgb(1, 1, 1), maxWidth: CONTENT_WIDTH - 16 });
-            y -= 6;
+            drawWrappedText(`"${truncated}"`, {
+                x: MARGIN + 5, size: fontSize, usedFont: italicFont,
+                color: rgb(0.15, 0.15, 0.15), maxWidth: CONTENT_WIDTH - 10,
+            });
+            y -= 4;
         }
-
     }
 
     addFooter(currentPage);
@@ -1449,8 +1164,6 @@ serve(async (req) => {
         // Do the heavy work in the background
         const backgroundWork = async () => {
             const supabase = createClient(supabaseUrl, supabaseServiceKey);
-            const REPLICATE_API_TOKEN = Deno.env.get("REPLICATE_API_TOKEN") || Deno.env.get("REPLICATE_API_KEY");
-            const replicate = REPLICATE_API_TOKEN ? new Replicate({ auth: REPLICATE_API_TOKEN }) : null;
 
             // ========== SHARED: FETCH COURSE + MODULES ==========
             const fetchCourseData = async () => {
@@ -1472,9 +1185,6 @@ serve(async (req) => {
                 const allFrameUrls: string[] = isSingleModule
                     ? (course.frame_urls || [])
                     : courseModules!.flatMap((m: any) => m.frame_urls || []);
-                const allFrameAnalyses: any[] = isSingleModule
-                    ? (course.frame_analyses || [])
-                    : courseModules!.flatMap((m: any) => m.frame_analyses || []);
                 const videoDuration: number = isSingleModule
                     ? sanitizeDuration(course.video_duration_seconds || 0, allFrameUrls.length)
                     : courseModules!.reduce((sum: number, m: any) => sum + sanitizeDuration(m.video_duration_seconds || 0, (m.frame_urls || []).length), 0);
@@ -1487,7 +1197,7 @@ serve(async (req) => {
                     ? [{ ...course, module_number: 1 }]
                     : courseModules!.map((m: any) => ({ ...m, knowledge_layer: m.knowledge_layer || null }));
 
-                return { course, isSingleModule, courseModules, allFrameUrls, allFrameAnalyses, videoDuration, transcript, preambleModules };
+                return { course, isSingleModule, courseModules, allFrameUrls, videoDuration, transcript, preambleModules };
             };
 
             // ========== ACTION: generateAll ==========
@@ -1501,26 +1211,43 @@ serve(async (req) => {
                         .single();
 
                     if (klCheck?.knowledge_layer_status !== 'complete') {
-                        console.log(`[generate-pdf-backend] Knowledge layer not ready (${klCheck?.knowledge_layer_status}) — auto-generating...`);
-                        try {
-                            const klResp = await fetch(`${supabaseUrl}/functions/v1/generate-knowledge-layer`, {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${supabaseServiceKey}` },
-                                body: JSON.stringify({ courseId }),
-                            });
-                            if (klResp.ok) {
-                                console.log(`[generate-pdf-backend] Knowledge layer auto-generated successfully`);
-                            } else {
-                                console.warn(`[generate-pdf-backend] Knowledge layer auto-generation failed (non-blocking): ${await klResp.text()}`);
+                        // If not already running, trigger generation
+                        if (klCheck?.knowledge_layer_status !== 'generating') {
+                            console.log(`[generate-pdf-backend] Knowledge layer not ready (${klCheck?.knowledge_layer_status}) — triggering generation...`);
+                            try {
+                                await fetch(`${supabaseUrl}/functions/v1/generate-knowledge-layer`, {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${supabaseServiceKey}` },
+                                    body: JSON.stringify({ courseId }),
+                                });
+                            } catch (klErr) {
+                                console.warn(`[generate-pdf-backend] Knowledge layer trigger error:`, klErr);
                             }
-                        } catch (klErr) {
-                            console.warn(`[generate-pdf-backend] Knowledge layer auto-generation error (non-blocking):`, klErr);
+                        } else {
+                            console.log(`[generate-pdf-backend] Knowledge layer already generating — waiting for it to complete...`);
+                        }
+
+                        // Poll until complete or timeout (3 minutes)
+                        const maxWaitMs = 3 * 60 * 1000;
+                        const pollInterval = 5000;
+                        const startWait = Date.now();
+                        let klStatus = klCheck?.knowledge_layer_status;
+                        while (klStatus !== 'complete' && Date.now() - startWait < maxWaitMs) {
+                            await new Promise(r => setTimeout(r, pollInterval));
+                            const { data: klPoll } = await supabase.from('courses').select('knowledge_layer_status').eq('id', courseId).single();
+                            klStatus = klPoll?.knowledge_layer_status;
+                            console.log(`[generate-pdf-backend] Knowledge layer status: ${klStatus} (${Math.round((Date.now() - startWait) / 1000)}s elapsed)`);
+                        }
+                        if (klStatus === 'complete') {
+                            console.log(`[generate-pdf-backend] Knowledge layer complete — proceeding with PDF generation`);
+                        } else {
+                            console.warn(`[generate-pdf-backend] Knowledge layer did not complete within 3 minutes — proceeding anyway`);
                         }
                     } else {
                         console.log(`[generate-pdf-backend] Knowledge layer already complete — skipping auto-generation`);
                     }
 
-                    let { course, allFrameUrls, allFrameAnalyses, videoDuration, transcript, preambleModules } = await fetchCourseData();
+                    let { course, allFrameUrls, videoDuration, transcript, preambleModules } = await fetchCourseData();
                     const userEmail = email || course.email || '';
                     const totalFrames = allFrameUrls.length;
                     const totalParts = Math.ceil(totalFrames / framesPerPart);
@@ -1566,6 +1293,17 @@ serve(async (req) => {
 
                     // Build any missing parts first (storage uploads happen inline so retries can resume)
                     for (let part = 1; part <= totalParts; part++) {
+                        // Check if generation was cancelled via SQL between parts
+                        const { data: statusCheck } = await supabase
+                            .from('courses')
+                            .select('pdf_generation_status')
+                            .eq('id', courseId)
+                            .single();
+                        if (statusCheck?.pdf_generation_status === 'cancelled' || statusCheck?.pdf_generation_status === 'failed') {
+                            console.log(`[generate-pdf-backend] Generation stopped (status: ${statusCheck.pdf_generation_status}) — exiting at part ${part}`);
+                            return;
+                        }
+
                         if (completedPartsSet.has(part)) {
                             console.log(`[generate-pdf-backend] Part ${part}/${totalParts} already completed — skipping build.`);
                             continue;
@@ -1586,15 +1324,10 @@ serve(async (req) => {
                             part,
                             totalParts,
                             partFrameUrls,
-                            allFrameAnalyses,
                             startIdx,
                             videoDuration,
                             userEmail,
                             transcript,
-                            replicate,
-                            courseId,
-                            supabase,
-                            totalFrames,
                         );
 
                         const partStoragePath = `exports/${courseId}/parts/part_${part}_of_${totalParts}.pdf`;
@@ -1620,7 +1353,6 @@ serve(async (req) => {
                     }
                     (course as any) = null;
                     (allFrameUrls as any) = null;
-                    (allFrameAnalyses as any) = null;
                     (videoDuration as any) = null;
                     (transcript as any) = null;
 
@@ -1792,86 +1524,7 @@ serve(async (req) => {
 
                 console.log(`[generate-pdf-backend] ${modules.length} module(s), single=${isSingleModule}`);
 
-                // ========== 3. RUN FRAME OCR IF NOT CACHED ==========
-                // replicate is already initialised at the top of backgroundWork
-
-                for (const mod of modules) {
-                    const frameUrls = mod.frame_urls || [];
-                    const existingAnalyses = mod.frame_analyses || [];
-                    const isPeakMode = aiFidelityMode === 'peak' || aiFidelityMode === true;
-
-                    // Skip OCR if already cached (unless Peak/High-Fidelity mode is requested)
-                    if (existingAnalyses.length > 0 && !isPeakMode) {
-                        console.log(`[generate-pdf-backend] Module "${mod.title}": using ${existingAnalyses.length} cached frame analyses`);
-                    } else {
-                        if (existingAnalyses.length > 0 && isPeakMode) {
-                            console.log(`[generate-pdf-backend] Module "${mod.title}": bypassing ${existingAnalyses.length} cached analyses for PEAK mode re-analysis`);
-                        }
-
-                        if (frameUrls.length > 0 && replicate) {
-                            // Sample frames for OCR (max 50 to keep within timeout)
-                            const maxOcrFrames = 50;
-                            const sampledForOcr = sampleFramesEvenly(frameUrls, maxOcrFrames);
-
-                            const transcriptContext = (mod.transcript || [])
-                                .slice(0, 50)
-                                .map((t: any) => t.text || '')
-                                .join(' ')
-                                .substring(0, 2000);
-
-                            console.log(`[generate-pdf-backend] Module "${mod.title}": running OCR on ${sampledForOcr.length} frames...`);
-
-                            const analyses = await analyzeFramesWithReplicate(
-                                sampledForOcr,
-                                sanitizeDuration(mod.video_duration_seconds || 0, sampledForOcr.length),
-                                transcriptContext,
-                                replicate,
-                                20 // batch size — moondream2 supports 20 concurrent
-                            );
-
-                            mod.frame_analyses = analyses;
-
-                            // Cache results in DB for future use
-                            const table = isSingleModule ? "courses" : "course_modules";
-                            await supabase
-                                .from(table)
-                                .update({ frame_analyses: analyses })
-                                .eq("id", mod.id);
-                        }
-                    }
-
-                    // AUDIO RE-ANALYSIS FOR PEAK MODE
-                    if (isPeakMode && mod.transcript?.length > 0 && replicate) {
-                        console.log(`[generate-pdf-backend] Module "${mod.title}": re-analyzing audio for PEAK fidelity...`);
-                        try {
-                            const [prosodyResp, eventsResp] = await Promise.all([
-                                supabase.functions.invoke('analyze-audio-prosody', {
-                                    body: { videoUrl: mod.frame_urls?.[0]?.replace('frame_0000.jpg', 'video.mp4'), transcript: mod.transcript, videoDuration: mod.video_duration_seconds, courseTitle: mod.title }
-                                }),
-                                supabase.functions.invoke('analyze-audio-events', {
-                                    body: { videoUrl: mod.frame_urls?.[0]?.replace('frame_0000.jpg', 'video.mp4'), transcript: mod.transcript, videoDuration: mod.video_duration_seconds, courseTitle: mod.title }
-                                })
-                            ]);
-
-                            if (prosodyResp.data) mod.prosody_annotations = prosodyResp.data;
-                            if (eventsResp.data) mod.audio_events = eventsResp.data;
-
-                            // Cache audio results
-                            const table = isSingleModule ? "courses" : "course_modules";
-                            await supabase
-                                .from(table)
-                                .update({
-                                    prosody_annotations: prosodyResp.data,
-                                    audio_events: eventsResp.data
-                                })
-                                .eq("id", mod.id);
-                        } catch (ae) {
-                            console.error(`[generate-pdf-backend] Audio re-analysis failed:`, ae);
-                        }
-                    }
-                }
-
-                // ========== 4. LOAD SUPPLEMENTAL FILES ==========
+                // ========== 3. LOAD SUPPLEMENTAL FILES ==========
                 let supplementalFiles: any[] = [];
                 const courseFiles = (course.course_files as any[]) || [];
                 const textFiles = courseFiles.filter((f: any) => {
