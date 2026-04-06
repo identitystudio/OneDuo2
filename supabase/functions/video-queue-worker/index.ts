@@ -690,12 +690,18 @@ async function processVideoJobBatched(
 
   // ========== PHASE 5: KNOWLEDGE LAYER GENERATION ==========
   // Non-blocking — fires after PDF + intent detection.
-  // Calls generate-knowledge-layer which uses Replicate (Llama 3) to produce
-  // the 17-section structured AI thinking layer and stores it on the course row.
   try {
+    // Read content_type from the course row to determine film vs course mode
+    const { data: courseRow } = await supabase
+      .from('courses')
+      .select('content_type')
+      .eq('id', courseId)
+      .maybeSingle();
+    const contentType = courseRow?.content_type || 'course';
+
     await logJobEvent(supabase, job.job_id, 'knowledge_layer_start', 'info',
       'Starting OneDuo™ Knowledge Layer generation', undefined, undefined,
-      { courseId, moduleId: moduleId || null, fps: EXTRACTION_FPS }
+      { courseId, moduleId: moduleId || null, fps: EXTRACTION_FPS, contentType }
     );
 
     const klResponse = await fetch(`${supabaseUrl}/functions/v1/generate-knowledge-layer`, {
@@ -704,7 +710,7 @@ async function processVideoJobBatched(
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${supabaseServiceKey}`
       },
-      body: JSON.stringify({ courseId, moduleId: moduleId || undefined })
+      body: JSON.stringify({ courseId, moduleId: moduleId || undefined, contentType })
     });
 
     if (klResponse.ok) {

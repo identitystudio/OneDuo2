@@ -458,6 +458,11 @@ async function buildPDF(
 
         // ========== VISUAL FRAMES ==========
         const frameUrls = mod.frame_urls || [];
+        // Film visual analysis: stored as frame_analyses.film_visual by generate-knowledge-layer
+        const filmVisualLines: string[] = typeof mod.frame_analyses?.film_visual === 'string'
+            ? mod.frame_analyses.film_visual.split('\n\n').filter((l: string) => l.trim())
+            : [];
+        const isFilmMode = filmVisualLines.length > 0;
 
         if (frameUrls.length > 0) {
             ensureSpace(30);
@@ -515,17 +520,25 @@ async function buildPDF(
                     y -= 12;
                 }
 
-                // ===== ASSEMBLY AI TRANSCRIPT CAPTION =====
-                const transcriptSegment = transcript.find((seg: any) =>
-                    timestamp >= (seg.start || 0) && timestamp <= (seg.end || seg.start || 0)
-                ) || transcript.reduce((closest: any, seg: any) => {
-                    if (!closest) return seg;
-                    return Math.abs((seg.start || 0) - timestamp) < Math.abs((closest.start || 0) - timestamp) ? seg : closest;
-                }, null);
-                const spokenText: string = transcriptSegment?.text || '';
-                if (spokenText) {
+                // ===== FRAME CAPTION: film visual analysis OR AssemblyAI transcript =====
+                let captionText = '';
+                if (isFilmMode && filmVisualLines[fi]) {
+                    // Film mode: use visual scene analysis stored by generate-knowledge-layer
+                    captionText = filmVisualLines[fi].replace(/^\[\d+:\d+(?::\d+)?\]\s*/, '').trim();
+                } else {
+                    // Course mode: use AssemblyAI transcript anchored to timestamp
+                    const transcriptSegment = transcript.find((seg: any) =>
+                        timestamp >= (seg.start || 0) && timestamp <= (seg.end || seg.start || 0)
+                    ) || transcript.reduce((closest: any, seg: any) => {
+                        if (!closest) return seg;
+                        return Math.abs((seg.start || 0) - timestamp) < Math.abs((closest.start || 0) - timestamp) ? seg : closest;
+                    }, null);
+                    captionText = transcriptSegment?.text || '';
+                }
+
+                if (captionText) {
                     const fontSize = 8;
-                    const truncated = spokenText.length > 400 ? spokenText.substring(0, 397) + '...' : spokenText;
+                    const truncated = captionText.length > 400 ? captionText.substring(0, 397) + '...' : captionText;
                     const words = truncated.split(' ');
                     let lines = 0, line = '';
                     for (const word of words) {
@@ -538,14 +551,15 @@ async function buildPDF(
                     ensureSpace(rectHeight + 5);
                     currentPage.drawRectangle({
                         x: MARGIN, y: y - rectHeight, width: CONTENT_WIDTH, height: rectHeight,
-                        color: rgb(0.95, 0.95, 0.95),
-                        borderColor: rgb(0.75, 0.75, 0.75),
+                        color: isFilmMode ? rgb(0.95, 0.92, 0.98) : rgb(0.95, 0.95, 0.95),
+                        borderColor: isFilmMode ? rgb(0.6, 0.4, 0.8) : rgb(0.75, 0.75, 0.75),
                         borderWidth: 0.5,
                     });
                     y -= 2;
-                    drawWrappedText(`"${truncated}"`, {
+                    drawWrappedText(isFilmMode ? truncated : `"${truncated}"`, {
                         x: MARGIN + 5, size: fontSize, usedFont: italicFont,
-                        color: rgb(0.15, 0.15, 0.15), maxWidth: CONTENT_WIDTH - 10,
+                        color: isFilmMode ? rgb(0.3, 0.1, 0.4) : rgb(0.15, 0.15, 0.15),
+                        maxWidth: CONTENT_WIDTH - 10,
                     });
                     y -= 4;
                 }
@@ -1206,7 +1220,7 @@ serve(async (req) => {
                     // Auto-generate knowledge layer if not already complete
                     const { data: klCheck } = await supabase
                         .from('courses')
-                        .select('knowledge_layer_status')
+                        .select('knowledge_layer_status, content_type')
                         .eq('id', courseId)
                         .single();
 
@@ -1218,7 +1232,7 @@ serve(async (req) => {
                                 await fetch(`${supabaseUrl}/functions/v1/generate-knowledge-layer`, {
                                     method: 'POST',
                                     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${supabaseServiceKey}` },
-                                    body: JSON.stringify({ courseId }),
+                                    body: JSON.stringify({ courseId, contentType: klCheck?.content_type || 'course' }),
                                 });
                             } catch (klErr) {
                                 console.warn(`[generate-pdf-backend] Knowledge layer trigger error:`, klErr);
