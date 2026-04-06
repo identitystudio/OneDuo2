@@ -89,9 +89,6 @@ export default function Upload() {
   // Processing mode: false = Fast (1 FPS), true = Precision (3 FPS)
   const [precisionMode, setPrecisionMode] = useState(false);
 
-  // Content type: course/training vs film/tv show
-  const [contentType, setContentType] = useState<'course' | 'film'>('course');
-
   // Merged Course Mode: All videos become chapters in ONE unified PDF
   // When true: One PDF with TOC + chapters, single completion email
   // When false (default): Separate artifacts per module, per-module emails
@@ -492,7 +489,6 @@ export default function Upload() {
     // If adding to existing course, pass the existingCourseId
     const result = await submitBatch(modules, email, courseTitle, {
       extractionFps: precisionMode ? 3 : 1, // Fast Mode = 1 FPS, Precision Mode = 3 FPS
-      contentType,
       teamNotificationEmail: teamNotificationEmail || undefined,
       teamNotificationRole: teamNotificationRole || undefined,
       courseFiles: courseFileUrls.length > 0 ? courseFileUrls : undefined,
@@ -878,34 +874,6 @@ export default function Upload() {
                         className={cn(
                           "inline-block h-4 w-4 transform rounded-full bg-white transition-transform",
                           precisionMode ? "translate-x-6" : "translate-x-1"
-                        )}
-                      />
-                    </button>
-                  </div>
-
-                  {/* Content Type Toggle */}
-                  <div className="flex items-center justify-between p-3 rounded-lg bg-muted/30 border border-border">
-                    <div className="flex flex-col">
-                      <span className="text-sm text-foreground">
-                        {contentType === 'film' ? 'Film / TV Show' : 'Course / Training'}
-                      </span>
-                      <span className="text-xs text-muted-foreground">
-                        {contentType === 'film'
-                          ? 'Enables cinematic analysis & screenplay blueprint'
-                          : 'Knowledge & reasoning layer for learning content'}
-                      </span>
-                    </div>
-                    <button
-                      onClick={() => setContentType(contentType === 'course' ? 'film' : 'course')}
-                      className={cn(
-                        "relative inline-flex h-6 w-11 items-center rounded-full transition-colors flex-shrink-0",
-                        contentType === 'film' ? "bg-purple-500" : "bg-primary"
-                      )}
-                    >
-                      <span
-                        className={cn(
-                          "inline-block h-4 w-4 transform rounded-full bg-white transition-transform",
-                          contentType === 'film' ? "translate-x-6" : "translate-x-1"
                         )}
                       />
                     </button>

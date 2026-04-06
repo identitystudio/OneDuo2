@@ -107,80 +107,6 @@ function buildFrameSummary(frames: any[], fps: number): string {
   return segments.slice(0, 300).join("\n");
 }
 
-// ── Film: visual frame analysis (Claude Haiku, 100 frames, 5 per call) ────────
-
-async function analyzeFilmFrames(
-  anthropic: Anthropic,
-  frameUrls: string[],
-  videoDurationSeconds: number,
-): Promise<string> {
-  const MAX_FRAMES = 100;
-  const FRAMES_PER_CALL = 5;
-
-  const sampled = frameUrls.length <= MAX_FRAMES
-    ? frameUrls
-    : Array.from({ length: MAX_FRAMES }, (_, i) =>
-        frameUrls[Math.round(i * (frameUrls.length - 1) / (MAX_FRAMES - 1))]);
-
-  const frameDuration = videoDurationSeconds / Math.max(frameUrls.length, 1);
-  const results: string[] = [];
-
-  // Process FRAMES_PER_CALL frames per API call — 100 frames = 20 calls
-  for (let i = 0; i < sampled.length; i += FRAMES_PER_CALL) {
-    const batch = sampled.slice(i, i + FRAMES_PER_CALL);
-
-    // Build timestamps for this batch
-    const timestamps = batch.map((_, bi) => {
-      const frameIdx = Math.round((i + bi) * (frameUrls.length - 1) / (sampled.length - 1));
-      return formatDuration(Math.round(frameIdx * frameDuration));
-    });
-
-    // Build multi-image message content
-    const content: any[] = [];
-    batch.forEach((url, bi) => {
-      content.push({ type: "image", source: { type: "url", url } });
-      content.push({ type: "text", text: `Frame ${i + bi + 1} | Timestamp: ${timestamps[bi]}` });
-    });
-    content.push({
-      type: "text",
-      text: `Analyze all ${batch.length} film frames above in order. Return ONLY a JSON array with one object per frame:
-[{"timestamp":"HH:MM:SS","shot_type":"close-up|medium|wide|extreme close-up|overhead|POV","mood":"one word","subtext":"what this visual conveys beyond dialogue (1 sentence)","character_state":"visible character expression/posture (1 sentence or empty)","visual_symbol":"any recurring motif or symbol (1 sentence or empty)","lighting":"one word descriptor","pacing":"static|slow|dynamic"}]`
-    });
-
-    for (let attempt = 0; attempt < 5; attempt++) {
-      if (attempt > 0) await new Promise(r => setTimeout(r, Math.min(1000 * Math.pow(2, attempt), 60000)));
-      try {
-        const resp = await anthropic.messages.create({
-          model: "claude-haiku-4-5-20251001",
-          max_tokens: 800,
-          messages: [{ role: "user", content }],
-        });
-        const text = resp.content[0].type === "text" ? resp.content[0].text : "";
-        const clean = text.includes("```json") ? text.split("```json")[1].split("```")[0].trim()
-          : text.includes("```") ? text.split("```")[1].split("```")[0].trim() : text.trim();
-        const parsed: any[] = JSON.parse(clean);
-        parsed.forEach((f, bi) => {
-          const ts = timestamps[bi];
-          results.push(
-            `[${ts}] Shot: ${f.shot_type} | Mood: ${f.mood} | Lighting: ${f.lighting} | Pacing: ${f.pacing}\n  Subtext: ${f.subtext}${f.character_state ? `\n  Characters: ${f.character_state}` : ""}${f.visual_symbol ? `\n  Symbol: ${f.visual_symbol}` : ""}`
-          );
-        });
-        break;
-      } catch (e) {
-        const is429 = String(e).includes("429") || String(e).includes("rate_limit");
-        if (!is429 || attempt === 4) {
-          // On failure push placeholders so frame count stays consistent
-          batch.forEach((_, bi) => results.push(`[${timestamps[bi]}] [frame analysis unavailable]`));
-          break;
-        }
-      }
-    }
-    console.log(`[KnowledgeLayer:Film] Analyzed ${Math.min(i + FRAMES_PER_CALL, sampled.length)}/${sampled.length} frames`);
-  }
-
-  return results.join("\n\n");
-}
-
 // ── Claude call ──────────────────────────────────────────────────────────────
 
 async function callClaude(
@@ -340,117 +266,6 @@ List 10–20 tags.)
 (Flat comma-separated tag list for semantic retrieval)`;
 }
 
-// ── Film-specific prompts ─────────────────────────────────────────────────────
-
-function buildFilmSystemPrompt(): string {
-  return `You are a master screenwriter, film analyst, and story architect.
-
-Your job is to create a structured Film OneDuo — a deep reasoning layer that allows an AI to fully "watch" and understand this film through its transcript and visual frame data, then use that understanding to write new screenplays, transpose stories into new contexts, or analyze narrative structure.
-
-The output must be so detailed that an AI reading it could:
-1. Reconstruct the emotional experience of watching the film
-2. Identify the exact structural blueprint and replicate it in a new setting
-3. Understand every character's psychology deeply enough to write them in a new context
-4. Recognize visual and thematic motifs and transplant them symbolically
-
-OUTPUT FORMAT: Structured Markdown using exact section headings below.
-Be explicit, specific, and timestamp-anchored. Do NOT add meta-commentary — start directly with ## FILM TITLE.`;
-}
-
-function buildFilmUserPrompt(
-  title: string,
-  duration: string,
-  transcriptChunk: string,
-  visualAnalysis: string,
-): string {
-  return `FILM TITLE: ${title}
-RUNTIME: ${duration}
-
---- VISUAL FRAME ANALYSIS (key scenes sampled across full runtime) ---
-${visualAnalysis || "No visual frame data available."}
-
---- TRANSCRIPT (dialogue and narration with timestamps) ---
-${transcriptChunk}
-
----
-
-Produce the Film OneDuo using EXACTLY these sections:
-
-## FILM TITLE
-## RUNTIME
-## GENRE & TONE
-(Genre, subgenre, overall emotional tone, pacing style)
-
-## LOGLINE
-(One sentence: protagonist + goal + obstacle + stakes)
-
-## EXECUTIVE SUMMARY
-(8–12 bullets covering the full story arc from start to finish — include specific plot points and timestamps)
-
-## THREE-ACT STRUCTURE
-(For each act: timestamp range | what happens | dramatic purpose | emotional state of protagonist)
-
-## BEAT SHEET
-(Save the Cat beats mapped to timestamps:
-  Beat name | Timestamp | What happens | Emotional shift)
-
-## SCENE BREAKDOWN
-(For each meaningful scene:
-  Scene # | Timestamp | Location | Characters present | What happens | Dramatic purpose | Emotional beat | Subtext beneath the dialogue)
-
-## CHARACTER ARCS
-(For each major character:
-  Name | Want (conscious goal) | Need (unconscious truth) | Flaw | Wound | Belief | Transformation | Key scene timestamps)
-
-## RELATIONSHIP DYNAMICS
-(For each major character pair:
-  Characters | Starting dynamic | Turning points with timestamps | Final dynamic | Dramatic function)
-
-## DIALOGUE SUBTEXT MAP
-(5–10 key exchanges where what is said ≠ what is meant:
-  Timestamp | What is said | What is actually meant | Why it matters dramatically)
-
-## THEMATIC LAYER
-(Core themes | How each is expressed visually and through dialogue | Timestamp examples)
-
-## VISUAL SYMBOLS & MOTIFS
-(Recurring visual elements and what they represent:
-  Symbol | First appearance timestamp | Recurrences | Meaning | How it evolves)
-
-## EMOTIONAL BEAT MAP
-(Audience emotional journey — map the emotional state the film creates in the viewer:
-  Timestamp range | Intended audience emotion | How it is created | Narrative device used)
-
-## CINEMATIC LANGUAGE
-(Key directorial/visual choices:
-  Timestamp | Shot type | Why this choice | What it communicates beyond dialogue)
-
-## CAUSE & EFFECT CHAINS
-(The story's core logic:
-  [Cause] → [Action] → [Effect] → [Consequence]
-  Produce 5–8 chains that explain why the story unfolds as it does)
-
-## HIDDEN PATTERNS
-(What is operating beneath the surface — psychological, structural, symbolic:
-  Pattern type | Observation | Timestamp evidence | Why it matters)
-
-## BLUEPRINT FOR RECREATION
-(A structural template an AI could follow to transpose this story into a new context:
-  Step 1: [The setup — what elements must be established and why]
-  Step 2: [The inciting incident — what type of disruption is needed]
-  ...continue through all major structural moves...
-  Key rules: [What must be preserved for the story to work in any context]
-  What can be swapped: [Setting, profession, era, genre tone]
-  What cannot be swapped: [Core emotional truth, character wound, thematic stakes])
-
-## PROMPT STARTERS FOR AI
-(10 specific prompts a screenwriter could use with this OneDuo:
-  e.g. "Using the Whiplash OneDuo, write a scene where [X] but instead of drumming, the protagonist is...")
-
-## RETRIEVAL TAGS
-(Flat comma-separated tag list for semantic retrieval)`;
-}
-
 // ── Main handler ─────────────────────────────────────────────────────────────
 
 serve(async (req) => {
@@ -459,8 +274,7 @@ serve(async (req) => {
   }
 
   try {
-    const { courseId, moduleId, contentType = "course" } = await req.json();
-    const isFilm = contentType === "film";
+    const { courseId, moduleId } = await req.json();
     if (!courseId) {
       return new Response(JSON.stringify({ error: "courseId is required" }), {
         status: 400,
@@ -537,47 +351,27 @@ serve(async (req) => {
           console.warn(`[KnowledgeLayer] No transcript found for ${table}:${moduleId || courseId}`);
         }
 
-        let systemPrompt: string;
-        let userPrompt: string;
-
-        if (isFilm) {
-          // ── FILM MODE: visual frame analysis + film-specific prompt ────────
-          const frameUrls: string[] = row.frame_urls || [];
-          console.log(`[KnowledgeLayer:Film] Analyzing ${Math.min(frameUrls.length, 100)} key frames visually (5 per call)...`);
-          const visualAnalysis = frameUrls.length > 0
-            ? await analyzeFilmFrames(anthropic, frameUrls, durationSec)
-            : "No frame data available.";
-
-          // Store visual frame analyses in DB for PDF generation to use
-          if (frameUrls.length > 0) {
-            await supabase.from(table).update({ frame_analyses: { film_visual: visualAnalysis } }).eq("id", moduleId || courseId);
-          }
-
-          systemPrompt = buildFilmSystemPrompt();
-          userPrompt = buildFilmUserPrompt(moduleTitle, durationStr, transcriptChunk, visualAnalysis);
-          console.log(`[KnowledgeLayer:Film] Calling Claude Sonnet 4.6 for film OneDuo...`);
-        } else {
-          // ── COURSE MODE: existing flow ─────────────────────────────────────
-          let frameSummary = "";
-          if (row.frame_urls && Array.isArray(row.frame_urls) && row.frame_urls.length > 0) {
-            const fakFrames = (row.frame_urls as string[]).map((_, idx) => ({ frame_index: idx, ocr_text: "" }));
-            frameSummary = buildFrameSummary(fakFrames, fps);
-          }
-          const { data: afRows } = await supabase
-            .from("artifact_frames")
-            .select("frame_index, ocr_text, timestamp_ms")
-            .eq("artifact_id", moduleId || courseId)
-            .order("frame_index")
-            .limit(500);
-          if (afRows && afRows.length > 0) {
-            frameSummary = buildFrameSummary(afRows, fps);
-          }
-
-          systemPrompt = buildSystemPrompt(fps);
-          userPrompt = buildUserPrompt(moduleTitle, durationStr, transcriptChunk, frameSummary, fps);
-          console.log(`[KnowledgeLayer] Calling Claude Sonnet 4.6 for ${table}:${moduleId || courseId} (background)`);
+        // Frames
+        let frameSummary = "";
+        if (row.frame_urls && Array.isArray(row.frame_urls) && row.frame_urls.length > 0) {
+          const fakFrames = (row.frame_urls as string[]).map((_, idx) => ({ frame_index: idx, ocr_text: "" }));
+          frameSummary = buildFrameSummary(fakFrames, fps);
+        }
+        const { data: afRows } = await supabase
+          .from("artifact_frames")
+          .select("frame_index, ocr_text, timestamp_ms")
+          .eq("artifact_id", moduleId || courseId)
+          .order("frame_index")
+          .limit(500);
+        if (afRows && afRows.length > 0) {
+          frameSummary = buildFrameSummary(afRows, fps);
         }
 
+        // ── Call Claude (no timeout — runs in background) ──────────────────
+        const systemPrompt = buildSystemPrompt(fps);
+        const userPrompt = buildUserPrompt(moduleTitle, durationStr, transcriptChunk, frameSummary, fps);
+
+        console.log(`[KnowledgeLayer] Calling Claude Sonnet 4.6 for ${table}:${moduleId || courseId} (background)`);
         const rawMarkdown = await callClaude(anthropic, systemPrompt, userPrompt);
 
         if (!rawMarkdown || rawMarkdown.trim().length < 100) {

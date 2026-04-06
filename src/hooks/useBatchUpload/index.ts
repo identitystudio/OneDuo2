@@ -421,7 +421,6 @@ export function useBatchUpload() {
               isAudio: m.isAudio || false,
             })),
             extractionFps: options?.extractionFps ?? DEFAULT_EXTRACTION_FPS,
-            contentType: options?.contentType ?? 'course',
             batchId,
             sendPerModuleEmails: !options?.mergedCourseMode,
             mergedCourseMode: options?.mergedCourseMode || false,

@@ -111,11 +111,6 @@ function formatTime(seconds: number): string {
     return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-// Dynamic frame cap: 1 frame per 18s, hard ceiling 500
-function dynamicFrameCap(videoDurationSeconds: number): number {
-    return Math.min(Math.ceil(videoDurationSeconds / 18), 500);
-}
-
 // Sample frames evenly across array
 function sampleFramesEvenly(frames: string[], maxFrames: number): string[] {
     if (!Array.isArray(frames) || frames.length <= maxFrames) return frames || [];
@@ -463,11 +458,6 @@ async function buildPDF(
 
         // ========== VISUAL FRAMES ==========
         const frameUrls = mod.frame_urls || [];
-        // Film visual analysis: stored as frame_analyses.film_visual by generate-knowledge-layer
-        const filmVisualLines: string[] = typeof mod.frame_analyses?.film_visual === 'string'
-            ? mod.frame_analyses.film_visual.split('\n\n').filter((l: string) => l.trim())
-            : [];
-        const isFilmMode = filmVisualLines.length > 0;
 
         if (frameUrls.length > 0) {
             ensureSpace(30);
@@ -476,11 +466,11 @@ async function buildPDF(
             });
             y -= 14;
 
-            const correctedDuration = sanitizeDuration(mod.video_duration_seconds || 0, frameUrls.length);
-            const maxServerFrames = dynamicFrameCap(correctedDuration);
+            // Sample frames (max 50 for server-side to keep PDF size reasonable)
+            const maxServerFrames = 50;
             const sampledFrameUrls = sampleFramesEvenly(frameUrls, maxServerFrames);
+            const correctedDuration = sanitizeDuration(mod.video_duration_seconds || 0, frameUrls.length);
             const frameDuration = correctedDuration > 0 ? correctedDuration / Math.max(frameUrls.length, 1) : 10;
-            console.log(`[buildPDF] ${correctedDuration}s video → ${maxServerFrames} frame cap → ${sampledFrameUrls.length} frames sampled`);
 
             for (let fi = 0; fi < sampledFrameUrls.length; fi++) {
                 const frameUrl = sampledFrameUrls[fi];
@@ -525,25 +515,17 @@ async function buildPDF(
                     y -= 12;
                 }
 
-                // ===== FRAME CAPTION: film visual analysis OR AssemblyAI transcript =====
-                let captionText = '';
-                if (isFilmMode && filmVisualLines[fi]) {
-                    // Film mode: use visual scene analysis stored by generate-knowledge-layer
-                    captionText = filmVisualLines[fi].replace(/^\[\d+:\d+(?::\d+)?\]\s*/, '').trim();
-                } else {
-                    // Course mode: use AssemblyAI transcript anchored to timestamp
-                    const transcriptSegment = transcript.find((seg: any) =>
-                        timestamp >= (seg.start || 0) && timestamp <= (seg.end || seg.start || 0)
-                    ) || transcript.reduce((closest: any, seg: any) => {
-                        if (!closest) return seg;
-                        return Math.abs((seg.start || 0) - timestamp) < Math.abs((closest.start || 0) - timestamp) ? seg : closest;
-                    }, null);
-                    captionText = transcriptSegment?.text || '';
-                }
-
-                if (captionText) {
+                // ===== ASSEMBLY AI TRANSCRIPT CAPTION =====
+                const transcriptSegment = transcript.find((seg: any) =>
+                    timestamp >= (seg.start || 0) && timestamp <= (seg.end || seg.start || 0)
+                ) || transcript.reduce((closest: any, seg: any) => {
+                    if (!closest) return seg;
+                    return Math.abs((seg.start || 0) - timestamp) < Math.abs((closest.start || 0) - timestamp) ? seg : closest;
+                }, null);
+                const spokenText: string = transcriptSegment?.text || '';
+                if (spokenText) {
                     const fontSize = 8;
-                    const truncated = captionText.length > 400 ? captionText.substring(0, 397) + '...' : captionText;
+                    const truncated = spokenText.length > 400 ? spokenText.substring(0, 397) + '...' : spokenText;
                     const words = truncated.split(' ');
                     let lines = 0, line = '';
                     for (const word of words) {
@@ -556,15 +538,14 @@ async function buildPDF(
                     ensureSpace(rectHeight + 5);
                     currentPage.drawRectangle({
                         x: MARGIN, y: y - rectHeight, width: CONTENT_WIDTH, height: rectHeight,
-                        color: isFilmMode ? rgb(0.95, 0.92, 0.98) : rgb(0.95, 0.95, 0.95),
-                        borderColor: isFilmMode ? rgb(0.6, 0.4, 0.8) : rgb(0.75, 0.75, 0.75),
+                        color: rgb(0.95, 0.95, 0.95),
+                        borderColor: rgb(0.75, 0.75, 0.75),
                         borderWidth: 0.5,
                     });
                     y -= 2;
-                    drawWrappedText(isFilmMode ? truncated : `"${truncated}"`, {
+                    drawWrappedText(`"${truncated}"`, {
                         x: MARGIN + 5, size: fontSize, usedFont: italicFont,
-                        color: isFilmMode ? rgb(0.3, 0.1, 0.4) : rgb(0.15, 0.15, 0.15),
-                        maxWidth: CONTENT_WIDTH - 10,
+                        color: rgb(0.15, 0.15, 0.15), maxWidth: CONTENT_WIDTH - 10,
                     });
                     y -= 4;
                 }
@@ -1060,18 +1041,12 @@ async function buildPartPDF(
     addFooter(currentPage);
 
     const frameDuration = videoDurationSeconds > 0 ? videoDurationSeconds / Math.max(frameUrls.length, 1) : 1;
-
-    // Apply dynamic sampling within this part
-    const partDuration = frameUrls.length * frameDuration;
-    const maxPartFrames = dynamicFrameCap(partDuration);
-    const sampledPartUrls = sampleFramesEvenly(frameUrls, maxPartFrames);
-    console.log(`[buildPartPDF] Part ${partNumber}: ${frameUrls.length} frames → ${sampledPartUrls.length} sampled (${Math.round(partDuration)}s)`);
+    console.log(`[buildPartPDF] Part ${partNumber}: rendering ${frameUrls.length} frames`);
 
     // ---- Render each frame ----
-    for (let fi = 0; fi < sampledPartUrls.length; fi++) {
-        const frameUrl = sampledPartUrls[fi];
-        const originalFi = Math.round(fi * (frameUrls.length - 1) / Math.max(sampledPartUrls.length - 1, 1));
-        const globalIdx = globalFrameOffset + originalFi;
+    for (let fi = 0; fi < frameUrls.length; fi++) {
+        const frameUrl = frameUrls[fi];
+        const globalIdx = globalFrameOffset + fi;
         const timestamp = globalIdx * frameDuration;
 
         newPage();
@@ -1231,7 +1206,7 @@ serve(async (req) => {
                     // Auto-generate knowledge layer if not already complete
                     const { data: klCheck } = await supabase
                         .from('courses')
-                        .select('knowledge_layer_status, content_type')
+                        .select('knowledge_layer_status')
                         .eq('id', courseId)
                         .single();
 
@@ -1243,7 +1218,7 @@ serve(async (req) => {
                                 await fetch(`${supabaseUrl}/functions/v1/generate-knowledge-layer`, {
                                     method: 'POST',
                                     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${supabaseServiceKey}` },
-                                    body: JSON.stringify({ courseId, contentType: klCheck?.content_type || 'course' }),
+                                    body: JSON.stringify({ courseId }),
                                 });
                             } catch (klErr) {
                                 console.warn(`[generate-pdf-backend] Knowledge layer trigger error:`, klErr);

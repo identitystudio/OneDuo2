@@ -1129,8 +1129,6 @@ serve(async (req) => {
           mergedCourseMode = false,
           // Control per-module emails (false when merged mode is on)
           sendPerModuleEmails = true,
-          // Content type: 'course' for training/webinars, 'film' for movies/TV shows
-          contentType = 'course',
         } = body;
 
         console.log(`[create-course] NEW COURSE REQUEST - Email: ${email}, Title: ${title}, FPS: ${extractionFps} (${extractionFps === 1 ? 'Fast' : 'Precision'}), UploadId: ${uploadId || 'none'}, MergedMode: ${mergedCourseMode}, VideoUrl: ${videoUrl?.substring(0, 80) || 'multi-module'}...`);
@@ -1192,7 +1190,6 @@ serve(async (req) => {
             video_url: isMultiModule ? null : videoUrl,
             density_mode: densityMode,
             fps_target: validatedFps, // Use validated FPS (1 = standard, 3 = precision/Pro)
-            content_type: contentType === 'film' ? 'film' : 'course',
             status: hasPreExtractedFrames ? "processing" : "queued",
             is_multi_module: isMultiModule,
             module_count: isMultiModule ? modules.length : 1,
