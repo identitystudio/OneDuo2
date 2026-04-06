@@ -111,6 +111,11 @@ function formatTime(seconds: number): string {
     return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
+// Dynamic frame cap: 1 frame per 18s, hard ceiling 500
+function dynamicFrameCap(videoDurationSeconds: number): number {
+    return Math.min(Math.ceil(videoDurationSeconds / 18), 500);
+}
+
 // Sample frames evenly across array
 function sampleFramesEvenly(frames: string[], maxFrames: number): string[] {
     if (!Array.isArray(frames) || frames.length <= maxFrames) return frames || [];
@@ -471,11 +476,11 @@ async function buildPDF(
             });
             y -= 14;
 
-            // Sample frames (max 50 for server-side to keep PDF size reasonable)
-            const maxServerFrames = 50;
-            const sampledFrameUrls = sampleFramesEvenly(frameUrls, maxServerFrames);
             const correctedDuration = sanitizeDuration(mod.video_duration_seconds || 0, frameUrls.length);
+            const maxServerFrames = dynamicFrameCap(correctedDuration);
+            const sampledFrameUrls = sampleFramesEvenly(frameUrls, maxServerFrames);
             const frameDuration = correctedDuration > 0 ? correctedDuration / Math.max(frameUrls.length, 1) : 10;
+            console.log(`[buildPDF] ${correctedDuration}s video → ${maxServerFrames} frame cap → ${sampledFrameUrls.length} frames sampled`);
 
             for (let fi = 0; fi < sampledFrameUrls.length; fi++) {
                 const frameUrl = sampledFrameUrls[fi];
@@ -1055,12 +1060,18 @@ async function buildPartPDF(
     addFooter(currentPage);
 
     const frameDuration = videoDurationSeconds > 0 ? videoDurationSeconds / Math.max(frameUrls.length, 1) : 1;
-    console.log(`[buildPartPDF] Part ${partNumber}: rendering ${frameUrls.length} frames`);
+
+    // Apply dynamic sampling within this part
+    const partDuration = frameUrls.length * frameDuration;
+    const maxPartFrames = dynamicFrameCap(partDuration);
+    const sampledPartUrls = sampleFramesEvenly(frameUrls, maxPartFrames);
+    console.log(`[buildPartPDF] Part ${partNumber}: ${frameUrls.length} frames → ${sampledPartUrls.length} sampled (${Math.round(partDuration)}s)`);
 
     // ---- Render each frame ----
-    for (let fi = 0; fi < frameUrls.length; fi++) {
-        const frameUrl = frameUrls[fi];
-        const globalIdx = globalFrameOffset + fi;
+    for (let fi = 0; fi < sampledPartUrls.length; fi++) {
+        const frameUrl = sampledPartUrls[fi];
+        const originalFi = Math.round(fi * (frameUrls.length - 1) / Math.max(sampledPartUrls.length - 1, 1));
+        const globalIdx = globalFrameOffset + originalFi;
         const timestamp = globalIdx * frameDuration;
 
         newPage();

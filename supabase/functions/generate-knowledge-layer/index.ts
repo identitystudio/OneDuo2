@@ -107,14 +107,16 @@ function buildFrameSummary(frames: any[], fps: number): string {
   return segments.slice(0, 300).join("\n");
 }
 
-// ── Film: visual frame analysis (Claude Haiku, 30 key frames) ────────────────
+// ── Film: visual frame analysis (Claude Haiku, 100 frames, 5 per call) ────────
 
 async function analyzeFilmFrames(
   anthropic: Anthropic,
   frameUrls: string[],
   videoDurationSeconds: number,
 ): Promise<string> {
-  const MAX_FRAMES = 30;
+  const MAX_FRAMES = 100;
+  const FRAMES_PER_CALL = 5;
+
   const sampled = frameUrls.length <= MAX_FRAMES
     ? frameUrls
     : Array.from({ length: MAX_FRAMES }, (_, i) =>
@@ -122,39 +124,58 @@ async function analyzeFilmFrames(
 
   const frameDuration = videoDurationSeconds / Math.max(frameUrls.length, 1);
   const results: string[] = [];
-  const BATCH = 5;
 
-  for (let i = 0; i < sampled.length; i += BATCH) {
-    const batch = sampled.slice(i, i + BATCH);
-    const batchResults = await Promise.all(batch.map(async (url, bi) => {
+  // Process FRAMES_PER_CALL frames per API call — 100 frames = 20 calls
+  for (let i = 0; i < sampled.length; i += FRAMES_PER_CALL) {
+    const batch = sampled.slice(i, i + FRAMES_PER_CALL);
+
+    // Build timestamps for this batch
+    const timestamps = batch.map((_, bi) => {
       const frameIdx = Math.round((i + bi) * (frameUrls.length - 1) / (sampled.length - 1));
-      const timestamp = formatDuration(Math.round(frameIdx * frameDuration));
-      for (let attempt = 0; attempt < 4; attempt++) {
-        if (attempt > 0) await new Promise(r => setTimeout(r, Math.min(1000 * Math.pow(2, attempt), 30000)));
-        try {
-          const resp = await anthropic.messages.create({
-            model: "claude-haiku-4-5-20251001",
-            max_tokens: 300,
-            messages: [{ role: "user", content: [
-              { type: "image", source: { type: "url", url } },
-              { type: "text", text: `Analyze this film frame at timestamp ${timestamp}. Return ONLY a JSON object:
-{"shot_type":"close-up|medium|wide|extreme close-up|overhead|POV","mood":"one word","subtext":"what this visual conveys beyond dialogue (1 sentence)","character_state":"visible character expression/posture (1 sentence or empty)","visual_symbol":"any recurring motif or symbol (1 sentence or empty)","lighting":"one word descriptor","pacing":"static|slow|dynamic"}` }
-            ]}]
-          });
-          const text = resp.content[0].type === "text" ? resp.content[0].text : "";
-          const clean = text.includes("```json") ? text.split("```json")[1].split("```")[0].trim()
-            : text.includes("```") ? text.split("```")[1].split("```")[0].trim() : text.trim();
-          const parsed = JSON.parse(clean);
-          return `[${timestamp}] Shot: ${parsed.shot_type} | Mood: ${parsed.mood} | Lighting: ${parsed.lighting} | Pacing: ${parsed.pacing}\n  Subtext: ${parsed.subtext}${parsed.character_state ? `\n  Characters: ${parsed.character_state}` : ""}${parsed.visual_symbol ? `\n  Symbol: ${parsed.visual_symbol}` : ""}`;
-        } catch (e) {
-          const is429 = String(e).includes("429");
-          if (!is429 || attempt === 3) return `[${timestamp}] [frame analysis unavailable]`;
+      return formatDuration(Math.round(frameIdx * frameDuration));
+    });
+
+    // Build multi-image message content
+    const content: any[] = [];
+    batch.forEach((url, bi) => {
+      content.push({ type: "image", source: { type: "url", url } });
+      content.push({ type: "text", text: `Frame ${i + bi + 1} | Timestamp: ${timestamps[bi]}` });
+    });
+    content.push({
+      type: "text",
+      text: `Analyze all ${batch.length} film frames above in order. Return ONLY a JSON array with one object per frame:
+[{"timestamp":"HH:MM:SS","shot_type":"close-up|medium|wide|extreme close-up|overhead|POV","mood":"one word","subtext":"what this visual conveys beyond dialogue (1 sentence)","character_state":"visible character expression/posture (1 sentence or empty)","visual_symbol":"any recurring motif or symbol (1 sentence or empty)","lighting":"one word descriptor","pacing":"static|slow|dynamic"}]`
+    });
+
+    for (let attempt = 0; attempt < 5; attempt++) {
+      if (attempt > 0) await new Promise(r => setTimeout(r, Math.min(1000 * Math.pow(2, attempt), 60000)));
+      try {
+        const resp = await anthropic.messages.create({
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 800,
+          messages: [{ role: "user", content }],
+        });
+        const text = resp.content[0].type === "text" ? resp.content[0].text : "";
+        const clean = text.includes("```json") ? text.split("```json")[1].split("```")[0].trim()
+          : text.includes("```") ? text.split("```")[1].split("```")[0].trim() : text.trim();
+        const parsed: any[] = JSON.parse(clean);
+        parsed.forEach((f, bi) => {
+          const ts = timestamps[bi];
+          results.push(
+            `[${ts}] Shot: ${f.shot_type} | Mood: ${f.mood} | Lighting: ${f.lighting} | Pacing: ${f.pacing}\n  Subtext: ${f.subtext}${f.character_state ? `\n  Characters: ${f.character_state}` : ""}${f.visual_symbol ? `\n  Symbol: ${f.visual_symbol}` : ""}`
+          );
+        });
+        break;
+      } catch (e) {
+        const is429 = String(e).includes("429") || String(e).includes("rate_limit");
+        if (!is429 || attempt === 4) {
+          // On failure push placeholders so frame count stays consistent
+          batch.forEach((_, bi) => results.push(`[${timestamps[bi]}] [frame analysis unavailable]`));
+          break;
         }
       }
-      return `[${timestamp}] [frame analysis unavailable]`;
-    }));
-    results.push(...batchResults);
-    console.log(`[KnowledgeLayer:Film] Analyzed ${Math.min(i + BATCH, sampled.length)}/${sampled.length} frames`);
+    }
+    console.log(`[KnowledgeLayer:Film] Analyzed ${Math.min(i + FRAMES_PER_CALL, sampled.length)}/${sampled.length} frames`);
   }
 
   return results.join("\n\n");
@@ -522,7 +543,7 @@ serve(async (req) => {
         if (isFilm) {
           // ── FILM MODE: visual frame analysis + film-specific prompt ────────
           const frameUrls: string[] = row.frame_urls || [];
-          console.log(`[KnowledgeLayer:Film] Analyzing ${Math.min(frameUrls.length, 30)} key frames visually...`);
+          console.log(`[KnowledgeLayer:Film] Analyzing ${Math.min(frameUrls.length, 100)} key frames visually (5 per call)...`);
           const visualAnalysis = frameUrls.length > 0
             ? await analyzeFilmFrames(anthropic, frameUrls, durationSec)
             : "No frame data available.";

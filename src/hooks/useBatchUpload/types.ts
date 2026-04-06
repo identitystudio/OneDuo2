@@ -52,6 +52,7 @@ export interface BatchSubmitResult {
 
 export interface BatchSubmitOptions {
   extractionFps?: number;
+  contentType?: 'course' | 'film';
   teamNotificationEmail?: string;
   teamNotificationRole?: string;
   skipIntegrityCheck?: boolean;
