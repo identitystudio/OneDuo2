@@ -698,13 +698,20 @@ async function processVideoJobBatched(
       { courseId, moduleId: moduleId || null, fps: EXTRACTION_FPS }
     );
 
-    // Read content_type so film vs course prompt is used
+    // Read content_type and processing_mode
     const { data: courseRow } = await supabase
       .from('courses')
-      .select('content_type')
+      .select('content_type, processing_mode')
       .eq('id', courseId)
       .maybeSingle();
     const contentType = courseRow?.content_type || 'course';
+
+    // Quick mode skips knowledge layer entirely
+    if (courseRow?.processing_mode === 'quick') {
+      console.log(`[VideoQueueWorker] Quick mode — skipping knowledge layer for course ${courseId}`);
+      await updateProgress(supabase, courseId, moduleId, 100, expectedFrames, pdfPaths[0]);
+      return { success: true };
+    }
 
     const klResponse = await fetch(`${supabaseUrl}/functions/v1/generate-knowledge-layer`, {
       method: 'POST',

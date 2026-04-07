@@ -426,6 +426,7 @@ export function useBatchUpload() {
             mergedCourseMode: options?.mergedCourseMode || false,
             integrityVerified: !options?.skipIntegrityCheck,
             contentType: options?.contentType ?? 'course',
+            processingMode: options?.processingMode ?? 'deep',
             ...(options?.courseFiles && { courseFiles: options.courseFiles }),
             ...(options?.teamNotificationEmail && { teamNotificationEmail: options.teamNotificationEmail }),
             ...(options?.teamNotificationRole && { teamNotificationRole: options.teamNotificationRole }),

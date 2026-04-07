@@ -1131,6 +1131,8 @@ serve(async (req) => {
           sendPerModuleEmails = true,
           // Content type: 'course' (training/webinar) or 'film' (movie/TV show)
           contentType = 'course',
+          // Processing mode: 'quick' (transcript + PDF only) or 'deep' (full knowledge layer)
+          processingMode = 'deep',
         } = body;
 
         console.log(`[create-course] NEW COURSE REQUEST - Email: ${email}, Title: ${title}, FPS: ${extractionFps} (${extractionFps === 1 ? 'Fast' : 'Precision'}), UploadId: ${uploadId || 'none'}, MergedMode: ${mergedCourseMode}, VideoUrl: ${videoUrl?.substring(0, 80) || 'multi-module'}...`);
@@ -1207,6 +1209,8 @@ serve(async (req) => {
             ...(teamNotificationRole && { team_notification_role: teamNotificationRole }),
             // Content type: 'course' (training/webinar) or 'film' (movie/TV show)
             content_type: contentType === 'film' ? 'film' : 'course',
+            // Processing mode: 'quick' (transcript + PDF only) or 'deep' (full knowledge layer)
+            processing_mode: processingMode === 'quick' ? 'quick' : 'deep',
             // Course-level supplementary files
             ...(courseFiles && Array.isArray(courseFiles) && courseFiles.length > 0 && {
               course_files: courseFiles.map((f: any) => ({

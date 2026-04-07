@@ -1209,11 +1209,14 @@ serve(async (req) => {
                     // Auto-generate knowledge layer if not already complete
                     const { data: klCheck } = await supabase
                         .from('courses')
-                        .select('knowledge_layer_status, content_type')
+                        .select('knowledge_layer_status, content_type, processing_mode')
                         .eq('id', courseId)
                         .single();
 
-                    if (klCheck?.knowledge_layer_status !== 'complete') {
+                    // Quick mode: skip knowledge layer entirely
+                    if (klCheck?.processing_mode === 'quick') {
+                        console.log(`[generate-pdf-backend] Quick mode — skipping knowledge layer for course ${courseId}`);
+                    } else if (klCheck?.knowledge_layer_status !== 'complete') {
                         // If not already running, trigger generation
                         if (klCheck?.knowledge_layer_status !== 'generating') {
                             console.log(`[generate-pdf-backend] Knowledge layer not ready (${klCheck?.knowledge_layer_status}) — triggering generation...`);

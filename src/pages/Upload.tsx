@@ -89,6 +89,9 @@ export default function Upload() {
   // Content type: 'course' = Training/Webinar, 'film' = Movie/TV Show
   const [contentType, setContentType] = useState<'course' | 'film'>('course');
 
+  // Processing mode: 'quick' = transcript + PDF only, 'deep' = full knowledge layer
+  const [processingMode, setProcessingMode] = useState<'quick' | 'deep'>('quick');
+
   // Processing mode: false = Fast (1 FPS), true = Precision (3 FPS)
   const [precisionMode, setPrecisionMode] = useState(false);
 
@@ -498,6 +501,7 @@ export default function Upload() {
       existingCourseId: addToExistingCourseId || undefined,
       mergedCourseMode: mergedCourseMode && files.length > 1, // Only for multi-video uploads
       contentType,
+      processingMode,
     });
 
     if (result.success) {
@@ -638,6 +642,38 @@ export default function Upload() {
                       >
                         <Clapperboard className="w-4 h-4" />
                         Film / TV Show
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Processing Mode Toggle */}
+                  {!addToExistingCourseId && (
+                    <div className="flex rounded-xl border border-border bg-card p-1 gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setProcessingMode('quick')}
+                        className={cn(
+                          "flex-1 flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium transition-all duration-200",
+                          processingMode === 'quick'
+                            ? "bg-primary text-primary-foreground shadow-sm"
+                            : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                        )}
+                      >
+                        <ArrowRight className="w-4 h-4" />
+                        Quick — Transcript + PDF
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setProcessingMode('deep')}
+                        className={cn(
+                          "flex-1 flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium transition-all duration-200",
+                          processingMode === 'deep'
+                            ? "bg-primary text-primary-foreground shadow-sm"
+                            : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                        )}
+                      >
+                        <Cloud className="w-4 h-4" />
+                        Deep — Full AI Analysis
                       </button>
                     </div>
                   )}

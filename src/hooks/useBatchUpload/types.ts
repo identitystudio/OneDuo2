@@ -59,6 +59,7 @@ export interface BatchSubmitOptions {
   existingCourseId?: string;
   mergedCourseMode?: boolean;
   contentType?: 'course' | 'film';
+  processingMode?: 'quick' | 'deep';
 }
 
 export interface UploadedModule {
