@@ -111,15 +111,21 @@ function formatTime(seconds: number): string {
     return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-// Sample frames evenly across array
-function sampleFramesEvenly(frames: string[], maxFrames: number): string[] {
-    if (!Array.isArray(frames) || frames.length <= maxFrames) return frames || [];
-    const step = frames.length / maxFrames;
-    const sampled: string[] = [];
-    for (let i = 0; i < maxFrames; i++) {
-        sampled.push(frames[Math.floor(i * step)]);
+// Compress frame URL using Supabase Storage Image Transform API.
+// Swaps /object/ → /render/image/ and appends width + quality params.
+// Falls back to the original URL if the URL is not a Supabase storage URL.
+function compressFrameUrl(url: string, width = 640, quality = 60): string {
+    if (!url || typeof url !== 'string') return url;
+    try {
+        const transformed = url
+            .replace('/storage/v1/object/public/', '/storage/v1/render/image/public/')
+            .replace('/storage/v1/object/sign/', '/storage/v1/render/image/sign/');
+        if (transformed === url) return url; // not a Supabase storage URL
+        const sep = transformed.includes('?') ? '&' : '?';
+        return `${transformed}${sep}width=${width}&quality=${quality}&resize=contain`;
+    } catch {
+        return url;
     }
-    return sampled;
 }
 
 // ============================================
@@ -466,16 +472,13 @@ async function buildPDF(
             });
             y -= 14;
 
-            // Sample frames (max 50 for server-side to keep PDF size reasonable)
-            const maxServerFrames = 50;
-            const sampledFrameUrls = sampleFramesEvenly(frameUrls, maxServerFrames);
             const correctedDuration = sanitizeDuration(mod.video_duration_seconds || 0, frameUrls.length);
             const frameDuration = correctedDuration > 0 ? correctedDuration / Math.max(frameUrls.length, 1) : 10;
+            console.log(`[buildPDF] ${correctedDuration}s video → embedding all ${frameUrls.length} frames`);
 
-            for (let fi = 0; fi < sampledFrameUrls.length; fi++) {
-                const frameUrl = sampledFrameUrls[fi];
-                const originalIndex = Math.floor(fi * (frameUrls.length / sampledFrameUrls.length));
-                const timestamp = originalIndex * frameDuration;
+            for (let fi = 0; fi < frameUrls.length; fi++) {
+                const frameUrl = compressFrameUrl(frameUrls[fi]);
+                const timestamp = fi * frameDuration;
 
                 ensureSpace(80);
 
@@ -1045,7 +1048,7 @@ async function buildPartPDF(
 
     // ---- Render each frame ----
     for (let fi = 0; fi < frameUrls.length; fi++) {
-        const frameUrl = frameUrls[fi];
+        const frameUrl = compressFrameUrl(frameUrls[fi]);
         const globalIdx = globalFrameOffset + fi;
         const timestamp = globalIdx * frameDuration;
 
@@ -1206,7 +1209,7 @@ serve(async (req) => {
                     // Auto-generate knowledge layer if not already complete
                     const { data: klCheck } = await supabase
                         .from('courses')
-                        .select('knowledge_layer_status')
+                        .select('knowledge_layer_status, content_type')
                         .eq('id', courseId)
                         .single();
 
@@ -1218,7 +1221,7 @@ serve(async (req) => {
                                 await fetch(`${supabaseUrl}/functions/v1/generate-knowledge-layer`, {
                                     method: 'POST',
                                     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${supabaseServiceKey}` },
-                                    body: JSON.stringify({ courseId }),
+                                    body: JSON.stringify({ courseId, contentType: klCheck?.content_type || 'course' }),
                                 });
                             } catch (klErr) {
                                 console.warn(`[generate-pdf-backend] Knowledge layer trigger error:`, klErr);

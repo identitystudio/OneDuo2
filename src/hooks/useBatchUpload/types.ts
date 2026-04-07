@@ -58,6 +58,7 @@ export interface BatchSubmitOptions {
   courseFiles?: { name: string; storagePath: string; size: number }[];
   existingCourseId?: string;
   mergedCourseMode?: boolean;
+  contentType?: 'course' | 'film';
 }
 
 export interface UploadedModule {

@@ -153,17 +153,37 @@ serve(async (req: Request) => {
         start: u.start / 1000,
         end: u.end / 1000,
         text: u.text,
+        speaker: u.speaker,
       })) || [];
 
       const audioDuration = transcriptData.audio_duration;
 
-      console.log(`[assemblyai-webhook] Transcription completed: ${segments.length} segments, ${audioDuration}s duration`);
+      // Film-mode audio intelligence: chapters + sentiment
+      const chapters = transcriptData.chapters?.map((c: any) => ({
+        start: c.start / 1000,
+        end: c.end / 1000,
+        headline: c.headline,
+        summary: c.summary,
+        gist: c.gist,
+      })) || [];
 
-      // Update the course/module with transcript
+      const sentimentResults = transcriptData.sentiment_analysis_results?.map((s: any) => ({
+        start: s.start / 1000,
+        end: s.end / 1000,
+        text: s.text,
+        sentiment: s.sentiment,       // POSITIVE | NEUTRAL | NEGATIVE
+        confidence: s.confidence,
+      })) || [];
+
+      console.log(`[assemblyai-webhook] Transcription completed: ${segments.length} segments, ${audioDuration}s, ${chapters.length} chapters, ${sentimentResults.length} sentiment entries`);
+
+      // Update the course/module with transcript + audio intelligence
       await supabase.from(tableName).update({
         transcript: segments,
         video_duration_seconds: audioDuration,
         progress: 20,
+        ...(chapters.length > 0 && { audio_chapters: chapters }),
+        ...(sentimentResults.length > 0 && { audio_sentiment: sentimentResults }),
       }).eq("id", recordId);
 
       // Log completion

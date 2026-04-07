@@ -698,13 +698,21 @@ async function processVideoJobBatched(
       { courseId, moduleId: moduleId || null, fps: EXTRACTION_FPS }
     );
 
+    // Read content_type so film vs course prompt is used
+    const { data: courseRow } = await supabase
+      .from('courses')
+      .select('content_type')
+      .eq('id', courseId)
+      .maybeSingle();
+    const contentType = courseRow?.content_type || 'course';
+
     const klResponse = await fetch(`${supabaseUrl}/functions/v1/generate-knowledge-layer`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${supabaseServiceKey}`
       },
-      body: JSON.stringify({ courseId, moduleId: moduleId || undefined })
+      body: JSON.stringify({ courseId, moduleId: moduleId || undefined, contentType })
     });
 
     if (klResponse.ok) {

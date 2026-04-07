@@ -425,6 +425,7 @@ export function useBatchUpload() {
             sendPerModuleEmails: !options?.mergedCourseMode,
             mergedCourseMode: options?.mergedCourseMode || false,
             integrityVerified: !options?.skipIntegrityCheck,
+            contentType: options?.contentType ?? 'course',
             ...(options?.courseFiles && { courseFiles: options.courseFiles }),
             ...(options?.teamNotificationEmail && { teamNotificationEmail: options.teamNotificationEmail }),
             ...(options?.teamNotificationRole && { teamNotificationRole: options.teamNotificationRole }),

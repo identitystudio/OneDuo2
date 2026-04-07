@@ -1129,6 +1129,8 @@ serve(async (req) => {
           mergedCourseMode = false,
           // Control per-module emails (false when merged mode is on)
           sendPerModuleEmails = true,
+          // Content type: 'course' (training/webinar) or 'film' (movie/TV show)
+          contentType = 'course',
         } = body;
 
         console.log(`[create-course] NEW COURSE REQUEST - Email: ${email}, Title: ${title}, FPS: ${extractionFps} (${extractionFps === 1 ? 'Fast' : 'Precision'}), UploadId: ${uploadId || 'none'}, MergedMode: ${mergedCourseMode}, VideoUrl: ${videoUrl?.substring(0, 80) || 'multi-module'}...`);
@@ -1203,6 +1205,8 @@ serve(async (req) => {
             // Team notification for "You're Done" flow
             ...(teamNotificationEmail && { team_notification_email: teamNotificationEmail }),
             ...(teamNotificationRole && { team_notification_role: teamNotificationRole }),
+            // Content type: 'course' (training/webinar) or 'film' (movie/TV show)
+            content_type: contentType === 'film' ? 'film' : 'course',
             // Course-level supplementary files
             ...(courseFiles && Array.isArray(courseFiles) && courseFiles.length > 0 && {
               course_files: courseFiles.map((f: any) => ({
@@ -4211,6 +4215,13 @@ async function transcribeVideoWithWebhook(
         language_detection: true,
         speaker_labels: true,
         webhook_url: webhookUrl.toString(),
+        // Film mode: enable audio intelligence for emotional arc + chapter analysis
+        ...(await (async () => {
+          const { data } = await supabase.from('courses').select('content_type').eq('id', courseId).maybeSingle();
+          return data?.content_type === 'film'
+            ? { sentiment_analysis: true, auto_chapters: true }
+            : {};
+        })()),
       }),
     });
 
@@ -4292,6 +4303,13 @@ async function transcribeVideo(supabase: any, recordId: string, videoUrl: string
         audio_url: directVideoUrl,
         language_detection: true,
         speaker_labels: true,
+        // Film mode: enable audio intelligence
+        ...(await (async () => {
+          const { data } = await supabase.from('courses').select('content_type').eq('id', recordId).maybeSingle();
+          return data?.content_type === 'film'
+            ? { sentiment_analysis: true, auto_chapters: true }
+            : {};
+        })()),
       }),
     });
 

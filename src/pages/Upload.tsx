@@ -11,7 +11,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Upload as UploadIcon, X, FileVideo, CheckCircle2, Loader2, GripVertical, ArrowRight, ArrowLeft, Paperclip, FileText, AlertTriangle, Cloud, Music } from 'lucide-react';
+import { Upload as UploadIcon, X, FileVideo, CheckCircle2, Loader2, GripVertical, ArrowRight, ArrowLeft, Paperclip, FileText, AlertTriangle, Cloud, Music, Clapperboard, GraduationCap } from 'lucide-react';
 import { RotatingWord } from '@/components/RotatingWord';
 import { UploadCelebration } from '@/components/UploadCelebration';
 import { Button } from '@/components/ui/button';
@@ -85,6 +85,9 @@ export default function Upload() {
 
   // Course-level files (PDFs, docs, etc.)
   const [courseFiles, setCourseFiles] = useState<AttachmentFile[]>([]);
+
+  // Content type: 'course' = Training/Webinar, 'film' = Movie/TV Show
+  const [contentType, setContentType] = useState<'course' | 'film'>('course');
 
   // Processing mode: false = Fast (1 FPS), true = Precision (3 FPS)
   const [precisionMode, setPrecisionMode] = useState(false);
@@ -494,6 +497,7 @@ export default function Upload() {
       courseFiles: courseFileUrls.length > 0 ? courseFileUrls : undefined,
       existingCourseId: addToExistingCourseId || undefined,
       mergedCourseMode: mergedCourseMode && files.length > 1, // Only for multi-video uploads
+      contentType,
     });
 
     if (result.success) {
@@ -606,10 +610,42 @@ export default function Upload() {
                   )}
 
 
+                  {/* Content Type Toggle */}
+                  {!addToExistingCourseId && (
+                    <div className="flex rounded-xl border border-border bg-card p-1 gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setContentType('course')}
+                        className={cn(
+                          "flex-1 flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium transition-all duration-200",
+                          contentType === 'course'
+                            ? "bg-primary text-primary-foreground shadow-sm"
+                            : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                        )}
+                      >
+                        <GraduationCap className="w-4 h-4" />
+                        Training / Course
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setContentType('film')}
+                        className={cn(
+                          "flex-1 flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium transition-all duration-200",
+                          contentType === 'film'
+                            ? "bg-primary text-primary-foreground shadow-sm"
+                            : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                        )}
+                      >
+                        <Clapperboard className="w-4 h-4" />
+                        Film / TV Show
+                      </button>
+                    </div>
+                  )}
+
                   {/* Course Title */}
                   <div>
                     <Input
-                      placeholder="Course title"
+                      placeholder={contentType === 'film' ? "Film or show title" : "Course title"}
                       value={courseTitle}
                       onChange={(e) => setCourseTitle(e.target.value)}
                       className="text-lg h-12 bg-card border-border"
