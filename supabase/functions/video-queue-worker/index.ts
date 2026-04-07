@@ -392,14 +392,23 @@ async function processVideoJobBatched(
   if (job.processing_phase === 'pending' || job.processing_phase === 'extracting') {
     await updateJobPhase(supabase, job.job_id, 'extracting');
 
+    // Resolve effective FPS: film+quick uses 0.1 FPS (scene-detection density proxy)
+    const { data: courseSettings } = await supabase
+      .from('courses')
+      .select('processing_mode, content_type')
+      .eq('id', courseId)
+      .maybeSingle();
+    const isQuickFilm = courseSettings?.processing_mode === 'quick' && courseSettings?.content_type === 'film';
+    const effectiveFps = isQuickFilm ? 0.1 : EXTRACTION_FPS;
+
     const videoUrl = await getVideoUrl(supabase, job.video_path, supabaseUrl);
 
     await logJobEvent(supabase, job.job_id, 'frame_extraction_start', 'info',
-      `Starting frame extraction at ${EXTRACTION_FPS} FPS`, undefined, undefined,
-      { videoUrl: videoUrl.substring(0, 80), fps: EXTRACTION_FPS }
+      `Starting frame extraction at ${effectiveFps} FPS${isQuickFilm ? ' (quick film mode — scene density)' : ''}`, undefined, undefined,
+      { videoUrl: videoUrl.substring(0, 80), fps: effectiveFps }
     );
 
-    const extractionResult = await extractFrames(videoUrl, supabaseServiceKey, job.job_id, supabase, videoDuration);
+    const extractionResult = await extractFrames(videoUrl, supabaseServiceKey, job.job_id, supabase, videoDuration, effectiveFps);
     allFrameUrls = extractionResult.frames;
     videoDuration = extractionResult.duration;
 
@@ -859,7 +868,8 @@ async function extractFrames(
   apiKey: string,
   jobId: string,
   supabase: SupabaseClient,
-  videoDurationSeconds?: number
+  videoDurationSeconds?: number,
+  fps: number = EXTRACTION_FPS
 ): Promise<{ frames: string[]; duration: number }> {
   const REPLICATE_API_KEY = Deno.env.get('REPLICATE_API_KEY');
 
@@ -880,9 +890,8 @@ async function extractFrames(
   const latestVersionId = modelData.latest_version?.id;
   if (!latestVersionId) throw new Error("Could not find model version");
 
-  console.log(`[extractFrames] Starting extraction at EXACTLY ${EXTRACTION_FPS} FPS, resolution: ${TARGET_WIDTH}`);
+  console.log(`[extractFrames] Starting extraction at ${fps} FPS, resolution: ${TARGET_WIDTH}`);
 
-  // Create prediction with EXACTLY 1 FPS
   let prediction = null;
   let retryAttempts = 0;
   const maxRetries = 5;
@@ -890,15 +899,15 @@ async function extractFrames(
   while (!prediction && retryAttempts < maxRetries) {
     try {
       const maxFrames = (videoDurationSeconds && videoDurationSeconds > 0)
-        ? Math.ceil(videoDurationSeconds * EXTRACTION_FPS * 1.1)
+        ? Math.ceil(videoDurationSeconds * fps * 1.1)
         : 10000;
       prediction = await replicate.predictions.create({
         version: latestVersionId,
         input: {
           video: videoUrl,
-          fps: EXTRACTION_FPS, // EXACTLY 1 FPS - NON-NEGOTIABLE
+          fps,
           width: TARGET_WIDTH,
-          max_frames: maxFrames, // Prevent Replicate's 300-frame default cap
+          max_frames: maxFrames,
         },
       });
     } catch (error: any) {
@@ -947,9 +956,9 @@ async function extractFrames(
   const frames = result.output || [];
 
   // Estimate duration from frame count
-  const duration = Math.round(frames.length / EXTRACTION_FPS);
+  const duration = Math.round(frames.length / fps);
 
-  console.log(`[extractFrames] Extracted ${frames.length} frames at ${EXTRACTION_FPS} FPS (estimated ${duration}s duration)`);
+  console.log(`[extractFrames] Extracted ${frames.length} frames at ${fps} FPS (estimated ${duration}s duration)`);
 
   return { frames, duration };
 }

@@ -129,6 +129,56 @@ function compressFrameUrl(url: string, width = 640, quality = 60): string {
 }
 
 // ============================================
+// QUICK MODE: OCR-DIFF SLIDE CHANGE FILTER
+// For course + quick mode: keep only frames where OCR text changes (slide changes).
+// Falls back to 1-frame-per-minute sampling if artifact_frames has no OCR data.
+// ============================================
+
+async function filterToSlideChanges(
+    supabase: ReturnType<typeof createClient>,
+    courseId: string,
+    frameUrls: string[]
+): Promise<string[]> {
+    if (frameUrls.length === 0) return frameUrls;
+
+    const { data: afRows } = await supabase
+        .from('artifact_frames')
+        .select('frame_index, ocr_text')
+        .eq('artifact_id', courseId)
+        .order('frame_index');
+
+    if (!afRows || afRows.length === 0) {
+        // No OCR data — fall back to 1 frame per minute (1 FPS extraction → every 60 frames)
+        const filtered: string[] = [];
+        for (let i = 0; i < frameUrls.length; i += 60) {
+            filtered.push(frameUrls[i]);
+        }
+        console.log(`[generate-pdf-backend] Quick/OCR fallback: ${filtered.length}/${frameUrls.length} frames (1/min)`);
+        return filtered.length > 0 ? filtered : frameUrls;
+    }
+
+    // Build frame_index → ocr_text map
+    const ocrMap = new Map<number, string>();
+    for (const row of afRows) {
+        ocrMap.set(row.frame_index, (row.ocr_text || '').trim());
+    }
+
+    // Keep frame when OCR text changes from previous frame
+    const filtered: string[] = [];
+    let prevText = '';
+    for (let i = 0; i < frameUrls.length; i++) {
+        const text = ocrMap.get(i) ?? '';
+        if (text !== prevText) {
+            filtered.push(frameUrls[i]);
+            prevText = text;
+        }
+    }
+
+    console.log(`[generate-pdf-backend] Quick/OCR diff: ${filtered.length}/${frameUrls.length} slide-change frames`);
+    return filtered.length > 0 ? filtered : frameUrls;
+}
+
+// ============================================
 // PDF BUILDER (using pdf-lib)
 // ============================================
 
@@ -1254,6 +1304,12 @@ serve(async (req) => {
                     }
 
                     let { course, allFrameUrls, videoDuration, transcript, preambleModules } = await fetchCourseData();
+
+                    // Quick mode + course: filter frames to slide changes via OCR diff
+                    if (klCheck?.processing_mode === 'quick' && (klCheck?.content_type || 'course') === 'course') {
+                        allFrameUrls = await filterToSlideChanges(supabase, courseId, allFrameUrls);
+                    }
+
                     const userEmail = email || course.email || '';
                     const totalFrames = allFrameUrls.length;
                     const totalParts = Math.ceil(totalFrames / framesPerPart);

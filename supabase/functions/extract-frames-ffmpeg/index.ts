@@ -15,6 +15,8 @@ interface ExtractionRequest {
   fps: number;
   tableName?: string; // 'courses' or 'course_modules'
   recordId?: string;  // If different from courseId (for modules)
+  processingMode?: 'quick' | 'deep';
+  contentType?: 'course' | 'film';
 }
 
 serve(async (req) => {
@@ -25,10 +27,13 @@ serve(async (req) => {
   const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
   try {
-    const { videoUrl, courseId, fps: requestedFps, tableName = 'courses', recordId }: ExtractionRequest = await req.json();
+    const { videoUrl, courseId, fps: requestedFps, tableName = 'courses', recordId, processingMode, contentType }: ExtractionRequest = await req.json();
     const targetId = recordId || courseId;
 
-    console.log(`[extract-frames-ffmpeg] Starting extraction for ${targetId}, requested fps: ${requestedFps}`);
+    // Film + quick mode uses 0.1 FPS (scene-detection density proxy: 1 frame per 10s)
+    const isQuickFilm = processingMode === 'quick' && contentType === 'film';
+
+    console.log(`[extract-frames-ffmpeg] Starting extraction for ${targetId}, requested fps: ${requestedFps}${isQuickFilm ? ' → overriding to 0.1 FPS (quick film mode)' : ''}`);
 
     if (!videoUrl) {
       return new Response(JSON.stringify({ error: "Missing videoUrl" }), {
@@ -126,8 +131,8 @@ serve(async (req) => {
     }
     const durationMin = Math.round(duration / 60);
 
-    // 1 FPS = 1 frame per second = exact frame count matching video duration
-    const fps = 1;
+    // FPS: film+quick uses 0.1 (scene-detection density), everything else uses 1
+    const fps = isQuickFilm ? 0.1 : 1;
     const expectedFrames = Math.floor(duration * fps);
     const actualFramesToExtract = expectedFrames;
 
@@ -156,7 +161,7 @@ serve(async (req) => {
       const webhookUrl = `${supabaseUrl}/functions/v1/runpod-webhook`;
       const jobId = await queueRunPodJob(
         accessibleVideoUrl,
-        effectiveFps,
+        fps,
         RUNPOD_API_KEY,
         RUNPOD_ENDPOINT_ID,
         webhookUrl,
