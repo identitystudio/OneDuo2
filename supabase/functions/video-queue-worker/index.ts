@@ -408,9 +408,20 @@ async function processVideoJobBatched(
       { videoUrl: videoUrl.substring(0, 80), fps: effectiveFps }
     );
 
-    const extractionResult = await extractFrames(videoUrl, supabaseServiceKey, job.job_id, supabase, videoDuration, effectiveFps);
+    const extractionResult = await extractFrames(videoUrl, supabaseServiceKey, job.job_id, supabase, videoDuration, EXTRACTION_FPS);
     allFrameUrls = extractionResult.frames;
     videoDuration = extractionResult.duration;
+
+    // Film + quick: keep 1 frame every 10 seconds after extraction
+    if (isQuickFilm && allFrameUrls.length > 0) {
+      const step = 10 * EXTRACTION_FPS; // 10 frames at 1 FPS = 10 second intervals
+      const subsampled: string[] = [];
+      for (let i = 0; i < allFrameUrls.length; i += step) {
+        subsampled.push(allFrameUrls[i]);
+      }
+      console.log(`[VideoQueueWorker] Quick film: ${allFrameUrls.length} → ${subsampled.length} frames (1 per 10s)`);
+      allFrameUrls = subsampled;
+    }
 
     const expectedFrames = allFrameUrls.length;
     const segmentCount = Math.ceil(expectedFrames / SEGMENT_FRAME_COUNT);
@@ -715,9 +726,10 @@ async function processVideoJobBatched(
       .maybeSingle();
     const contentType = courseRow?.content_type || 'course';
 
-    // Quick mode skips knowledge layer entirely
-    if (courseRow?.processing_mode === 'quick') {
-      console.log(`[VideoQueueWorker] Quick mode — skipping knowledge layer for course ${courseId}`);
+    // Quick + course skips knowledge layer (fast delivery for training content)
+    // Quick + film still generates knowledge layer — story intelligence is the core value for film
+    if (courseRow?.processing_mode === 'quick' && contentType !== 'film') {
+      console.log(`[VideoQueueWorker] Quick mode (course) — skipping knowledge layer for course ${courseId}`);
       await updateProgress(supabase, courseId, moduleId, 100, expectedFrames, pdfPaths[0]);
       return { success: true };
     }

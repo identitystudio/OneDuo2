@@ -7,7 +7,7 @@ import { ManualProcessingCard } from '@/components/ManualProcessingCard';
 import {
   Plus, RefreshCw,
   CheckCircle, Clock, Loader2, Sparkles, Check,
-  AlertTriangle, Zap, ArrowRight, Link2, FileText, ChevronDown, ChevronRight, Download, X, Layers, Mail, Upload, Globe, Lock, Paperclip, Pencil, Key, MoreHorizontal
+  AlertTriangle, Zap, ArrowRight, Link2, FileText, ChevronDown, ChevronRight, Download, X, Layers, Mail, Upload, Globe, Lock, Paperclip, Pencil, Key, MoreHorizontal, Search
 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
@@ -173,6 +173,9 @@ export default function Dashboard() {
   const [deletingCourse, setDeletingCourse] = useState<string | null>(null);
   const [reExtractingCourse, setReExtractingCourse] = useState<string | null>(null);
   const [expandedBlocks, setExpandedBlocks] = useState<Set<string>>(new Set());
+  const [blocksPage, setBlocksPage] = useState(1);
+  const [blockSearch, setBlockSearch] = useState('');
+  const BLOCKS_PER_PAGE = 10;
   const [selectedCourses, setSelectedCourses] = useState<Set<string>>(new Set());
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   const [displayProgress, setDisplayProgress] = useState<Record<string, number>>({});
@@ -753,7 +756,16 @@ export default function Dashboard() {
   const totalCourseCount = courses.length;
   const uncategorizedCount = courses.filter(c => !(c as any).project_id).length;
 
-  const trainingBlocks = filteredTrainingBlocks;
+  const trainingBlocks = blockSearch.trim()
+    ? filteredTrainingBlocks.filter(b =>
+        b.name.toLowerCase().includes(blockSearch.toLowerCase()) ||
+        b.courses.some(c => c.title?.toLowerCase().includes(blockSearch.toLowerCase()))
+      )
+    : filteredTrainingBlocks;
+
+  // Reset to page 1 when the block list or search changes
+  const trainingBlocksKey = trainingBlocks.map(b => b.name).join(',');
+  React.useEffect(() => { setBlocksPage(1); }, [trainingBlocksKey, blockSearch]);
 
 
   const handleRefresh = async () => {
@@ -2240,10 +2252,35 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                   </div>
                 </div>
 
+                {/* Search bar */}
+                <div className="relative mb-4">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/30 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={blockSearch}
+                    onChange={e => setBlockSearch(e.target.value)}
+                    placeholder="Search by title..."
+                    className="w-full pl-9 pr-9 py-2.5 rounded-xl bg-white/[0.04] border border-white/[0.08] text-sm text-white placeholder:text-white/30 focus:outline-none focus:border-white/20 transition-colors"
+                  />
+                  {blockSearch && (
+                    <button
+                      onClick={() => setBlockSearch('')}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-white/30 hover:text-white/60 transition-colors"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+
                 {/* Training Blocks */}
                 <div className="space-y-4">
+                  {trainingBlocks.length === 0 && blockSearch && (
+                    <div className="text-center py-12 text-white/30 text-sm">
+                      No results for &ldquo;{blockSearch}&rdquo;
+                    </div>
+                  )}
                   <AnimatePresence>
-                    {trainingBlocks.map((block, blockIdx) => {
+                    {trainingBlocks.slice((blocksPage - 1) * BLOCKS_PER_PAGE, blocksPage * BLOCKS_PER_PAGE).map((block, blockIdx) => {
                       const isExpanded = expandedBlocks.has(block.name);
                       const hasProcessing = block.processingModules > 0;
                       const hasFailed = block.failedModules > 0;
@@ -2354,7 +2391,7 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                                       className="group flex items-center gap-2 hover:bg-white/5 rounded-lg px-2 py-1 -mx-2 transition-colors"
                                       title="Click to rename"
                                     >
-                                      <h3 className="font-semibold text-white text-lg truncate">{block.name}</h3>
+                                      <h3 className="font-semibold text-white text-lg break-words leading-tight">{block.name}</h3>
                                       <Pencil className="w-3.5 h-3.5 text-white/30 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
                                     </button>
                                   )}
@@ -3039,6 +3076,39 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                       );
                     })}
                   </AnimatePresence>
+
+                  {/* Pagination */}
+                  {trainingBlocks.length > BLOCKS_PER_PAGE && (
+                    <div className="flex items-center justify-center gap-2 pt-4">
+                      <button
+                        onClick={() => setBlocksPage(p => Math.max(1, p - 1))}
+                        disabled={blocksPage === 1}
+                        className="px-3 py-1.5 rounded-lg text-sm font-medium border border-white/10 text-white/60 hover:text-white hover:border-white/30 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                      >
+                        Previous
+                      </button>
+                      {Array.from({ length: Math.ceil(trainingBlocks.length / BLOCKS_PER_PAGE) }, (_, i) => i + 1).map(page => (
+                        <button
+                          key={page}
+                          onClick={() => setBlocksPage(page)}
+                          className={`w-8 h-8 rounded-lg text-sm font-medium transition-colors ${
+                            page === blocksPage
+                              ? 'bg-cyan-500 text-black'
+                              : 'border border-white/10 text-white/60 hover:text-white hover:border-white/30'
+                          }`}
+                        >
+                          {page}
+                        </button>
+                      ))}
+                      <button
+                        onClick={() => setBlocksPage(p => Math.min(Math.ceil(trainingBlocks.length / BLOCKS_PER_PAGE), p + 1))}
+                        disabled={blocksPage === Math.ceil(trainingBlocks.length / BLOCKS_PER_PAGE)}
+                        className="px-3 py-1.5 rounded-lg text-sm font-medium border border-white/10 text-white/60 hover:text-white hover:border-white/30 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                      >
+                        Next
+                      </button>
+                    </div>
+                  )}
                 </div>
 
 

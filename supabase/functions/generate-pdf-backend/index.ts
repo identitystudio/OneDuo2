@@ -808,6 +808,7 @@ async function buildPreamblePDF(
     courseTitle: string,
     modules: any[],
     userEmail: string,
+    contentType: string = 'course',
 ): Promise<Uint8Array> {
     const pdfDoc = await PDFDocument.create();
     const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
@@ -933,42 +934,41 @@ async function buildPreamblePDF(
             y -= 18;
         }
 
-        // AI KNOWLEDGE LAYER
+        // KNOWLEDGE / STORY INTELLIGENCE LAYER
         const kl = mod.knowledge_layer;
         if (kl) {
-            ensureSpace(30);
-            currentPage.drawLine({ start: { x: MARGIN, y }, end: { x: MARGIN + CONTENT_WIDTH, y }, thickness: 0.5, color: rgb(0, 0, 0) });
-            y -= 10;
-            currentPage.drawText('AI KNOWLEDGE LAYER', { x: MARGIN, y, size: 13, font: boldFont, color: rgb(0, 0, 0) });
-            y -= 14;
+            const isFilm = contentType === 'film';
 
-            for (const { key, label } of klSections) {
-                const rawVal = (kl as any)[key];
-                if (!rawVal) continue;
-                const val = Array.isArray(rawVal) ? rawVal.join('\n') : String(rawVal);
-                if (!val.trim()) continue;
+            // ── Film: Story Intelligence Layer ───────────────────────────────
+            if (isFilm) {
+                const filmSections = [
+                    { key: 'genre_tone',          label: 'GENRE & TONE' },
+                    { key: 'logline',             label: 'LOGLINE' },
+                    { key: 'thematic_dna',        label: 'THEMATIC DNA' },
+                    { key: 'story_structure',     label: 'STORY STRUCTURE' },
+                    { key: 'character_profiles',  label: 'CHARACTER PROFILES' },
+                    { key: 'protagonist_arc',     label: 'PROTAGONIST TRANSFORMATION ARC' },
+                    { key: 'antagonist_function', label: 'ANTAGONIST FUNCTION' },
+                    { key: 'power_dynamics',      label: 'POWER DYNAMICS' },
+                    { key: 'scene_breakdown',     label: 'SCENE-BY-SCENE BREAKDOWN' },
+                    { key: 'world_building',      label: 'WORLD-BUILDING & DOMAIN LAYER' },
+                    { key: 'subplot_structure',   label: 'SUBPLOT & B-STORY STRUCTURE' },
+                    { key: 'tone_map',            label: 'TONE MAP' },
+                    { key: 'signature_set_pieces',label: 'SIGNATURE SET PIECES' },
+                    { key: 'dialogue_style',      label: 'DIALOGUE STYLE PROFILE' },
+                    { key: 'emotional_architecture', label: 'EMOTIONAL ARCHITECTURE' },
+                    { key: 'audio_energy_timeline',  label: 'AUDIO ENERGY TIMELINE' },
+                    { key: 'adaptation_blueprint',   label: 'ADAPTATION BLUEPRINT' },
+                    { key: 'retrieval_tags',      label: 'RETRIEVAL TAGS' },
+                ];
 
-                ensureSpace(20);
-                currentPage.drawText(label, { x: MARGIN, y, size: 11, font: boldFont, color: rgb(0, 0, 0) });
-                y -= 12;
-                drawWrappedText(val, { x: MARGIN + 3, size: 9, color: rgb(0.1, 0.1, 0.1) });
-                y -= 6;
-            }
-            y -= 6;
-
-            // REASONING LAYER
-            const hasReasoning = reasoningSections.some(({ key }) => {
-                const v = (kl as any)[key];
-                return v && String(v).trim();
-            });
-            if (hasReasoning) {
                 ensureSpace(30);
                 currentPage.drawLine({ start: { x: MARGIN, y }, end: { x: MARGIN + CONTENT_WIDTH, y }, thickness: 0.5, color: rgb(0, 0, 0) });
                 y -= 10;
-                currentPage.drawText('REASONING LAYER', { x: MARGIN, y, size: 13, font: boldFont, color: rgb(0, 0, 0) });
+                currentPage.drawText('STORY INTELLIGENCE LAYER', { x: MARGIN, y, size: 13, font: boldFont, color: rgb(0, 0, 0) });
                 y -= 14;
 
-                for (const { key, label } of reasoningSections) {
+                for (const { key, label } of filmSections) {
                     const rawVal = (kl as any)[key];
                     if (!rawVal) continue;
                     const val = Array.isArray(rawVal) ? rawVal.join('\n') : String(rawVal);
@@ -981,6 +981,55 @@ async function buildPreamblePDF(
                     y -= 6;
                 }
                 y -= 6;
+
+            } else {
+                // ── Course: AI Knowledge Layer + Reasoning Layer ─────────────
+                ensureSpace(30);
+                currentPage.drawLine({ start: { x: MARGIN, y }, end: { x: MARGIN + CONTENT_WIDTH, y }, thickness: 0.5, color: rgb(0, 0, 0) });
+                y -= 10;
+                currentPage.drawText('AI KNOWLEDGE LAYER', { x: MARGIN, y, size: 13, font: boldFont, color: rgb(0, 0, 0) });
+                y -= 14;
+
+                for (const { key, label } of klSections) {
+                    const rawVal = (kl as any)[key];
+                    if (!rawVal) continue;
+                    const val = Array.isArray(rawVal) ? rawVal.join('\n') : String(rawVal);
+                    if (!val.trim()) continue;
+
+                    ensureSpace(20);
+                    currentPage.drawText(label, { x: MARGIN, y, size: 11, font: boldFont, color: rgb(0, 0, 0) });
+                    y -= 12;
+                    drawWrappedText(val, { x: MARGIN + 3, size: 9, color: rgb(0.1, 0.1, 0.1) });
+                    y -= 6;
+                }
+                y -= 6;
+
+                // REASONING LAYER
+                const hasReasoning = reasoningSections.some(({ key }) => {
+                    const v = (kl as any)[key];
+                    return v && String(v).trim();
+                });
+                if (hasReasoning) {
+                    ensureSpace(30);
+                    currentPage.drawLine({ start: { x: MARGIN, y }, end: { x: MARGIN + CONTENT_WIDTH, y }, thickness: 0.5, color: rgb(0, 0, 0) });
+                    y -= 10;
+                    currentPage.drawText('REASONING LAYER', { x: MARGIN, y, size: 13, font: boldFont, color: rgb(0, 0, 0) });
+                    y -= 14;
+
+                    for (const { key, label } of reasoningSections) {
+                        const rawVal = (kl as any)[key];
+                        if (!rawVal) continue;
+                        const val = Array.isArray(rawVal) ? rawVal.join('\n') : String(rawVal);
+                        if (!val.trim()) continue;
+
+                        ensureSpace(20);
+                        currentPage.drawText(label, { x: MARGIN, y, size: 11, font: boldFont, color: rgb(0, 0, 0) });
+                        y -= 12;
+                        drawWrappedText(val, { x: MARGIN + 3, size: 9, color: rgb(0.1, 0.1, 0.1) });
+                        y -= 6;
+                    }
+                    y -= 6;
+                }
             }
 
             // Divider before transcript
@@ -1263,9 +1312,10 @@ serve(async (req) => {
                         .eq('id', courseId)
                         .single();
 
-                    // Quick mode: skip knowledge layer entirely
-                    if (klCheck?.processing_mode === 'quick') {
-                        console.log(`[generate-pdf-backend] Quick mode — skipping knowledge layer for course ${courseId}`);
+                    // Quick + course: skip knowledge layer (fast delivery)
+                    // Quick + film: still generate — story intelligence is the core value
+                    if (klCheck?.processing_mode === 'quick' && klCheck?.content_type !== 'film') {
+                        console.log(`[generate-pdf-backend] Quick mode (course) — skipping knowledge layer for course ${courseId}`);
                     } else if (klCheck?.knowledge_layer_status !== 'complete') {
                         // If not already running, trigger generation
                         if (klCheck?.knowledge_layer_status !== 'generating') {
@@ -1305,9 +1355,17 @@ serve(async (req) => {
 
                     let { course, allFrameUrls, videoDuration, transcript, preambleModules } = await fetchCourseData();
 
-                    // Quick mode + course: filter frames to slide changes via OCR diff
-                    if (klCheck?.processing_mode === 'quick' && (klCheck?.content_type || 'course') === 'course') {
+                    // Quick mode + course: filter to slide changes via OCR diff
+                    if (klCheck?.processing_mode === 'quick' && klCheck?.content_type === 'course') {
                         allFrameUrls = await filterToSlideChanges(supabase, courseId, allFrameUrls);
+                    }
+
+                    // Quick mode + film: subsample to 1 frame per 10 seconds
+                    if (klCheck?.processing_mode === 'quick' && klCheck?.content_type === 'film') {
+                        const before = allFrameUrls.length;
+                        const step = 10; // 1 FPS extraction → every 10 frames = 10 seconds
+                        allFrameUrls = allFrameUrls.filter((_, i) => i % step === 0);
+                        console.log(`[generate-pdf-backend] Quick film: ${before} → ${allFrameUrls.length} frames (1 per 10s)`);
                     }
 
                     const userEmail = email || course.email || '';
@@ -1420,7 +1478,7 @@ serve(async (req) => {
 
                     // Build preamble (KL + Transcript) and upload to storage so RunPod can fetch it
                     console.log(`[generate-pdf-backend] Building preamble (Knowledge Layer + Transcript)...`);
-                    const preambleBytes = await buildPreamblePDF(courseTitle, preambleModules, userEmail);
+                    const preambleBytes = await buildPreamblePDF(courseTitle, preambleModules, userEmail, klCheck?.content_type || 'course');
                     (preambleModules as any) = null;
 
                     const preambleStoragePath = `exports/${courseId}/preamble.pdf`;
