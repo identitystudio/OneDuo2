@@ -765,7 +765,7 @@ export default function Dashboard() {
 
   // Reset to page 1 when the block list or search changes
   const trainingBlocksKey = trainingBlocks.map(b => b.name).join(',');
-  React.useEffect(() => { setBlocksPage(1); }, [trainingBlocksKey, blockSearch]);
+  useEffect(() => { setBlocksPage(1); }, [trainingBlocksKey, blockSearch]);
 
 
   const handleRefresh = async () => {
