@@ -3251,6 +3251,73 @@ serve(async (req) => {
           }
         }
 
+        // Clean up all files under course folder in course-videos bucket (frames, etc.)
+        try {
+          const folderPath = courseId;
+          let allFiles: string[] = [];
+          let offset = 0;
+          const pageSize = 100;
+
+          // List all files recursively under courseId/ folder
+          while (true) {
+            const { data: files, error: listError } = await supabase.storage
+              .from('course-videos')
+              .list(folderPath, { limit: pageSize, offset });
+
+            if (listError || !files || files.length === 0) break;
+
+            // Recursively list subdirectories (e.g. frames/1fps/, frames/3fps/)
+            for (const file of files) {
+              if (file.id === null) {
+                // It's a folder, list its contents
+                const { data: subFiles } = await supabase.storage
+                  .from('course-videos')
+                  .list(`${folderPath}/${file.name}`, { limit: 1000 });
+
+                if (subFiles) {
+                  for (const subFile of subFiles) {
+                    if (subFile.id === null) {
+                      // Another level deep (e.g. frames/1fps/)
+                      const { data: deepFiles } = await supabase.storage
+                        .from('course-videos')
+                        .list(`${folderPath}/${file.name}/${subFile.name}`, { limit: 1000 });
+                      if (deepFiles) {
+                        allFiles.push(...deepFiles.filter(f => f.id !== null).map(f => `${folderPath}/${file.name}/${subFile.name}/${f.name}`));
+                      }
+                    } else {
+                      allFiles.push(`${folderPath}/${file.name}/${subFile.name}`);
+                    }
+                  }
+                }
+              } else {
+                allFiles.push(`${folderPath}/${file.name}`);
+              }
+            }
+
+            if (files.length < pageSize) break;
+            offset += pageSize;
+          }
+
+          if (allFiles.length > 0) {
+            const BATCH_SIZE = 1500;
+            let totalDeleted = 0;
+            for (let i = 0; i < allFiles.length; i += BATCH_SIZE) {
+              const batch = allFiles.slice(i, i + BATCH_SIZE);
+              const { error: removeError } = await supabase.storage
+                .from('course-videos')
+                .remove(batch);
+              if (removeError) {
+                console.warn(`[delete-course] Frame/storage cleanup batch ${Math.floor(i / BATCH_SIZE) + 1} failed (non-critical):`, removeError);
+              } else {
+                totalDeleted += batch.length;
+              }
+            }
+            console.log(`[delete-course] Cleaned up ${totalDeleted}/${allFiles.length} files from course-videos/${courseId}`);
+          }
+        } catch (e) {
+          console.warn(`[delete-course] Frame/storage cleanup error (non-critical):`, e);
+        }
+
         console.log(`[delete-course] GOVERNANCE: Successfully soft-deleted course ${courseId} via frame ${purgeFrameId}`);
 
         return new Response(JSON.stringify({ success: true, purgeFrameId }), {
