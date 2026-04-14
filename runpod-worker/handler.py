@@ -281,6 +281,7 @@ def handler(job):
     if not course_id:
         return {"error": "Missing courseId"}
 
+    log(f"Job input keys: {list(job_input.keys())}")
     log(f"Job start — courseId={course_id}, fps={fps}, table={table_name}, subsampleEvery={subsample_every}")
 
     with tempfile.TemporaryDirectory() as tmpdir:
