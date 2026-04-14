@@ -281,7 +281,7 @@ def handler(job):
     if not course_id:
         return {"error": "Missing courseId"}
 
-    log(f"Job start — courseId={course_id}, fps={fps}, table={table_name}")
+    log(f"Job start — courseId={course_id}, fps={fps}, table={table_name}, subsampleEvery={subsample_every}")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         video_path = os.path.join(tmpdir, "input_video.mp4")
