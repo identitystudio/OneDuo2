@@ -169,7 +169,8 @@ def handle_merge_pdf(job_input: dict, webhook_url: str) -> dict:
         # Write merged PDF
         timestamp = int(time.time() * 1000)
         merged_local   = os.path.join(tmpdir, "merged.pdf")
-        storage_path   = f"exports/{course_id}/{timestamp}_visual_transcription.pdf"
+        safe_title     = course_title.replace(" ", "_").replace("/", "-")
+        storage_path   = f"exports/{course_id}/{timestamp}_{safe_title}-One_Duo.pdf"
         log("Writing merged PDF...")
         with open(merged_local, "wb") as f:
             writer.write(f)
@@ -301,7 +302,8 @@ def handler(job):
             return {"error": "FFmpeg frame extraction failed"}
 
         total_frames = len(frame_paths)
-        update_db_progress(table_name, record_id, 40, total_frames)
+        upload_total = math.ceil(total_frames / subsample_every)
+        update_db_progress(table_name, record_id, 40, upload_total)
 
         # 4. Upload frames to Supabase Storage
         # subsample_every > 1 means only upload every Nth frame (quick mode)

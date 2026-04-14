@@ -4554,11 +4554,13 @@ async function extractFramesWithWebhook(
     .maybeSingle();
   const quickMode = courseSettings?.processing_mode === 'quick';
 
+  console.log(`[extractFramesWithWebhook] courseId=${courseId}, processing_mode=${courseSettings?.processing_mode}, quickMode=${quickMode}, subsampleEvery=${quickMode ? 10 : 1}`);
+
   await logJobEvent(supabase, logJobId, {
     step: 'frame_extraction_webhook_start',
     level: 'info',
     message: `Starting RunPod FFmpeg frame extraction at ${fps} FPS`,
-    metadata: { record_id: recordId, table_name: tableName, course_id: courseId, fps },
+    metadata: { record_id: recordId, table_name: tableName, course_id: courseId, fps, quick_mode: quickMode, subsample_every: quickMode ? 10 : 1 },
   });
 
   const webhookUrl = `${supabaseUrl}/functions/v1/runpod-webhook`;

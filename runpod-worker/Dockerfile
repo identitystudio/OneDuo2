@@ -10,6 +10,6 @@ RUN pip install --no-cache-dir runpod requests pypdf
 
 WORKDIR /app
 COPY handler.py .
-# cache-bust: 2026-03-30
+# cache-bust: 2026-04-14
 
 CMD ["python", "-u", "handler.py"]
