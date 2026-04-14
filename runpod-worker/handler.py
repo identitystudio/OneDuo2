@@ -267,12 +267,13 @@ def handler(job):
     if action == "merge_pdf":
         return handle_merge_pdf(job_input, webhook_url)
 
-    video_url  = job_input.get("videoUrl")
-    fps        = int(job_input.get("fps", 1))
-    course_id  = job_input.get("courseId")
-    record_id  = job_input.get("recordId") or course_id
-    table_name = job_input.get("tableName", "courses")
-    webhook_url = job_input.get("webhookUrl")
+    video_url      = job_input.get("videoUrl")
+    fps            = int(job_input.get("fps", 1))
+    subsample_every = int(job_input.get("subsampleEvery", 1))  # upload every Nth frame (1 = all)
+    course_id      = job_input.get("courseId")
+    record_id      = job_input.get("recordId") or course_id
+    table_name     = job_input.get("tableName", "courses")
+    webhook_url    = job_input.get("webhookUrl")
 
     if not video_url:
         return {"error": "Missing videoUrl"}
@@ -303,12 +304,20 @@ def handler(job):
         update_db_progress(table_name, record_id, 40, total_frames)
 
         # 4. Upload frames to Supabase Storage
-        log(f"Uploading {total_frames} frames to Supabase Storage...")
+        # subsample_every > 1 means only upload every Nth frame (quick mode)
+        frames_to_upload = [p for i, p in enumerate(frame_paths) if i % subsample_every == 0]
+        upload_total = len(frames_to_upload)
+        if subsample_every > 1:
+            log(f"Quick mode: uploading {upload_total}/{total_frames} frames (every {subsample_every}th)")
+        else:
+            log(f"Uploading {upload_total} frames to Supabase Storage...")
         frame_urls = []
         failed_count = 0
 
-        for i, local_path in enumerate(frame_paths):
-            storage_path = f"{record_id}/frame_{i:05d}.jpg"
+        for i, local_path in enumerate(frames_to_upload):
+            # Use original frame index in storage path so timestamps stay correct
+            original_idx = i * subsample_every
+            storage_path = f"{record_id}/frame_{original_idx:05d}.jpg"
             public_url = upload_frame_to_supabase(local_path, storage_path)
 
             if public_url:
@@ -318,9 +327,9 @@ def handler(job):
 
             # Log progress every 100 frames
             if (i + 1) % 100 == 0:
-                pct = 40 + int(((i + 1) / total_frames) * 50)
+                pct = 40 + int(((i + 1) / upload_total) * 50)
                 update_db_progress(table_name, record_id, min(pct, 89))
-                log(f"Uploaded {i + 1}/{total_frames} frames ({failed_count} failed)")
+                log(f"Uploaded {i + 1}/{upload_total} frames ({failed_count} failed)")
 
         log(f"Upload complete: {len(frame_urls)} succeeded, {failed_count} failed")
 

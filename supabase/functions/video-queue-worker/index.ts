@@ -398,8 +398,9 @@ async function processVideoJobBatched(
       .select('processing_mode, content_type')
       .eq('id', courseId)
       .maybeSingle();
-    const isQuickFilm = courseSettings?.processing_mode === 'quick' && courseSettings?.content_type === 'film';
-    const effectiveFps = isQuickFilm ? 0.1 : EXTRACTION_FPS;
+    const isQuickMode = courseSettings?.processing_mode === 'quick';
+    const isQuickFilm = isQuickMode && courseSettings?.content_type === 'film';
+    const effectiveFps = isQuickMode ? 0.1 : EXTRACTION_FPS;
 
     const videoUrl = await getVideoUrl(supabase, job.video_path, supabaseUrl);
 
@@ -412,8 +413,8 @@ async function processVideoJobBatched(
     allFrameUrls = extractionResult.frames;
     videoDuration = extractionResult.duration;
 
-    // Film + quick: keep 1 frame every 10 seconds after extraction
-    if (isQuickFilm && allFrameUrls.length > 0) {
+    // Quick mode: keep 1 frame every 10 seconds after extraction
+    if (isQuickMode && allFrameUrls.length > 0) {
       const step = 10 * EXTRACTION_FPS; // 10 frames at 1 FPS = 10 second intervals
       const subsampled: string[] = [];
       for (let i = 0; i < allFrameUrls.length; i += step) {

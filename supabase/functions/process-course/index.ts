@@ -4546,6 +4546,14 @@ async function extractFramesWithWebhook(
   const directVideoUrl = await resolveVideoUrlForExternalServices(supabase, videoUrl, { expiresInSeconds: 86400 });
   const logJobId = tableName === 'courses' ? getJobIdForCourse(recordId) : `module-${recordId.slice(0, 8)}`;
 
+  // Fetch processing mode to determine subsampling
+  const { data: courseSettings } = await supabase
+    .from('courses')
+    .select('processing_mode')
+    .eq('id', courseId)
+    .maybeSingle();
+  const quickMode = courseSettings?.processing_mode === 'quick';
+
   await logJobEvent(supabase, logJobId, {
     step: 'frame_extraction_webhook_start',
     level: 'info',
@@ -4578,6 +4586,7 @@ async function extractFramesWithWebhook(
             step,
             moduleNumber,
             webhookUrl,
+            subsampleEvery: quickMode ? 10 : 1,
           },
         }),
       });
@@ -5187,7 +5196,7 @@ async function stepTranscribeAndExtractModule(supabase: any, courseId: string, m
   if (!skipFrameExtraction) {
     try {
       await extractFramesWithWebhook(
-        supabase, module.id, module.video_url, module.courses.fps_target || 1,
+        supabase, module.id, module.video_url, module.courses?.fps_target || 1,
         'course_modules', courseId, moduleNumber, 'transcribe_and_extract_module', fixMetadata, module.video_duration_seconds
       );
     } catch (error) {

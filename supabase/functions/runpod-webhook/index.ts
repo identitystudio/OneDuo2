@@ -261,6 +261,7 @@ serve(async (req: Request) => {
     }
 
     // Frames are already in permanent Supabase Storage — just save URLs to DB
+    // Quick mode subsampling is handled by RunPod (subsampleEvery param) before upload
     const frameUpdatePayload: Record<string, unknown> = {
       frame_urls: frameUrls,
       total_frames: frameCount,
@@ -300,8 +301,8 @@ serve(async (req: Request) => {
       console.log(`[runpod-webhook] Marked ${updatedRows.length} queue job(s) as completed`);
     }
 
-    // Determine next step
-    const nextStep = step?.includes("module") ? "analyze_audio_module" : "analyze_audio";
+    // Determine next step — must go through analyze_frames to populate OCR data for slide detection
+    const nextStep = step?.includes("module") ? "analyze_frames_module" : "analyze_frames";
 
     // Check if next step already queued (prevent duplicates)
     const { data: existingJob } = await supabase

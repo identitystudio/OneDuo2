@@ -30,10 +30,20 @@ serve(async (req) => {
     const { videoUrl, courseId, fps: requestedFps, tableName = 'courses', recordId, processingMode, contentType }: ExtractionRequest = await req.json();
     const targetId = recordId || courseId;
 
-    // Film + quick mode uses 0.1 FPS (scene-detection density proxy: 1 frame per 10s)
-    const isQuickFilm = processingMode === 'quick' && contentType === 'film';
+    // Fetch processing_mode and content_type from DB — don't trust caller to pass them
+    const { data: courseSettings } = await supabase
+      .from('courses')
+      .select('processing_mode, content_type')
+      .eq('id', courseId || targetId)
+      .maybeSingle();
+    const resolvedProcessingMode = processingMode || courseSettings?.processing_mode;
+    const resolvedContentType = contentType || courseSettings?.content_type;
 
-    console.log(`[extract-frames-ffmpeg] Starting extraction for ${targetId}, requested fps: ${requestedFps}${isQuickFilm ? ' → overriding to 0.1 FPS (quick film mode)' : ''}`);
+    // Quick mode (any content type) uses 0.1 FPS (scene-detection density proxy: 1 frame per 10s)
+    const isQuickMode = resolvedProcessingMode === 'quick';
+    const isQuickFilm = isQuickMode && resolvedContentType === 'film';
+
+    console.log(`[extract-frames-ffmpeg] Starting extraction for ${targetId}, requested fps: ${requestedFps}, processing_mode: ${resolvedProcessingMode}${isQuickMode ? ' → overriding to 0.1 FPS (quick mode)' : ''}`);
 
     if (!videoUrl) {
       return new Response(JSON.stringify({ error: "Missing videoUrl" }), {
@@ -131,8 +141,9 @@ serve(async (req) => {
     }
     const durationMin = Math.round(duration / 60);
 
-    // FPS: film+quick uses 0.1 (scene-detection density), everything else uses 1
-    const fps = isQuickFilm ? 0.1 : 1;
+    // Always extract at 1 FPS — RunPod does not support fractional FPS
+    // Quick mode subsampling (keep 1 per 10s) is done in runpod-webhook after extraction
+    const fps = 1;
     const expectedFrames = Math.floor(duration * fps);
     const actualFramesToExtract = expectedFrames;
 

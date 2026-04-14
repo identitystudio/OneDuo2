@@ -129,10 +129,25 @@ function compressFrameUrl(url: string, width = 640, quality = 60): string {
 }
 
 // ============================================
-// QUICK MODE: OCR-DIFF SLIDE CHANGE FILTER
-// For course + quick mode: keep only frames where OCR text changes (slide changes).
-// Falls back to 1-frame-per-minute sampling if artifact_frames has no OCR data.
+// QUICK MODE: SCENE CHANGE DETECTION
+// Uses OCR text similarity (Jaccard) to detect slide/content changes.
+// Falls back to 1-frame-per-minute if no OCR data, or time-based if video has no text.
 // ============================================
+
+// Jaccard similarity between two strings (word-level)
+// Returns 0.0 (completely different) to 1.0 (identical)
+function textSimilarity(a: string, b: string): number {
+    if (a === b) return 1.0;
+    if (!a && !b) return 1.0;
+    if (!a || !b) return 0.0;
+    const wordsA = new Set(a.toLowerCase().split(/\s+/).filter(Boolean));
+    const wordsB = new Set(b.toLowerCase().split(/\s+/).filter(Boolean));
+    if (wordsA.size === 0 && wordsB.size === 0) return 1.0;
+    if (wordsA.size === 0 || wordsB.size === 0) return 0.0;
+    const intersection = [...wordsA].filter(w => wordsB.has(w)).length;
+    const union = new Set([...wordsA, ...wordsB]).size;
+    return intersection / union;
+}
 
 async function filterToSlideChanges(
     supabase: ReturnType<typeof createClient>,
@@ -141,40 +156,67 @@ async function filterToSlideChanges(
 ): Promise<string[]> {
     if (frameUrls.length === 0) return frameUrls;
 
-    const { data: afRows } = await supabase
-        .from('artifact_frames')
-        .select('frame_index, ocr_text')
-        .eq('artifact_id', courseId)
-        .order('frame_index');
+    // Similarity threshold: frames with less than this overlap are considered a scene change
+    // 0.7 = 70% word overlap required to be considered "same slide"
+    const SCENE_CHANGE_THRESHOLD = 0.7;
 
-    if (!afRows || afRows.length === 0) {
-        // No OCR data — fall back to 1 frame per minute (1 FPS extraction → every 60 frames)
+    // OCR data is stored in courses.frame_analyses by stepAnalyzeFrames
+    const { data: courseRow } = await supabase
+        .from('courses')
+        .select('frame_analyses, video_duration_seconds')
+        .eq('id', courseId)
+        .maybeSingle();
+
+    const frameAnalyses: any[] = courseRow?.frame_analyses || [];
+    const durationSeconds = courseRow?.video_duration_seconds || 0;
+    const durationMinutes = Math.max(1, Math.round(durationSeconds / 60));
+
+    if (frameAnalyses.length === 0) {
+        // No OCR data — fall back to 1 frame per minute
+        const stride = Math.max(1, Math.round(frameUrls.length / durationMinutes));
         const filtered: string[] = [];
-        for (let i = 0; i < frameUrls.length; i += 60) {
+        for (let i = 0; i < frameUrls.length; i += stride) {
             filtered.push(frameUrls[i]);
         }
-        console.log(`[generate-pdf-backend] Quick/OCR fallback: ${filtered.length}/${frameUrls.length} frames (1/min)`);
+        console.log(`[generate-pdf-backend] Quick/OCR fallback: ${filtered.length}/${frameUrls.length} frames (1/min, stride=${stride}, duration=${durationMinutes}min)`);
         return filtered.length > 0 ? filtered : frameUrls;
     }
 
-    // Build frame_index → ocr_text map
+    // Build frame_index → ocr text map from frame_analyses
     const ocrMap = new Map<number, string>();
-    for (const row of afRows) {
-        ocrMap.set(row.frame_index, (row.ocr_text || '').trim());
+    for (const analysis of frameAnalyses) {
+        const idx = analysis.frameIndex ?? analysis.frame_index;
+        const text = (analysis.text || analysis.ocr_text || '').trim();
+        if (idx !== undefined) ocrMap.set(idx, text);
     }
 
-    // Keep frame when OCR text changes from previous frame
+    // Detect if this is a talking-head / no-text video
+    // If fewer than 20% of frames have any text, fall back to time-based sampling
+    const framesWithText = frameAnalyses.filter(a => (a.text || a.ocr_text || '').trim().length > 0).length;
+    const textCoverage = framesWithText / Math.max(frameAnalyses.length, 1);
+    if (textCoverage < 0.2) {
+        const stride = Math.max(1, Math.round(frameUrls.length / durationMinutes));
+        const filtered: string[] = [];
+        for (let i = 0; i < frameUrls.length; i += stride) {
+            filtered.push(frameUrls[i]);
+        }
+        console.log(`[generate-pdf-backend] Quick/no-text fallback: ${filtered.length}/${frameUrls.length} frames (${Math.round(textCoverage * 100)}% text coverage, using 1/min)`);
+        return filtered.length > 0 ? filtered : frameUrls;
+    }
+
+    // Similarity-based scene change detection
     const filtered: string[] = [];
     let prevText = '';
     for (let i = 0; i < frameUrls.length; i++) {
-        const text = ocrMap.get(i) ?? '';
-        if (text !== prevText) {
+        const text = ocrMap.get(i) ?? prevText; // use prev text if frame has no OCR entry
+        const similarity = textSimilarity(prevText, text);
+        if (similarity < SCENE_CHANGE_THRESHOLD) {
             filtered.push(frameUrls[i]);
             prevText = text;
         }
     }
 
-    console.log(`[generate-pdf-backend] Quick/OCR diff: ${filtered.length}/${frameUrls.length} slide-change frames`);
+    console.log(`[generate-pdf-backend] Quick/scene-detect: ${filtered.length}/${frameUrls.length} frames (threshold=${SCENE_CHANGE_THRESHOLD}, textCoverage=${Math.round(textCoverage * 100)}%)`);
     return filtered.length > 0 ? filtered : frameUrls;
 }
 
