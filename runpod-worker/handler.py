@@ -12,6 +12,9 @@ SUPABASE_URL = _raw_url if _raw_url.startswith("http") else f"https://{_raw_url}
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 
 
+HANDLER_VERSION = "2026-04-15-v1"
+
+
 def log(msg):
     print(f"[runpod-ffmpeg] {msg}", flush=True)
 
@@ -281,7 +284,7 @@ def handler(job):
     if not course_id:
         return {"error": "Missing courseId"}
 
-    log(f"Job input keys: {list(job_input.keys())}")
+    log(f"Handler v{HANDLER_VERSION} | Job input keys: {list(job_input.keys())}")
     log(f"Job start — courseId={course_id}, fps={fps}, table={table_name}, subsampleEvery={subsample_every}")
 
     with tempfile.TemporaryDirectory() as tmpdir:
