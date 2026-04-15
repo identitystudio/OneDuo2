@@ -20,7 +20,7 @@ SUPABASE_URL = _raw_url if _raw_url.startswith("http") else f"https://{_raw_url}
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 
 
-HANDLER_VERSION = "2026-04-15-v5"
+HANDLER_VERSION = "2026-04-15-v6"
 
 
 def log(msg):
@@ -261,16 +261,42 @@ def run_ocr_on_frames(frame_paths: list, subsample_every: int = 1) -> list:
 
     # Only OCR the frames we actually upload (every Nth frame)
     frames_to_ocr = [(i * subsample_every, p) for i, p in enumerate(frame_paths) if i % subsample_every == 0]
-    log(f"Running Tesseract OCR on {len(frames_to_ocr)} frames...")
+    total = len(frames_to_ocr)
+    log(f"Running Tesseract OCR on {total} frames with 12 workers (10s timeout per frame)...")
 
-    results = []
+    OCR_FRAME_TIMEOUT = 10  # seconds per frame before giving up
+
+    def make_empty(original_idx):
+        return {
+            "frameIndex": original_idx,
+            "timestamp": original_idx,
+            "text": "",
+            "ocr_confidence": 0,
+            "ui_state": "error",
+            "textType": "other",
+            "emphasisFlags": {
+                "highlight_detected": False, "cursor_pause": False,
+                "zoom_focus": False, "text_selected": False,
+                "lingering_frame": False, "bold_text": False,
+                "underline_detected": False
+            },
+            "keyElements": [],
+            "instructorIntent": "",
+            "visualDescription": "",
+            "prosody": {"tone": "neutral", "pacing": "normal", "volume": "normal", "parenthetical": ""},
+            "dependsOnPrevious": False
+        }
 
     def ocr_one(args):
         original_idx, path = args
         try:
             img = Image.open(path)
-            # --psm 6: assume uniform block of text, --oem 1: LSTM only (faster)
-            text = pytesseract.image_to_string(img, config='--psm 6 --oem 1').strip()
+            # Resize large images to speed up OCR — cap at 1280px wide
+            if img.width > 1280:
+                ratio = 1280 / img.width
+                img = img.resize((1280, int(img.height * ratio)), Image.LANCZOS)
+            # --psm 6: uniform text block, --oem 1: LSTM only (faster), timeout via pytesseract
+            text = pytesseract.image_to_string(img, config='--psm 6 --oem 1', timeout=OCR_FRAME_TIMEOUT).strip()
             return {
                 "frameIndex": original_idx,
                 "timestamp": original_idx,
@@ -290,31 +316,21 @@ def run_ocr_on_frames(frame_paths: list, subsample_every: int = 1) -> list:
                 "prosody": {"tone": "neutral", "pacing": "normal", "volume": "normal", "parenthetical": ""},
                 "dependsOnPrevious": False
             }
-        except Exception as e:
-            return {
-                "frameIndex": original_idx,
-                "timestamp": original_idx,
-                "text": "",
-                "ocr_confidence": 0,
-                "ui_state": "error",
-                "textType": "other",
-                "emphasisFlags": {
-                    "highlight_detected": False, "cursor_pause": False,
-                    "zoom_focus": False, "text_selected": False,
-                    "lingering_frame": False, "bold_text": False,
-                    "underline_detected": False
-                },
-                "keyElements": [],
-                "instructorIntent": "",
-                "visualDescription": "",
-                "prosody": {"tone": "neutral", "pacing": "normal", "volume": "normal", "parenthetical": ""},
-                "dependsOnPrevious": False
-            }
+        except RuntimeError:
+            # Tesseract timeout — skip frame gracefully
+            return make_empty(original_idx)
+        except Exception:
+            return make_empty(original_idx)
 
-    with ThreadPoolExecutor(max_workers=8) as executor:
+    results = []
+    completed = 0
+    with ThreadPoolExecutor(max_workers=12) as executor:
         futures = {executor.submit(ocr_one, item): item for item in frames_to_ocr}
         for future in as_completed(futures):
             results.append(future.result())
+            completed += 1
+            if completed % 50 == 0:
+                log(f"OCR progress: {completed}/{total} frames done")
 
     results.sort(key=lambda x: x["frameIndex"])
     frames_with_text = sum(1 for r in results if r["text"])
