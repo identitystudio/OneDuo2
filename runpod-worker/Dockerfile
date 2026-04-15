@@ -9,7 +9,7 @@ RUN apt-get update && \
 RUN pip install --no-cache-dir runpod requests pypdf
 
 WORKDIR /app
-RUN echo "cache-bust: 2026-04-15-v3"
 COPY handler.py .
+# v4
 
 CMD ["python", "-u", "handler.py"]

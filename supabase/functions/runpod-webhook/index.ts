@@ -304,23 +304,43 @@ serve(async (req: Request) => {
     // Determine next step — must go through analyze_frames to populate OCR data for slide detection
     const nextStep = step?.includes("module") ? "analyze_frames_module" : "analyze_frames";
 
-    // Check if next step already queued (prevent duplicates)
-    const { data: existingJob } = await supabase
+    // Check if next step is actively running or queued (prevent duplicates)
+    const { data: activeJob } = await supabase
       .from("processing_queue")
       .select("id, status")
       .eq("course_id", courseId)
       .eq("step", nextStep)
-      .in("status", ["completed", "processing", "pending"])
+      .in("status", ["processing", "pending"])
       .eq("purged", false)
       .maybeSingle();
 
-    if (existingJob) {
-      console.log(`[runpod-webhook] ${nextStep} already exists (${existingJob.status}), skipping`);
-      return new Response(JSON.stringify({ received: true, skipped: true, reason: "step_already_exists" }), {
+    if (activeJob) {
+      console.log(`[runpod-webhook] ${nextStep} already active (${activeJob.status}), skipping`);
+      return new Response(JSON.stringify({ received: true, skipped: true, reason: "step_already_active" }), {
         status: 200,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
+
+    // If the step previously "completed" but frame_analyses is empty, it ran too early
+    // (before RunPod finished uploading frames) — re-queue it now that frames are available.
+    const { data: analysisCheck } = await supabase
+      .from(tableName)
+      .select("frame_analyses")
+      .eq("id", recordId)
+      .single();
+    const frameAnalysesPopulated =
+      Array.isArray(analysisCheck?.frame_analyses) && analysisCheck.frame_analyses.length > 0;
+
+    if (frameAnalysesPopulated) {
+      console.log(`[runpod-webhook] frame_analyses already populated, skipping re-analysis`);
+      return new Response(JSON.stringify({ received: true, skipped: true, reason: "frame_analyses_exists" }), {
+        status: 200,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    console.log(`[runpod-webhook] Queuing ${nextStep} now that frames are available`);
 
     // Check if transcript is ready
     const { data: record } = await supabase.from(tableName)
