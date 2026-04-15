@@ -20,6 +20,7 @@ interface ProcessingProgressCardProps {
   estimatedTimeRemaining: string;
   videoDurationSeconds?: number;
   fpsTarget?: number;
+  processingMode?: string;
   syncStatus: { isStale: boolean; message: string; isStarting: boolean };
   isDelayed?: boolean;
   onTeamEmailSubmit: (email: string) => void;
@@ -133,6 +134,7 @@ export function ProcessingProgressCard({
   estimatedTimeRemaining,
   videoDurationSeconds,
   fpsTarget,
+  processingMode,
   syncStatus,
   isDelayed,
   onTeamEmailSubmit,
@@ -154,7 +156,9 @@ export function ProcessingProgressCard({
   };
 
   // Format estimated frames for long videos
-  const estimatedFrames = videoDurationSeconds ? Math.floor(videoDurationSeconds * (fpsTarget || 1)) : null;
+  // Quick mode uploads every 10th frame, so divide total by 10
+  const subsampleFactor = processingMode === 'quick' ? 10 : 1;
+  const estimatedFrames = videoDurationSeconds ? Math.floor((videoDurationSeconds * (fpsTarget || 1)) / subsampleFactor) : null;
   const processedFrames = estimatedFrames ? Math.floor((displayProgress / 100) * estimatedFrames) : null;
 
   return (

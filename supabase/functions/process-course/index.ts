@@ -151,7 +151,9 @@ async function insertQueueEntry(
         .eq("id", courseId)
         .single();
 
-      if (course?.status === 'completed') {
+      // Allow analyze_frames steps even on completed courses (post-processing via webhook)
+      const isAnalyzeStep = step === 'analyze_frames' || step === 'analyze_frames_module';
+      if (course?.status === 'completed' && !isAnalyzeStep) {
         console.log(`[queue-insert] SKIPPED: course ${courseId} already completed, won't insert ${step}`);
         return { success: true }; // Return success to not trigger error handling
       }
@@ -2753,7 +2755,11 @@ serve(async (req) => {
                 .eq("id", job.course_id)
                 .single();
 
-              if (courseData?.status === 'completed' || activeModulesCount === 0) {
+              // Allow analyze_frames/analyze_frames_module to run even on completed courses
+              // — they are legitimate post-processing steps triggered by the RunPod webhook
+              const isAnalyzeStep = job.step === 'analyze_frames' || job.step === 'analyze_frames_module';
+
+              if (!isAnalyzeStep && (courseData?.status === 'completed' || activeModulesCount === 0)) {
                 // Course is completed - just purge the stale queue job, don't reset course
                 await supabase.from("processing_queue").update({
                   purged: true,
