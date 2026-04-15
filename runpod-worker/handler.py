@@ -20,7 +20,7 @@ SUPABASE_URL = _raw_url if _raw_url.startswith("http") else f"https://{_raw_url}
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 
 
-HANDLER_VERSION = "2026-04-16-v7"
+HANDLER_VERSION = "2026-04-16-v9"
 
 
 def log(msg):
@@ -259,20 +259,26 @@ def run_ocr_on_frames(frame_paths: list, subsample_every: int = 1) -> list:
         log("Tesseract not available, skipping OCR")
         return []
 
-    # Only OCR the frames we actually upload (every Nth frame)
-    frames_to_ocr = [(i * subsample_every, p) for i, p in enumerate(frame_paths) if i % subsample_every == 0]
+    # OCR every 3rd uploaded frame — reduces OCR time by ~67% while keeping enough data for scene detection
+    # quick mode already uploads every 10th frame (1 frame/10s), so OCR every 3rd = 1 frame/30s
+    OCR_STRIDE = 3
+    frames_to_ocr = [
+        (i * subsample_every, p)
+        for i, p in enumerate(frame_paths)
+        if i % subsample_every == 0 and (i // subsample_every) % OCR_STRIDE == 0
+    ]
     total = len(frames_to_ocr)
-    log(f"Running Tesseract OCR on {total} frames with 12 workers (10s timeout per frame)...")
+    log(f"Running Tesseract OCR on {total} frames (every {OCR_STRIDE}rd uploaded frame) with 12 workers, 30s timeout...")
 
     OCR_FRAME_TIMEOUT = 30  # seconds per frame before giving up
 
-    def make_empty(original_idx):
+    def make_empty(original_idx, reason="error"):
         return {
             "frameIndex": original_idx,
             "timestamp": original_idx,
             "text": "",
             "ocr_confidence": 0,
-            "ui_state": "error",
+            "ui_state": reason,
             "textType": "other",
             "emphasisFlags": {
                 "highlight_detected": False, "cursor_pause": False,
@@ -289,16 +295,23 @@ def run_ocr_on_frames(frame_paths: list, subsample_every: int = 1) -> list:
 
     def ocr_one(args):
         original_idx, path = args
+        t_start = time.time()
         try:
             img = Image.open(path)
+            orig_size = (img.width, img.height)
             # Convert to grayscale — 2-3x faster for Tesseract
             img = img.convert('L')
-            # Resize to max 800px wide — small enough to be fast, large enough for text
+            # Resize to max 800px wide
             if img.width > 800:
                 ratio = 800 / img.width
                 img = img.resize((800, int(img.height * ratio)), Image.LANCZOS)
-            # --psm 11: sparse text (faster, handles mixed layouts), --oem 1: LSTM only
+            # --psm 11: sparse text (handles mixed layouts), --oem 1: LSTM only (faster)
             text = pytesseract.image_to_string(img, config='--psm 11 --oem 1', timeout=OCR_FRAME_TIMEOUT).strip()
+            elapsed = time.time() - t_start
+            # Log first 5 frames individually so user can verify OCR is working
+            if original_idx < 5 * subsample_every * OCR_STRIDE or original_idx % (50 * subsample_every * OCR_STRIDE) == 0:
+                preview = text[:80].replace('\n', ' ') if text else "(no text)"
+                log(f"OCR frame {original_idx}: {elapsed:.1f}s | size={orig_size} | text={preview!r}")
             return {
                 "frameIndex": original_idx,
                 "timestamp": original_idx,
@@ -319,10 +332,12 @@ def run_ocr_on_frames(frame_paths: list, subsample_every: int = 1) -> list:
                 "dependsOnPrevious": False
             }
         except RuntimeError:
-            # Tesseract timeout — skip frame gracefully
-            return make_empty(original_idx)
-        except Exception:
-            return make_empty(original_idx)
+            elapsed = time.time() - t_start
+            log(f"OCR frame {original_idx}: TIMEOUT after {elapsed:.1f}s — skipping")
+            return make_empty(original_idx, "timeout")
+        except Exception as e:
+            log(f"OCR frame {original_idx}: ERROR — {e}")
+            return make_empty(original_idx, "error")
 
     results = []
     completed = 0
