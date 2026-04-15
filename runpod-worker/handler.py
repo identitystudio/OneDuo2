@@ -20,7 +20,7 @@ SUPABASE_URL = _raw_url if _raw_url.startswith("http") else f"https://{_raw_url}
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 
 
-HANDLER_VERSION = "2026-04-15-v4"
+HANDLER_VERSION = "2026-04-15-v5"
 
 
 def log(msg):
@@ -269,7 +269,8 @@ def run_ocr_on_frames(frame_paths: list, subsample_every: int = 1) -> list:
         original_idx, path = args
         try:
             img = Image.open(path)
-            text = pytesseract.image_to_string(img, config='--psm 6').strip()
+            # --psm 6: assume uniform block of text, --oem 1: LSTM only (faster)
+            text = pytesseract.image_to_string(img, config='--psm 6 --oem 1').strip()
             return {
                 "frameIndex": original_idx,
                 "timestamp": original_idx,
@@ -310,7 +311,7 @@ def run_ocr_on_frames(frame_paths: list, subsample_every: int = 1) -> list:
                 "dependsOnPrevious": False
             }
 
-    with ThreadPoolExecutor(max_workers=4) as executor:
+    with ThreadPoolExecutor(max_workers=8) as executor:
         futures = {executor.submit(ocr_one, item): item for item in frames_to_ocr}
         for future in as_completed(futures):
             results.append(future.result())
