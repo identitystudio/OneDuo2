@@ -7,6 +7,12 @@ import json
 import math
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+try:
+    import pytesseract
+    from PIL import Image
+    TESSERACT_AVAILABLE = True
+except ImportError:
+    TESSERACT_AVAILABLE = False
 
 _raw_url = os.environ.get("SUPABASE_URL", "")
 # Ensure SUPABASE_URL always has https:// prefix
@@ -14,7 +20,7 @@ SUPABASE_URL = _raw_url if _raw_url.startswith("http") else f"https://{_raw_url}
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 
 
-HANDLER_VERSION = "2026-04-15-v3"
+HANDLER_VERSION = "2026-04-15-v4"
 
 
 def log(msg):
@@ -247,6 +253,93 @@ def upload_frame_to_supabase(local_path: str, storage_path: str) -> str | None:
     return None
 
 
+def run_ocr_on_frames(frame_paths: list, subsample_every: int = 1) -> list:
+    """Run Tesseract OCR on frames and return frame_analyses array."""
+    if not TESSERACT_AVAILABLE:
+        log("Tesseract not available, skipping OCR")
+        return []
+
+    # Only OCR the frames we actually upload (every Nth frame)
+    frames_to_ocr = [(i * subsample_every, p) for i, p in enumerate(frame_paths) if i % subsample_every == 0]
+    log(f"Running Tesseract OCR on {len(frames_to_ocr)} frames...")
+
+    results = []
+
+    def ocr_one(args):
+        original_idx, path = args
+        try:
+            img = Image.open(path)
+            text = pytesseract.image_to_string(img, config='--psm 6').strip()
+            return {
+                "frameIndex": original_idx,
+                "timestamp": original_idx,
+                "text": text,
+                "ocr_confidence": 0.9 if text else 0.1,
+                "ui_state": "slide" if text else "talking_head",
+                "visualDescription": "",
+                "textType": "slide" if text else "other",
+                "emphasisFlags": {
+                    "highlight_detected": False, "cursor_pause": False,
+                    "zoom_focus": False, "text_selected": False,
+                    "lingering_frame": False, "bold_text": False,
+                    "underline_detected": False
+                },
+                "keyElements": [],
+                "instructorIntent": "",
+                "prosody": {"tone": "neutral", "pacing": "normal", "volume": "normal", "parenthetical": ""},
+                "dependsOnPrevious": False
+            }
+        except Exception as e:
+            return {
+                "frameIndex": original_idx,
+                "timestamp": original_idx,
+                "text": "",
+                "ocr_confidence": 0,
+                "ui_state": "error",
+                "textType": "other",
+                "emphasisFlags": {
+                    "highlight_detected": False, "cursor_pause": False,
+                    "zoom_focus": False, "text_selected": False,
+                    "lingering_frame": False, "bold_text": False,
+                    "underline_detected": False
+                },
+                "keyElements": [],
+                "instructorIntent": "",
+                "visualDescription": "",
+                "prosody": {"tone": "neutral", "pacing": "normal", "volume": "normal", "parenthetical": ""},
+                "dependsOnPrevious": False
+            }
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = {executor.submit(ocr_one, item): item for item in frames_to_ocr}
+        for future in as_completed(futures):
+            results.append(future.result())
+
+    results.sort(key=lambda x: x["frameIndex"])
+    frames_with_text = sum(1 for r in results if r["text"])
+    log(f"OCR complete: {frames_with_text}/{len(results)} frames have text")
+    return results
+
+
+def save_frame_analyses(table_name: str, record_id: str, analyses: list):
+    """Save frame_analyses OCR results to Supabase DB."""
+    url = f"{SUPABASE_URL}/rest/v1/{table_name}?id=eq.{record_id}"
+    headers = {
+        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+        "apikey": SUPABASE_SERVICE_ROLE_KEY,
+        "Content-Type": "application/json",
+        "Prefer": "return=minimal",
+    }
+    try:
+        resp = requests.patch(url, headers=headers, json={"frame_analyses": analyses}, timeout=30)
+        if resp.status_code in (200, 204):
+            log(f"Saved {len(analyses)} frame analyses to DB")
+        else:
+            log(f"Failed to save frame analyses: {resp.status_code} {resp.text[:100]}")
+    except Exception as e:
+        log(f"Exception saving frame analyses: {e}")
+
+
 def update_db_progress(table_name: str, record_id: str, progress: int, total_frames: int = None):
     """Update course/module progress in Supabase DB."""
     url = f"{SUPABASE_URL}/rest/v1/{table_name}?id=eq.{record_id}"
@@ -323,6 +416,11 @@ def handler(job):
         total_frames = len(frame_paths)
         upload_total = math.ceil(total_frames / subsample_every)
         update_db_progress(table_name, record_id, 40, upload_total)
+
+        # Run Tesseract OCR on frames before uploading — free, local, no API calls
+        analyses = run_ocr_on_frames(frame_paths, subsample_every)
+        if analyses:
+            save_frame_analyses(table_name, record_id, analyses)
 
         # 4. Upload frames to Supabase Storage
         # subsample_every > 1 means only upload every Nth frame (quick mode)
