@@ -6,10 +6,9 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
-RUN pip install --no-cache-dir runpod requests pypdf
+RUN pip install --no-cache-dir runpod requests pypdf concurrent-log-handler
 
 WORKDIR /app
 COPY handler.py .
-# v4
 
 CMD ["python", "-u", "handler.py"]
