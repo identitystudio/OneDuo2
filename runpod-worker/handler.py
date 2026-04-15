@@ -20,7 +20,7 @@ SUPABASE_URL = _raw_url if _raw_url.startswith("http") else f"https://{_raw_url}
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 
 
-HANDLER_VERSION = "2026-04-15-v6"
+HANDLER_VERSION = "2026-04-16-v7"
 
 
 def log(msg):
@@ -264,7 +264,7 @@ def run_ocr_on_frames(frame_paths: list, subsample_every: int = 1) -> list:
     total = len(frames_to_ocr)
     log(f"Running Tesseract OCR on {total} frames with 12 workers (10s timeout per frame)...")
 
-    OCR_FRAME_TIMEOUT = 10  # seconds per frame before giving up
+    OCR_FRAME_TIMEOUT = 30  # seconds per frame before giving up
 
     def make_empty(original_idx):
         return {
@@ -291,12 +291,14 @@ def run_ocr_on_frames(frame_paths: list, subsample_every: int = 1) -> list:
         original_idx, path = args
         try:
             img = Image.open(path)
-            # Resize large images to speed up OCR — cap at 1280px wide
-            if img.width > 1280:
-                ratio = 1280 / img.width
-                img = img.resize((1280, int(img.height * ratio)), Image.LANCZOS)
-            # --psm 6: uniform text block, --oem 1: LSTM only (faster), timeout via pytesseract
-            text = pytesseract.image_to_string(img, config='--psm 6 --oem 1', timeout=OCR_FRAME_TIMEOUT).strip()
+            # Convert to grayscale — 2-3x faster for Tesseract
+            img = img.convert('L')
+            # Resize to max 800px wide — small enough to be fast, large enough for text
+            if img.width > 800:
+                ratio = 800 / img.width
+                img = img.resize((800, int(img.height * ratio)), Image.LANCZOS)
+            # --psm 11: sparse text (faster, handles mixed layouts), --oem 1: LSTM only
+            text = pytesseract.image_to_string(img, config='--psm 11 --oem 1', timeout=OCR_FRAME_TIMEOUT).strip()
             return {
                 "frameIndex": original_idx,
                 "timestamp": original_idx,
