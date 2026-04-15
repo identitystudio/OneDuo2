@@ -5,6 +5,8 @@ import tempfile
 import requests
 import json
 import math
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 _raw_url = os.environ.get("SUPABASE_URL", "")
 # Ensure SUPABASE_URL always has https:// prefix
@@ -66,7 +68,10 @@ def extract_frames(video_path: str, frames_dir: str, fps: int) -> list:
         "-y"
     ]
 
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    # Scale timeout: allow 2× the video's expected extraction time, minimum 10 min
+    # ffprobe is called before this so duration is available via video metadata if needed,
+    # but we use a generous fixed floor + frame-count heuristic via -vframes limit.
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)  # 1hr cap
 
     if result.returncode != 0:
         log(f"FFmpeg error: {result.stderr[-500:]}")
@@ -212,24 +217,34 @@ def handle_merge_pdf(job_input: dict, webhook_url: str) -> dict:
 
 
 def upload_frame_to_supabase(local_path: str, storage_path: str) -> str | None:
-    """Upload a single frame to Supabase Storage and return its public URL."""
+    """Upload a single frame to Supabase Storage and return its public URL.
+    Retries up to 5 times with exponential backoff to handle 429 rate limits."""
     url = f"{SUPABASE_URL}/storage/v1/object/course-videos/{storage_path}"
     headers = {
         "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
         "Content-Type": "image/jpeg",
         "x-upsert": "true",
     }
-    try:
-        with open(local_path, "rb") as f:
-            resp = requests.post(url, headers=headers, data=f, timeout=30)
-        if resp.status_code in (200, 201):
-            return f"{SUPABASE_URL}/storage/v1/object/public/course-videos/{storage_path}"
-        else:
+    for attempt in range(5):
+        try:
+            with open(local_path, "rb") as f:
+                resp = requests.post(url, headers=headers, data=f, timeout=30)
+            if resp.status_code in (200, 201):
+                return f"{SUPABASE_URL}/storage/v1/object/public/course-videos/{storage_path}"
+            if resp.status_code == 429:
+                wait = 2 ** attempt  # 1, 2, 4, 8, 16 seconds
+                log(f"Rate limited on {storage_path}, waiting {wait}s (attempt {attempt+1}/5)")
+                time.sleep(wait)
+                continue
             log(f"Upload failed for {storage_path}: {resp.status_code} {resp.text[:100]}")
             return None
-    except Exception as e:
-        log(f"Upload exception for {storage_path}: {e}")
-        return None
+        except Exception as e:
+            if attempt < 4:
+                time.sleep(2 ** attempt)
+                continue
+            log(f"Upload exception for {storage_path}: {e}")
+            return None
+    return None
 
 
 def update_db_progress(table_name: str, record_id: str, progress: int, total_frames: int = None):
@@ -311,32 +326,41 @@ def handler(job):
 
         # 4. Upload frames to Supabase Storage
         # subsample_every > 1 means only upload every Nth frame (quick mode)
-        frames_to_upload = [p for i, p in enumerate(frame_paths) if i % subsample_every == 0]
+        frames_to_upload = [(i, p) for i, p in enumerate(frame_paths) if i % subsample_every == 0]
         upload_total = len(frames_to_upload)
         if subsample_every > 1:
             log(f"Quick mode: uploading {upload_total}/{total_frames} frames (every {subsample_every}th)")
         else:
-            log(f"Uploading {upload_total} frames to Supabase Storage...")
-        frame_urls = []
+            log(f"Uploading {upload_total} frames to Supabase Storage (parallel, 20 workers)...")
+
+        frame_urls_map = {}  # idx -> url, preserves order
         failed_count = 0
+        completed_count = 0
 
-        for i, local_path in enumerate(frames_to_upload):
-            # Use original frame index in storage path so timestamps stay correct
-            original_idx = i * subsample_every
+        def upload_one(args):
+            list_idx, local_path = args
+            original_idx = list_idx * subsample_every
             storage_path = f"{record_id}/frame_{original_idx:05d}.jpg"
-            public_url = upload_frame_to_supabase(local_path, storage_path)
+            url = upload_frame_to_supabase(local_path, storage_path)
+            return list_idx, url
 
-            if public_url:
-                frame_urls.append(public_url)
-            else:
-                failed_count += 1
+        with ThreadPoolExecutor(max_workers=20) as executor:
+            futures = {executor.submit(upload_one, item): item for item in frames_to_upload}
+            for future in as_completed(futures):
+                list_idx, url = future.result()
+                completed_count += 1
+                if url:
+                    frame_urls_map[list_idx] = url
+                else:
+                    failed_count += 1
 
-            # Log progress every 100 frames
-            if (i + 1) % 100 == 0:
-                pct = 40 + int(((i + 1) / upload_total) * 50)
-                update_db_progress(table_name, record_id, min(pct, 89))
-                log(f"Uploaded {i + 1}/{upload_total} frames ({failed_count} failed)")
+                if completed_count % 100 == 0:
+                    pct = 40 + int((completed_count / upload_total) * 50)
+                    update_db_progress(table_name, record_id, min(pct, 89))
+                    log(f"Uploaded {completed_count}/{upload_total} frames ({failed_count} failed)")
 
+        # Rebuild ordered list
+        frame_urls = [frame_urls_map[i] for i in sorted(frame_urls_map)]
         log(f"Upload complete: {len(frame_urls)} succeeded, {failed_count} failed")
 
         # 5. Call webhook if provided
