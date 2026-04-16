@@ -136,18 +136,6 @@ function compressFrameUrl(url: string, width = 640, quality = 60): string {
 
 // Jaccard similarity between two strings (word-level)
 // Returns 0.0 (completely different) to 1.0 (identical)
-function textSimilarity(a: string, b: string): number {
-    if (a === b) return 1.0;
-    if (!a && !b) return 1.0;
-    if (!a || !b) return 0.0;
-    const wordsA = new Set(a.toLowerCase().split(/\s+/).filter(Boolean));
-    const wordsB = new Set(b.toLowerCase().split(/\s+/).filter(Boolean));
-    if (wordsA.size === 0 && wordsB.size === 0) return 1.0;
-    if (wordsA.size === 0 || wordsB.size === 0) return 0.0;
-    const intersection = [...wordsA].filter(w => wordsB.has(w)).length;
-    const union = new Set([...wordsA, ...wordsB]).size;
-    return intersection / union;
-}
 
 async function filterToSlideChanges(
     supabase: ReturnType<typeof createClient>,
@@ -1166,7 +1154,7 @@ async function buildPartPDF(
     y = PAGE_HEIGHT - 120;
     currentPage.drawText(safeText(courseTitle), { x: MARGIN, y, size: 20, font: boldFont, color: rgb(0, 0, 0) });
     y -= 30;
-    currentPage.drawText(safeText(`Visual Transcription — Part ${partNumber} of ${totalParts}`), {
+    currentPage.drawText(safeText(`OneDuo — Part ${partNumber} of ${totalParts}`), {
         x: MARGIN, y, size: 14, font, color: rgb(0.2, 0.2, 0.2),
     });
     y -= 18;
