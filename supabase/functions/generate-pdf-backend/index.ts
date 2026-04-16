@@ -156,11 +156,10 @@ async function filterToSlideChanges(
 ): Promise<string[]> {
     if (frameUrls.length === 0) return frameUrls;
 
-    // Similarity threshold: frames with less than this overlap are considered a scene change
-    // 0.7 = 70% word overlap required to be considered "same slide"
-    const SCENE_CHANGE_THRESHOLD = 0.7;
+    // Pixel diff threshold: frames with score >= this are considered a scene change
+    // 0.08 = 8% average pixel difference (ignores minor motion, catches real slide changes)
+    const SCENE_CHANGE_THRESHOLD = 0.08;
 
-    // OCR data is stored in courses.frame_analyses by stepAnalyzeFrames
     const { data: courseRow } = await supabase
         .from('courses')
         .select('frame_analyses, video_duration_seconds')
@@ -172,51 +171,45 @@ async function filterToSlideChanges(
     const durationMinutes = Math.max(1, Math.round(durationSeconds / 60));
 
     if (frameAnalyses.length === 0) {
-        // No OCR data — fall back to 1 frame per minute
+        // No pixel diff data yet — fall back to 1 frame per minute
         const stride = Math.max(1, Math.round(frameUrls.length / durationMinutes));
         const filtered: string[] = [];
         for (let i = 0; i < frameUrls.length; i += stride) {
             filtered.push(frameUrls[i]);
         }
-        console.log(`[generate-pdf-backend] Quick/OCR fallback: ${filtered.length}/${frameUrls.length} frames (1/min, stride=${stride}, duration=${durationMinutes}min)`);
+        console.log(`[generate-pdf-backend] No frame_analyses — fallback: ${filtered.length}/${frameUrls.length} frames (1/min, stride=${stride})`);
         return filtered.length > 0 ? filtered : frameUrls;
     }
 
-    // Build frame_index → ocr text map from frame_analyses
-    const ocrMap = new Map<number, string>();
+    // Build frameIndex → pixel_diff_score map
+    const diffMap = new Map<number, number>();
     for (const analysis of frameAnalyses) {
         const idx = analysis.frameIndex ?? analysis.frame_index;
-        const text = (analysis.text || analysis.ocr_text || '').trim();
-        if (idx !== undefined) ocrMap.set(idx, text);
+        const score = analysis.pixel_diff_score ?? null;
+        if (idx !== undefined && score !== null) diffMap.set(idx, score);
     }
 
-    // Detect if this is a talking-head / no-text video
-    // If fewer than 20% of frames have any text, fall back to time-based sampling
-    const framesWithText = frameAnalyses.filter(a => (a.text || a.ocr_text || '').trim().length > 0).length;
-    const textCoverage = framesWithText / Math.max(frameAnalyses.length, 1);
-    if (textCoverage < 0.2) {
+    // If no pixel_diff_score data found (old OCR data), fall back to 1 frame per minute
+    if (diffMap.size === 0) {
         const stride = Math.max(1, Math.round(frameUrls.length / durationMinutes));
         const filtered: string[] = [];
         for (let i = 0; i < frameUrls.length; i += stride) {
             filtered.push(frameUrls[i]);
         }
-        console.log(`[generate-pdf-backend] Quick/no-text fallback: ${filtered.length}/${frameUrls.length} frames (${Math.round(textCoverage * 100)}% text coverage, using 1/min)`);
+        console.log(`[generate-pdf-backend] No pixel diff scores — fallback: ${filtered.length}/${frameUrls.length} frames (1/min)`);
         return filtered.length > 0 ? filtered : frameUrls;
     }
 
-    // Similarity-based scene change detection
+    // Pixel diff scene change detection — include frame if its diff score >= threshold
     const filtered: string[] = [];
-    let prevText = '';
     for (let i = 0; i < frameUrls.length; i++) {
-        const text = ocrMap.get(i) ?? prevText; // use prev text if frame has no OCR entry
-        const similarity = textSimilarity(prevText, text);
-        if (similarity < SCENE_CHANGE_THRESHOLD) {
+        const score = diffMap.get(i) ?? SCENE_CHANGE_THRESHOLD; // default: include if unknown
+        if (score >= SCENE_CHANGE_THRESHOLD) {
             filtered.push(frameUrls[i]);
-            prevText = text;
         }
     }
 
-    console.log(`[generate-pdf-backend] Quick/scene-detect: ${filtered.length}/${frameUrls.length} frames (threshold=${SCENE_CHANGE_THRESHOLD}, textCoverage=${Math.round(textCoverage * 100)}%)`);
+    console.log(`[generate-pdf-backend] Pixel diff scene detect: ${filtered.length}/${frameUrls.length} frames (threshold=${SCENE_CHANGE_THRESHOLD})`);
     return filtered.length > 0 ? filtered : frameUrls;
 }
 

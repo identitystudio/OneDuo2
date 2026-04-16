@@ -7,12 +7,7 @@ import json
 import math
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-try:
-    import pytesseract
-    from PIL import Image
-    TESSERACT_AVAILABLE = True
-except ImportError:
-    TESSERACT_AVAILABLE = False
+from PIL import Image, ImageChops, ImageStat
 
 _raw_url = os.environ.get("SUPABASE_URL", "")
 # Ensure SUPABASE_URL always has https:// prefix
@@ -20,7 +15,7 @@ SUPABASE_URL = _raw_url if _raw_url.startswith("http") else f"https://{_raw_url}
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 
 
-HANDLER_VERSION = "2026-04-16-v9"
+HANDLER_VERSION = "2026-04-16-v10"
 
 
 def log(msg):
@@ -253,110 +248,52 @@ def upload_frame_to_supabase(local_path: str, storage_path: str) -> str | None:
     return None
 
 
-def run_ocr_on_frames(frame_paths: list, subsample_every: int = 1) -> list:
-    """Run Tesseract OCR on frames and return frame_analyses array."""
-    if not TESSERACT_AVAILABLE:
-        log("Tesseract not available, skipping OCR")
-        return []
+def compute_pixel_diffs(frame_paths: list, subsample_every: int = 1) -> list:
+    """
+    Compute pixel diff score between consecutive uploaded frames.
+    Score 0.0 = identical, 1.0 = completely different.
+    Fast: uses 64x36 grayscale thumbnails — takes ~1ms per frame.
+    """
+    uploaded = [(i * subsample_every, p) for i, p in enumerate(frame_paths) if i % subsample_every == 0]
+    total = len(uploaded)
+    log(f"Computing pixel diffs for {total} frames (scene change detection)...")
 
-    # OCR every 3rd uploaded frame — reduces OCR time by ~67% while keeping enough data for scene detection
-    # quick mode already uploads every 10th frame (1 frame/10s), so OCR every 3rd = 1 frame/30s
-    OCR_STRIDE = 3
-    frames_to_ocr = [
-        (i * subsample_every, p)
-        for i, p in enumerate(frame_paths)
-        if i % subsample_every == 0 and (i // subsample_every) % OCR_STRIDE == 0
-    ]
-    total = len(frames_to_ocr)
-    log(f"Running Tesseract OCR on {total} frames (every {OCR_STRIDE}rd uploaded frame) with 12 workers, 30s timeout...")
+    THUMB = (64, 36)  # tiny thumbnail — fast to compare
+    results = []
+    prev_thumb = None
 
-    OCR_FRAME_TIMEOUT = 30  # seconds per frame before giving up
-
-    def make_empty(original_idx, reason="error"):
-        return {
-            "frameIndex": original_idx,
-            "timestamp": original_idx,
-            "text": "",
-            "ocr_confidence": 0,
-            "ui_state": reason,
-            "textType": "other",
-            "emphasisFlags": {
-                "highlight_detected": False, "cursor_pause": False,
-                "zoom_focus": False, "text_selected": False,
-                "lingering_frame": False, "bold_text": False,
-                "underline_detected": False
-            },
-            "keyElements": [],
-            "instructorIntent": "",
-            "visualDescription": "",
-            "prosody": {"tone": "neutral", "pacing": "normal", "volume": "normal", "parenthetical": ""},
-            "dependsOnPrevious": False
-        }
-
-    def ocr_one(args):
-        original_idx, path = args
-        t_start = time.time()
+    for pos, (original_idx, path) in enumerate(uploaded):
         try:
-            img = Image.open(path)
-            orig_size = (img.width, img.height)
-            # Convert to grayscale — 2-3x faster for Tesseract
-            img = img.convert('L')
-            # Resize to max 800px wide
-            if img.width > 800:
-                ratio = 800 / img.width
-                img = img.resize((800, int(img.height * ratio)), Image.LANCZOS)
-            # --psm 11: sparse text (handles mixed layouts), --oem 1: LSTM only (faster)
-            text = pytesseract.image_to_string(img, config='--psm 11 --oem 1', timeout=OCR_FRAME_TIMEOUT).strip()
-            elapsed = time.time() - t_start
-            # Log first 5 frames individually so user can verify OCR is working
-            if original_idx < 5 * subsample_every * OCR_STRIDE or original_idx % (50 * subsample_every * OCR_STRIDE) == 0:
-                preview = text[:80].replace('\n', ' ') if text else "(no text)"
-                log(f"OCR frame {original_idx}: {elapsed:.1f}s | size={orig_size} | text={preview!r}")
-            return {
+            img = Image.open(path).convert('L').resize(THUMB, Image.LANCZOS)
+            if prev_thumb is None:
+                diff_score = 1.0  # first frame always a scene change
+            else:
+                diff = ImageChops.difference(img, prev_thumb)
+                stat = ImageStat.Stat(diff)
+                diff_score = round(stat.mean[0] / 255.0, 4)
+            prev_thumb = img
+
+            # Log first 3 frames + every 100th so you can verify it's running
+            if pos < 3 or pos % 100 == 0:
+                log(f"Pixel diff frame {original_idx}: score={diff_score:.4f} ({'SCENE CHANGE' if diff_score >= 0.08 else 'same'})")
+
+            results.append({
                 "frameIndex": original_idx,
                 "timestamp": original_idx,
-                "text": text,
-                "ocr_confidence": 0.9 if text else 0.1,
-                "ui_state": "slide" if text else "talking_head",
-                "visualDescription": "",
-                "textType": "slide" if text else "other",
-                "emphasisFlags": {
-                    "highlight_detected": False, "cursor_pause": False,
-                    "zoom_focus": False, "text_selected": False,
-                    "lingering_frame": False, "bold_text": False,
-                    "underline_detected": False
-                },
-                "keyElements": [],
-                "instructorIntent": "",
-                "prosody": {"tone": "neutral", "pacing": "normal", "volume": "normal", "parenthetical": ""},
-                "dependsOnPrevious": False
-            }
-        except RuntimeError:
-            elapsed = time.time() - t_start
-            log(f"OCR frame {original_idx}: TIMEOUT after {elapsed:.1f}s — skipping")
-            return make_empty(original_idx, "timeout")
+                "pixel_diff_score": diff_score,
+                "text": "",
+            })
         except Exception as e:
-            log(f"OCR frame {original_idx}: ERROR — {e}")
-            return make_empty(original_idx, "error")
+            log(f"Pixel diff frame {original_idx}: ERROR — {e}")
+            results.append({"frameIndex": original_idx, "timestamp": original_idx, "pixel_diff_score": 0.0, "text": ""})
 
-    results = []
-    completed = 0
-    with ThreadPoolExecutor(max_workers=12) as executor:
-        futures = {executor.submit(ocr_one, item): item for item in frames_to_ocr}
-        for future in as_completed(futures):
-            results.append(future.result())
-            completed += 1
-            if completed % 50 == 0:
-                log(f"OCR progress: {completed}/{total} frames done")
-
-    results.sort(key=lambda x: x["frameIndex"])
-    frames_with_text = sum(1 for r in results if r["text"])
-    log(f"OCR complete: {frames_with_text}/{len(results)} frames have text")
+    scene_changes = sum(1 for r in results if r["pixel_diff_score"] >= 0.08)
+    log(f"Pixel diff complete: {scene_changes}/{total} scene changes detected (threshold=0.08)")
     return results
 
 
 def save_frame_analyses(table_name: str, record_id: str, analyses: list):
-    """Save frame_analyses OCR results to Supabase DB."""
+    """Save frame_analyses (pixel diff scores) to Supabase DB."""
     url = f"{SUPABASE_URL}/rest/v1/{table_name}?id=eq.{record_id}"
     headers = {
         "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
@@ -367,7 +304,7 @@ def save_frame_analyses(table_name: str, record_id: str, analyses: list):
     try:
         resp = requests.patch(url, headers=headers, json={"frame_analyses": analyses}, timeout=30)
         if resp.status_code in (200, 204):
-            log(f"Saved {len(analyses)} frame analyses to DB")
+            log(f"Saved {len(analyses)} pixel diff scores to DB")
         else:
             log(f"Failed to save frame analyses: {resp.status_code} {resp.text[:100]}")
     except Exception as e:
@@ -451,8 +388,8 @@ def handler(job):
         upload_total = math.ceil(total_frames / subsample_every)
         update_db_progress(table_name, record_id, 40, upload_total)
 
-        # Run Tesseract OCR on frames before uploading — free, local, no API calls
-        analyses = run_ocr_on_frames(frame_paths, subsample_every)
+        # Compute pixel diffs for scene change detection — fast, free, no OCR needed
+        analyses = compute_pixel_diffs(frame_paths, subsample_every)
         if analyses:
             save_frame_analyses(table_name, record_id, analyses)
 

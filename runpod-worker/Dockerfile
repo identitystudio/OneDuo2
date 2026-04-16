@@ -1,12 +1,12 @@
 FROM python:3.11.9-slim
 
-# Install FFmpeg, Tesseract OCR and dependencies
+# Install FFmpeg and dependencies
 RUN apt-get update && \
-    apt-get install -y ffmpeg wget curl tesseract-ocr tesseract-ocr-eng && \
+    apt-get install -y ffmpeg wget curl && \
     rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
-RUN pip install --no-cache-dir runpod requests pypdf pytesseract Pillow
+RUN pip install --no-cache-dir runpod requests pypdf Pillow
 
 WORKDIR /app
 COPY handler.py .
