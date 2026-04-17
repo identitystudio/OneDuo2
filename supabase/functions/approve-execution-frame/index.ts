@@ -8,12 +8,53 @@ const corsHeaders = {
 
 /**
  * Approve Execution Frame
- * 
+ *
  * Human approval of pending frames.
  * Part of the OneDuo Governance Layer.
- * 
+ *
  * This function handles human decisions on pending execution frames.
+ * Approvals are cryptographically verified: the approval_signature must be the
+ * HMAC-SHA256 token issued by create-execution-frame at frame creation time.
+ * This binds the human's approval to the exact proposed_state — if the payload
+ * was tampered with after issuance, verification fails and execution is blocked.
  */
+
+// Canonicalize an object by sorting all keys recursively (Moat #4)
+function canonicalize(obj: unknown): string {
+  const allKeys: string[] = [];
+  JSON.stringify(obj, (key, value) => {
+    allKeys.push(key);
+    return value;
+  });
+  allKeys.sort();
+  return JSON.stringify(obj, allKeys);
+}
+
+// Compute HMAC-SHA256 over a message using a secret key. Returns lowercase hex.
+async function computeHmac(message: string, secret: string): Promise<string> {
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw",
+    enc.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, enc.encode(message));
+  return Array.from(new Uint8Array(sig))
+    .map(b => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+// Constant-time string comparison to prevent timing attacks
+function safeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) {
+    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return diff === 0;
+}
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -21,6 +62,19 @@ serve(async (req) => {
   }
 
   try {
+    // Fail closed: signing key must be present — no silent degradation
+    const signingKey = Deno.env.get("GOVERNANCE_SIGNING_KEY");
+    if (!signingKey) {
+      console.error("[approve-execution-frame] GOVERNANCE_SIGNING_KEY not set — cannot verify approvals");
+      return new Response(JSON.stringify({
+        success: false,
+        error: "Governance configuration error: signing key unavailable"
+      }), {
+        status: 503,
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      });
+    }
+
     const supabase = createClient(
       Deno.env.get("SUPABASE_URL")!,
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
@@ -38,7 +92,7 @@ serve(async (req) => {
       });
     }
 
-    // MANDATORY: OneDuo 2 Governance Signature Requirement
+    // MANDATORY: approvals require a signature — presence check first
     if (decision === 'approved' && !approval_signature) {
       return new Response(JSON.stringify({
         success: false,
@@ -48,17 +102,6 @@ serve(async (req) => {
         headers: { ...corsHeaders, "Content-Type": "application/json" }
       });
     }
-
-    // Canonicalization Helper (Moat #4)
-    const canonicalize = (obj: any): string => {
-      const allKeys: string[] = [];
-      JSON.stringify(obj, (key, value) => {
-        allKeys.push(key);
-        return value;
-      });
-      allKeys.sort();
-      return JSON.stringify(obj, allKeys);
-    };
 
     // Validate decision
     if (!['approved', 'rejected'].includes(decision)) {
@@ -100,7 +143,6 @@ serve(async (req) => {
     const frameAge = Date.now() - new Date(frame.initiated_at).getTime();
     const oneHourMs = 60 * 60 * 1000;
     if (frameAge > oneHourMs) {
-      // Mark as expired
       await supabase.from("execution_frames").update({
         approval_status: 'expired',
         metadata: {
@@ -117,12 +159,39 @@ serve(async (req) => {
       }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
+    // Cryptographic verification — the core non-bypassability claim.
+    //
+    // Re-derive the expected HMAC from the frame's canonical proposed_state + frame_id.
+    // This binds the approval to the exact payload that was created — if anyone tampered
+    // with proposed_state after issuance, the HMAC will not match and execution is blocked.
+    //
+    // The client obtains the approval_token from create-execution-frame at frame creation
+    // and passes it back unchanged as approval_signature.
+    const canonicalPayload = canonicalize(frame.proposed_state);
+    const signingMessage = `${canonicalPayload}:${frame_id}`;
+    const expectedHmac = await computeHmac(signingMessage, signingKey);
+
+    let signatureVerified = false;
+
+    if (decision === 'approved') {
+      signatureVerified = safeEqual(approval_signature, expectedHmac);
+
+      if (!signatureVerified) {
+        console.error(`[approve-execution-frame] Signature verification FAILED for frame ${frame_id}`);
+        return new Response(JSON.stringify({
+          success: false,
+          error: 'Governance Violation: Signature verification failed — approval not bound to this payload.'
+        }), {
+          status: 403,
+          headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
+      }
+
+      console.log(`[approve-execution-frame] Signature verified for frame ${frame_id}`);
+    }
+
     // Update frame with decision
     const now = new Date().toISOString();
-
-    // Compute payload hash for binding (OneDuo 2)
-    // In a real system, we'd use crypto.subtle.digest
-    const canonicalPayload = canonicalize(frame.proposed_state);
 
     const { error: updateError } = await supabase
       .from("execution_frames")
@@ -137,7 +206,8 @@ serve(async (req) => {
           decision_notes: decision_notes || null,
           decision_timestamp: now,
           approval_signature: approval_signature || null,
-          payload_hash_at_approval: btoa(canonicalPayload).substring(0, 32) // Representative hash
+          payload_hash_at_approval: expectedHmac,
+          signature_verified: signatureVerified
         }
       })
       .eq("id", frame_id);

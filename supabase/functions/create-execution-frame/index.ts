@@ -8,12 +8,43 @@ const corsHeaders = {
 
 /**
  * Create Execution Frame
- * 
+ *
  * Generate frames for operations, check approval gates, auto-approve when conditions met.
  * Part of the OneDuo Governance Layer.
- * 
+ *
  * Every state transition requires a frame. No action without identity.
+ * When human approval is required, the response includes an approval_token —
+ * the HMAC-SHA256 of canonical(proposed_state):frame_id. The approver must pass
+ * this token as approval_signature to approve-execution-frame. This cryptographically
+ * binds the approval to the exact payload created here.
  */
+
+// Canonicalize an object by sorting all keys recursively
+function canonicalize(obj: unknown): string {
+  const allKeys: string[] = [];
+  JSON.stringify(obj, (key, value) => {
+    allKeys.push(key);
+    return value;
+  });
+  allKeys.sort();
+  return JSON.stringify(obj, allKeys);
+}
+
+// Compute HMAC-SHA256. Returns lowercase hex.
+async function computeHmac(message: string, secret: string): Promise<string> {
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw",
+    enc.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, enc.encode(message));
+  return Array.from(new Uint8Array(sig))
+    .map(b => b.toString(16).padStart(2, "0"))
+    .join("");
+}
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -210,6 +241,21 @@ serve(async (req) => {
 
     console.log(`[create-execution-frame] Created frame ${frame.id}: ${approval_status}, auto_approved=${auto_approved}`);
 
+    // Generate approval_token for frames that require human sign-off.
+    // This is HMAC-SHA256(canonical(proposed_state):frame_id, GOVERNANCE_SIGNING_KEY).
+    // The approver must pass this token as approval_signature — the server re-derives
+    // it on approval to verify the payload has not been tampered with.
+    let approvalToken: string | null = null;
+    if (approval_status === 'pending') {
+      const signingKey = Deno.env.get("GOVERNANCE_SIGNING_KEY");
+      if (signingKey) {
+        const canonicalPayload = canonicalize(frame.proposed_state);
+        approvalToken = await computeHmac(`${canonicalPayload}:${frame.id}`, signingKey);
+      } else {
+        console.warn("[create-execution-frame] GOVERNANCE_SIGNING_KEY not set — approval_token not generated");
+      }
+    }
+
     return new Response(JSON.stringify({
       success: true,
       frame_id: frame.id,
@@ -218,7 +264,9 @@ serve(async (req) => {
       approval_status,
       execution_status: approval_status === 'approved' ? 'executed' : 'pending_approval',
       constraint_violations,
-      matching_gate: matchingGate?.gate_name || null
+      matching_gate: matchingGate?.gate_name || null,
+      // Included only when human approval is required. Pass as approval_signature.
+      ...(approvalToken !== null && { approval_token: approvalToken })
     }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
 
   } catch (error) {
