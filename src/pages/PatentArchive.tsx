@@ -186,12 +186,30 @@ const PatentArchive: React.FC = () => {
             OneDuo™ Provisional Filing Package
           </h1>
           <p className="text-sm text-gray-600 font-serif">
-            DATABASE-ENFORCED HUMAN GOVERNANCE SYSTEM FOR AI-GENERATED ARTIFACTS
+            NON-BYPASSABLE EXECUTION CONSTRAINT SYSTEM: STATE TRANSITION ENFORCEMENT THROUGH CRYPTOGRAPHIC HUMAN AUTHORIZATION
           </p>
           <p className="text-xs text-gray-500 mt-2 font-mono">
             Identity Nails LLC · Filing Date: 2026-01-03
           </p>
         </div>
+
+        {/* Core Claim Summary */}
+        <section className="mb-8 p-6 border-2 border-black rounded bg-gray-50">
+          <h2 className="text-base font-serif font-bold text-black mb-3 uppercase tracking-wide">
+            Core Claim — What This System Makes Impossible
+          </h2>
+          <p className="text-sm text-gray-700 mb-4 leading-relaxed">
+            Without a cryptographically verified human approval record, an AI system operating within this infrastructure <strong>cannot</strong>:
+          </p>
+          <ul className="space-y-1.5 text-sm font-mono text-gray-800 pl-4 mb-4">
+            <li>— finalize an artifact or transition it to an executed state</li>
+            <li>— execute a proposed state transition in the persistence layer</li>
+            <li>— complete any operation governed by an active approval gate</li>
+          </ul>
+          <p className="text-xs text-gray-600 leading-relaxed border-t border-gray-300 pt-3">
+            This constraint is enforced at the database level via <code className="bg-gray-200 px-1 rounded">BEFORE</code> triggers that issue <code className="bg-gray-200 px-1 rounded">RAISE EXCEPTION</code> prior to any state change. It cannot be bypassed by application logic, UI changes, or direct API calls. It operates independently of the AI model in use (Claude, GPT, Gemini, or any other). This is a system-level constraint, not a policy or UI checkbox.
+          </p>
+        </section>
 
         {/* Bulk Download Actions */}
         <div className="flex gap-4 mb-8">

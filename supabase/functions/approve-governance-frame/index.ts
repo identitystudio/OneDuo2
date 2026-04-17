@@ -31,8 +31,7 @@ function canonicalizeJSON(obj: any): string {
 // Any approval not routed through this function will fail HMAC verification
 // at PDF generation time and be rejected as a sovereignty breach
 // ============================================
-async function computeServerHmac(canonical: string): Promise<string> {
-  const secret = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+async function computeHmac(canonical: string, secret: string): Promise<string> {
   const encoder = new TextEncoder();
   const key = await crypto.subtle.importKey(
     "raw",
@@ -51,6 +50,16 @@ async function computeServerHmac(canonical: string): Promise<string> {
     .join("");
 }
 
+// Constant-time comparison to prevent timing attacks
+function safeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) {
+    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return diff === 0;
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -61,6 +70,17 @@ serve(async (req) => {
     return new Response(
       JSON.stringify({ error: "Missing authorization header" }),
       { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
+  }
+
+  // Fail closed — both signing keys must be present
+  const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+  const signingKey = Deno.env.get("GOVERNANCE_SIGNING_KEY");
+  if (!signingKey) {
+    console.error("[approve-governance-frame] GOVERNANCE_SIGNING_KEY not set");
+    return new Response(
+      JSON.stringify({ error: "Governance configuration error: signing key unavailable" }),
+      { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
 
@@ -82,11 +102,11 @@ serve(async (req) => {
       );
     }
 
-    // Governance: APPROVED requires a human-origin signature (GOV-XXXXX)
+    // APPROVED requires a signature — presence check first
     if (action === "APPROVED" && !approval_signature) {
       return new Response(
         JSON.stringify({
-          error: "Governance Violation: APPROVED action requires approval_signature (GOV-XXXXX)",
+          error: "Governance Violation: APPROVED action requires approval_signature",
         }),
         { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
@@ -108,30 +128,46 @@ serve(async (req) => {
     }
 
     // ============================================
-    // COMPUTE SERVER HMAC — Patent Claim: Tamper Detection
-    // Canonical object: exactly 4 stable fields, no timestamps
-    // Must match the canonical object reconstructed in generate-artifact-pdf
+    // CANONICAL OBJECT — exactly 4 stable fields, no timestamps
+    // Must match generate-governance-token and generate-artifact-pdf
     // ============================================
-    const canonicalObj = {
-      action,
-      artifact_id,
-      frame_id,
-      user_id: user.id,
-    };
+    const canonicalObj = { action, artifact_id, frame_id, user_id: user.id };
     const canonical = canonicalizeJSON(canonicalObj);
-    const server_hmac = await computeServerHmac(canonical);
+
+    // server_hmac: signed with SUPABASE_SERVICE_ROLE_KEY — verified at PDF generation time
+    const server_hmac = await computeHmac(canonical, serviceRoleKey);
+
+    // Verify approval_signature: must equal HMAC(canonical, GOVERNANCE_SIGNING_KEY)
+    // The client obtains this token from generate-governance-token before submitting.
+    // This proves the human ran the approval flow against the exact intended frame — not a replay or forgery.
+    let signatureVerified = false;
+    if (action === "APPROVED") {
+      const expectedToken = await computeHmac(canonical, signingKey);
+      signatureVerified = safeEqual(approval_signature, expectedToken);
+
+      if (!signatureVerified) {
+        console.error(`[approve-governance-frame] Signature verification FAILED | frame: ${frame_id} | user: ${user.id}`);
+        return new Response(
+          JSON.stringify({
+            error: "Governance Violation: Signature verification failed — approval not bound to this frame.",
+          }),
+          { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+    }
 
     console.log(
-      `[approve-governance-frame] ${action} | frame: ${frame_id} | user: ${user.id} | hmac: ${server_hmac.substring(0, 16)}...`
+      `[approve-governance-frame] ${action} | frame: ${frame_id} | user: ${user.id} | sig_verified: ${signatureVerified} | hmac: ${server_hmac.substring(0, 16)}...`
     );
 
     // Build insert record
-    const insertData: Record<string, string> = {
+    const insertData: Record<string, unknown> = {
       artifact_id,
       frame_id,
       user_id: user.id,
       action,
       server_hmac,
+      signature_verified: signatureVerified,
     };
     if (action === "APPROVED") {
       insertData.approval_signature = approval_signature;
@@ -157,6 +193,7 @@ serve(async (req) => {
       JSON.stringify({
         success: true,
         server_hmac,
+        signature_verified: signatureVerified,
         message: `Frame ${action.toLowerCase()} with server attestation`,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }

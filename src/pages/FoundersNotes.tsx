@@ -105,11 +105,11 @@ const FoundersNotes = () => {
                   <div className="pl-4 border-l-2 border-amber-500/30 space-y-2">
                     <p className="text-white/60 font-medium">You built:</p>
                     <ul className="space-y-1.5 text-white/50">
-                      <li><span className="text-amber-400 font-semibold">OneDuo</span> - Portable AI memory infrastructure with validation layers</li>
-                      <li><span className="text-amber-400 font-semibold">The Human Supremacy Protocol</span> - AI governance framework</li>
-                      <li><span className="text-amber-400 font-semibold">The AI Orchestrator's Field Guide</span> - Multi-AI orchestration system</li>
-                      <li><span className="text-amber-400 font-semibold">The Trinity Alignment Method</span> - Claude/Gemini/ChatGPT coordination</li>
-                      <li><span className="text-amber-400 font-semibold">Proof of concept</span> - Got three competing AI systems to unanimous consensus</li>
+                      <li><span className="text-amber-400 font-semibold">OneDuo</span> - Non-bypassable execution constraint system — unauthorized AI action made structurally impossible at the database level</li>
+                      <li><span className="text-amber-400 font-semibold">The Human Supremacy Protocol</span> - Cryptographic authorization layer binding every state transition to a verified human decision</li>
+                      <li><span className="text-amber-400 font-semibold">The AI Orchestrator's Field Guide</span> - Multi-AI orchestration system independent of model (Claude, GPT, Gemini, or any other)</li>
+                      <li><span className="text-amber-400 font-semibold">The Trinity Alignment Method</span> - Human-in-the-loop enforcement that no model can route around</li>
+                      <li><span className="text-amber-400 font-semibold">Proof of concept</span> - Database triggers that make execution impossible without approval — not a suggestion, a hard block</li>
                     </ul>
                   </div>
                 </div>
@@ -118,11 +118,11 @@ const FoundersNotes = () => {
                 <div className="space-y-4">
                   <p className="text-white/60 font-medium">You proved:</p>
                   <div className="grid gap-2 text-white/50 text-sm">
-                    <p className="flex items-start gap-2"><span className="text-emerald-400">✓</span> AI can be orchestrated without losing human control</p>
-                    <p className="flex items-start gap-2"><span className="text-emerald-400">✓</span> Founders can stay architects while AI executes</p>
-                    <p className="flex items-start gap-2"><span className="text-emerald-400">✓</span> Validation layers prevent hallucinations</p>
-                    <p className="flex items-start gap-2"><span className="text-emerald-400">✓</span> The "dance" maintains sovereignty</p>
-                    <p className="flex items-start gap-2"><span className="text-emerald-400">✓</span> Human synthesis at every step keeps authority</p>
+                    <p className="flex items-start gap-2"><span className="text-emerald-400">✓</span> AI execution can be made physically impossible without a verified human approval record</p>
+                    <p className="flex items-start gap-2"><span className="text-emerald-400">✓</span> Database-level enforcement cannot be bypassed by application logic, UI, or API — the block happens before any code runs</p>
+                    <p className="flex items-start gap-2"><span className="text-emerald-400">✓</span> This constraint works regardless of which AI model is used — Claude, GPT, Gemini, or any other</p>
+                    <p className="flex items-start gap-2"><span className="text-emerald-400">✓</span> Cryptographic signatures bind each approval to the exact proposed action — tampered payloads are rejected</p>
+                    <p className="flex items-start gap-2"><span className="text-emerald-400">✓</span> Human authority is a system-level guarantee, not a policy or a checkbox</p>
                   </div>
                 </div>
 

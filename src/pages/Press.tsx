@@ -340,10 +340,21 @@ const Press = () => {
                 <div className="h-px bg-white/[0.06] my-6" />
                 
                 <h4 className="text-white font-semibold">Notice of Category Ownership</h4>
-                
+
                 <p>
-                  This release serves as official Constructive Notice of OneDuo's trademark and category claims. Any subsequent technology attempting to replicate this context-bridging infrastructure is a derivative of the OneDuo™ original architecture.
+                  This release serves as official Constructive Notice of OneDuo's trademark and category claims. Any subsequent technology attempting to replicate this non-bypassable execution constraint infrastructure is a derivative of the OneDuo™ original architecture.
                 </p>
+
+                <div className="border border-white/[0.08] rounded p-4 space-y-2 text-white/60 text-xs">
+                  <p className="text-white/80 font-semibold uppercase tracking-wider text-[11px]">Enforcement Guarantee</p>
+                  <p>Without a valid cryptographic approval record, an AI system operating within OneDuo™ infrastructure:</p>
+                  <ul className="space-y-1 pl-3">
+                    <li>— cannot finalize an artifact</li>
+                    <li>— cannot execute a state transition</li>
+                    <li>— cannot complete a proposed operation</li>
+                  </ul>
+                  <p className="pt-1">This is enforced at the persistence layer before any application logic runs — making it independent of the AI model, the UI, and the calling API.</p>
+                </div>
                 
                 <div className="bg-black/30 border border-white/[0.06] rounded p-4 font-mono text-xs space-y-1">
                   <p><span className="text-white/50">Verified Priority ID:</span> <span className="text-emerald-400">GEM3-FL-1225-1647-SOURCE</span></p>
@@ -353,9 +364,17 @@ const Press = () => {
                 <div className="h-px bg-white/[0.06] my-6" />
                 
                 <h4 className="text-white font-semibold">About OneDuo™</h4>
-                
+
                 <p>
-                  OneDuo™ is the creator of the AI Thinking Layer™, an American-founded infrastructure leader operating globally to make human expertise portable and scalable through advanced machine-ready instinct.
+                  OneDuo™ is a non-bypassable AI execution control system that enforces human authorization at the database level. Unlike platforms that rely on UI approvals, logs, or policy layers, OneDuo™ structurally prevents execution unless cryptographically verified human approval exists — independent of which AI model is in use (Claude, GPT, Gemini, or any other).
+                </p>
+
+                <p>
+                  This transforms approval from a suggestion into a system-level constraint. If approval is absent, execution becomes impossible — not discouraged. Application logic cannot override it. UI changes cannot bypass it. API calls cannot force it.
+                </p>
+
+                <p>
+                  This is a mathematical guarantee, not a policy or a UI checkbox.
                 </p>
               </div>
             </div>

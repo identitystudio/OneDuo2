@@ -283,7 +283,7 @@ const IPNotice = () => {
           <p>© {new Date().getFullYear()} Identity Nails LLC. All Rights Reserved.</p>
           <p>OneDuo™, AI Thinking Layer™, and Verification Gate™ are trademarks of Identity Nails LLC.</p>
           <p className="text-xs">
-            These measures are governance signals and IP documentation — not technical enforcement mechanisms.
+            These constraints are enforced at the database level — application logic, UI changes, and direct API calls cannot override them. Unauthorized AI execution is structurally impossible, not merely discouraged.
           </p>
         </div>
       </main>

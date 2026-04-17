@@ -16,15 +16,14 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
 
-async function generateApprovalSignature(frameId: string, artifactId: string, userId: string): Promise<string> {
-  const timestamp = Date.now().toString();
-  const payload = `${frameId}:${artifactId}:${userId}:${timestamp}`;
-  const encoder = new TextEncoder();
-  const data = encoder.encode(payload);
-  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  const hashHex = hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
-  return `GOV-${hashHex.substring(0, 40).toUpperCase()}`;
+async function generateApprovalSignature(frameId: string, artifactId: string, action: "APPROVED" | "REJECTED"): Promise<string> {
+  const { data, error } = await supabase.functions.invoke("generate-governance-token", {
+    body: { action, frame_id: frameId, artifact_id: artifactId },
+  });
+  if (error || !data?.approval_token) {
+    throw new Error("Failed to obtain governance approval token");
+  }
+  return data.approval_token;
 }
 
 interface ArtifactFrame {
@@ -67,7 +66,7 @@ export function VerificationGate({ frame, open, onOpenChange }: VerificationGate
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("Not authenticated");
 
-      const signature = await generateApprovalSignature(frame.id, frame.artifact_id, user.id);
+      const signature = await generateApprovalSignature(frame.id, frame.artifact_id, "APPROVED");
 
       // Route through edge function so server can compute + store HMAC for tamper detection
       const { error } = await supabase.functions.invoke("approve-governance-frame", {

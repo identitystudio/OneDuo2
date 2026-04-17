@@ -54,15 +54,14 @@ interface ArtifactFrame {
   }[];
 }
 
-async function generateApprovalSignature(frameId: string, artifactId: string, userId: string): Promise<string> {
-  const timestamp = Date.now().toString();
-  const payload = `${frameId}:${artifactId}:${userId}:${timestamp}`;
-  const encoder = new TextEncoder();
-  const data = encoder.encode(payload);
-  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  const hashHex = hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
-  return `GOV-${hashHex.substring(0, 40).toUpperCase()}`;
+async function generateApprovalSignature(frameId: string, artifactId: string, action: "APPROVED" | "REJECTED"): Promise<string> {
+  const { data, error } = await supabase.functions.invoke("generate-governance-token", {
+    body: { action, frame_id: frameId, artifact_id: artifactId },
+  });
+  if (error || !data?.approval_token) {
+    throw new Error("Failed to obtain governance approval token");
+  }
+  return data.approval_token;
 }
 
 export default function TransformReview() {
@@ -199,7 +198,7 @@ export default function TransformReview() {
       // Route each approval through the edge function so server computes + stores HMAC
       const results = await Promise.all(
         pendingFrames.map(async (frame) => {
-          const approval_signature = await generateApprovalSignature(frame.id, artifactId!, user.id);
+          const approval_signature = await generateApprovalSignature(frame.id, artifactId!, "APPROVED");
           return supabase.functions.invoke("approve-governance-frame", {
             body: {
               artifact_id: artifactId,
