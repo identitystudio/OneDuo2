@@ -127,7 +127,7 @@ serve(async (req: Request) => {
         });
       }
 
-      const filename = `${courseTitle} - Visual Transcription.pdf`;
+      const filename = `${courseTitle} - OneDuo.pdf`;
 
       // Fetch existing course_files and share_token for email URL
       const { data: courseRow } = await supabase.from("courses")
