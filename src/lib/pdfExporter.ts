@@ -2017,7 +2017,32 @@ export const generateChatGPTPDF = async (
   return pdf.output('blob');
 };
 
-export const downloadPDF = (blob: Blob, filename: string) => {
+// Shows the browser's native "Save As" dialog immediately on user click,
+// before generation starts. Returns null if the API is unavailable (Firefox/Safari).
+// Re-throws AbortError so callers can detect user cancellation.
+export const showSaveDialog = async (
+  filename: string,
+  mimeType: string,
+  extension: string
+): Promise<FileSystemFileHandle | null> => {
+  if (!('showSaveFilePicker' in window)) return null;
+  return (window as any).showSaveFilePicker({
+    suggestedName: filename,
+    types: [{ description: `${extension.toUpperCase()} Files`, accept: { [mimeType]: [`.${extension}`] } }],
+  });
+};
+
+export const downloadPDF = async (
+  blob: Blob,
+  filename: string,
+  fileHandle?: FileSystemFileHandle | null
+): Promise<void> => {
+  if (fileHandle) {
+    const writable = await (fileHandle as any).createWritable();
+    await writable.write(blob);
+    await writable.close();
+    return;
+  }
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;

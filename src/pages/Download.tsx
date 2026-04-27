@@ -3,7 +3,7 @@ import { useParams, Link, useSearchParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Download as DownloadIcon, CheckCircle, Loader2, FileText, MessageSquare, AlertCircle, Package, Film, Layers, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { generateChatGPTPDF, downloadPDF } from "@/lib/pdfExporter";
+import { generateChatGPTPDF, downloadPDF, showSaveDialog } from "@/lib/pdfExporter";
 import { generateMemoryPackage, ExportMode } from "@/lib/memoryExporter";
 import { toast } from "sonner";
 import { useAuth } from "@/components/AuthGuard";
@@ -192,18 +192,39 @@ const DownloadPage = () => {
   // (Previously auto-triggered handleDownload on load, bypassing format selection)
 
   const handleDownload = async () => {
-    // Use module data if available, otherwise course data
     const downloadData = module || course;
     if (!downloadData) return;
 
-    setDownloading(true);
-    setDownloadProgress(0);
+    const title = module
+      ? `${course?.title || 'Course'} - ${module.title}`
+      : course?.title || 'OneDuo';
+    const safeTitle = title.replace(/[^a-zA-Z0-9]/g, "_");
 
     const formatLabel = selectedFormat === 'pdf' ? 'PDF' :
       selectedFormat === 'memory-training' ? 'Training Memory Package' : 'Creative Memory Package';
+
+    // Show the native "Save As" dialog immediately on click, before generation starts,
+    // so the browser file manager appears right away instead of after the file is fully built.
+    let fileHandle: FileSystemFileHandle | null = null;
+    if (selectedFormat === 'pdf') {
+      try {
+        fileHandle = await showSaveDialog(`OneDuo_${safeTitle}.pdf`, 'application/pdf', 'pdf');
+      } catch (e: any) {
+        if (e.name === 'AbortError') return;
+      }
+    } else if (selectedFormat === 'memory-training' || selectedFormat === 'memory-creative') {
+      const mode = selectedFormat === 'memory-training' ? 'training' : 'creative';
+      try {
+        fileHandle = await showSaveDialog(`OneDuo_${mode}_memory_${safeTitle}.zip`, 'application/zip', 'zip');
+      } catch (e: any) {
+        if (e.name === 'AbortError') return;
+      }
+    }
+
+    setDownloading(true);
+    setDownloadProgress(0);
     setDownloadStatus(`Preparing your OneDuo ${formatLabel}...`);
 
-    // Track download
     try {
       await supabase.functions.invoke('log-download', {
         body: {
@@ -217,15 +238,8 @@ const DownloadPage = () => {
     }
 
     try {
-      let blob: Blob;
-      let filename: string;
-
-      const title = module
-        ? `${course?.title || 'Course'} - ${module.title}`
-        : course?.title || 'OneDuo';
-
       const dataForExport = {
-        id: module?.id || courseId, // Required for frame persistence
+        id: module?.id || courseId,
         title,
         video_duration_seconds: module?.video_duration_seconds || course?.video_duration_seconds,
         transcript: module?.transcript || course?.transcript || [],
@@ -242,16 +256,12 @@ const DownloadPage = () => {
             setDownloadProgress(progress);
             setDownloadStatus(status);
           },
-          {
-            aiFidelityMode: aiVisionMode,
-            includeOCR: true,
-          }
+          { aiFidelityMode: aiVisionMode, includeOCR: true }
         );
-        filename = `OneDuo_${title.replace(/[^a-zA-Z0-9]/g, "_")}.pdf`;
-        downloadPDF(blob, filename);
+        await downloadPDF(blob, `OneDuo_${safeTitle}.pdf`, fileHandle);
       } else {
         const mode: ExportMode = selectedFormat === 'memory-training' ? 'training' : 'creative';
-        blob = await generateMemoryPackage(
+        const blob = await generateMemoryPackage(
           dataForExport,
           mode,
           filmMode,
@@ -260,17 +270,21 @@ const DownloadPage = () => {
             setDownloadStatus(status);
           }
         );
-        filename = `OneDuo_${mode}_memory_${title.replace(/[^a-zA-Z0-9]/g, "_")}.zip`;
-
-        // Create download link
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
+        const filename = `OneDuo_${mode}_memory_${safeTitle}.zip`;
+        if (fileHandle) {
+          const writable = await (fileHandle as any).createWritable();
+          await writable.write(blob);
+          await writable.close();
+        } else {
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = filename;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+        }
       }
 
       setDownloadComplete(true);

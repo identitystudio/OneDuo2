@@ -3,7 +3,7 @@ import { useParams, Link, useSearchParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Download as DownloadIcon, CheckCircle, Loader2, FileText, MessageSquare, AlertCircle, Package, Film, Layers } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { generateChatGPTPDF, downloadPDF } from "@/lib/pdfExporter";
+import { generateChatGPTPDF, downloadPDF, showSaveDialog } from "@/lib/pdfExporter";
 import { generateMemoryPackage, ExportMode } from "@/lib/memoryExporter";
 import { toast } from "sonner";
 
@@ -133,14 +133,36 @@ const DownloadModulePage = () => {
     if (!module) return;
     const MAX_RETRIES = 2;
 
-    setDownloading(true);
-    setDownloadProgress(0);
+    const moduleTitle = `${module.courseTitle || 'Course'} - ${module.title}`;
+    const safeTitle = moduleTitle.replace(/[^a-zA-Z0-9]/g, "_");
 
     const formatLabel = selectedFormat === 'pdf' ? 'PDF' :
       selectedFormat === 'memory-training' ? 'Training Memory Package' : 'Creative Memory Package';
+
+    // Show the native "Save As" dialog immediately on click, before generation starts,
+    // so the browser file manager appears right away instead of after the file is fully built.
+    let fileHandle: FileSystemFileHandle | null = null;
+    if (retryCount === 0) {
+      if (selectedFormat === 'pdf') {
+        try {
+          fileHandle = await showSaveDialog(`OneDuo_${safeTitle}.pdf`, 'application/pdf', 'pdf');
+        } catch (e: any) {
+          if (e.name === 'AbortError') return;
+        }
+      } else if (selectedFormat === 'memory-training' || selectedFormat === 'memory-creative') {
+        const mode = selectedFormat === 'memory-training' ? 'training' : 'creative';
+        try {
+          fileHandle = await showSaveDialog(`OneDuo_${mode}_memory_${safeTitle}.zip`, 'application/zip', 'zip');
+        } catch (e: any) {
+          if (e.name === 'AbortError') return;
+        }
+      }
+    }
+
+    setDownloading(true);
+    setDownloadProgress(0);
     setDownloadStatus(`Preparing your OneDuo ${formatLabel}...`);
 
-    // Track download
     try {
       await supabase.functions.invoke('log-download', {
         body: {
@@ -154,15 +176,10 @@ const DownloadModulePage = () => {
     }
 
     try {
-      let blob: Blob;
-      let filename: string;
-
-      const moduleTitle = `${module.courseTitle || 'Course'} - ${module.title}`;
-
       if (selectedFormat === 'pdf') {
-        blob = await generateChatGPTPDF(
+        const blob = await generateChatGPTPDF(
           {
-            id: moduleId, // Required for frame persistence
+            id: moduleId,
             title: moduleTitle,
             video_duration_seconds: module.video_duration_seconds,
             transcript: module.transcript || [],
@@ -175,16 +192,12 @@ const DownloadModulePage = () => {
             setDownloadProgress(progress);
             setDownloadStatus(status);
           },
-          {
-            aiFidelityMode: aiVisionMode,
-            includeOCR: true,
-          }
+          { aiFidelityMode: aiVisionMode, includeOCR: true }
         );
-        filename = `OneDuo_${moduleTitle.replace(/[^a-zA-Z0-9]/g, "_")}.pdf`;
-        downloadPDF(blob, filename);
+        await downloadPDF(blob, `OneDuo_${safeTitle}.pdf`, fileHandle);
       } else {
         const mode: ExportMode = selectedFormat === 'memory-training' ? 'training' : 'creative';
-        blob = await generateMemoryPackage(
+        const blob = await generateMemoryPackage(
           {
             title: moduleTitle,
             video_duration_seconds: module.video_duration_seconds,
@@ -200,17 +213,21 @@ const DownloadModulePage = () => {
             setDownloadStatus(status);
           }
         );
-        filename = `OneDuo_${mode}_memory_${moduleTitle.replace(/[^a-zA-Z0-9]/g, "_")}.zip`;
-
-        // Create download link
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
+        const filename = `OneDuo_${mode}_memory_${safeTitle}.zip`;
+        if (fileHandle) {
+          const writable = await (fileHandle as any).createWritable();
+          await writable.write(blob);
+          await writable.close();
+        } else {
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = filename;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+        }
       }
 
       setDownloadComplete(true);
@@ -218,7 +235,6 @@ const DownloadModulePage = () => {
     } catch (err: any) {
       console.error("Download failed:", err);
 
-      // Auto-retry for transient errors
       const isRetryable = err.message?.includes('network') ||
         err.message?.includes('timeout') ||
         err.message?.includes('fetch');
@@ -226,11 +242,10 @@ const DownloadModulePage = () => {
       if (isRetryable && retryCount < MAX_RETRIES) {
         console.log(`[Download] Retrying (${retryCount + 1}/${MAX_RETRIES})...`);
         setDownloadStatus(`Retrying download (attempt ${retryCount + 2})...`);
-        await new Promise(r => setTimeout(r, 1000 * (retryCount + 1))); // Exponential backoff
+        await new Promise(r => setTimeout(r, 1000 * (retryCount + 1)));
         return handleDownload(retryCount + 1);
       }
 
-      // Show specific error message
       const userMessage = err.message?.includes('Frame extraction failed')
         ? 'Frame extraction failed. Please contact support.'
         : err.message?.includes('Insufficient frames')
