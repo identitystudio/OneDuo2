@@ -1,15 +1,18 @@
 /**
  * generate-knowledge-layer
  *
- * Enhances the existing OneDuo artifact by prepending a structured
- * 21-section "thinking layer" to each course/module using Claude Sonnet 4.6.
- * Full transcript is passed (200K context window — no truncation needed).
+ * Builds a structured knowledge layer for a course/module using Claude Sonnet 4.6.
+ * Uses a chunk → store → stitch pattern (mirrors generate-pdf-backend) to stay
+ * within Supabase's 150 MB edge-function memory limit.
  *
- * Called by video-queue-worker after PDF generation, or on-demand
- * from the Dashboard.
+ * Flow:
+ *   1. Split transcript into CHUNK_SIZE chunks
+ *   2. For each chunk: call Claude → upload JSON result to storage
+ *      (resume-safe: skips chunks already in storage)
+ *   3. Download all chunk results → stitch → save to DB → clean up storage
  *
- * INPUT  { courseId, moduleId? }
- * OUTPUT { success, knowledgeLayerStatus, markdownLength }
+ * INPUT  { courseId, moduleId?, contentType? }
+ * OUTPUT 202 { success, message }  — generation continues in background
  */
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
@@ -22,13 +25,10 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type",
 };
 
-// ── Model ────────────────────────────────────────────────────────────────────
-// Claude Sonnet 4.6 — 200K context window, full transcript coverage.
 const CLAUDE_MODEL = "claude-sonnet-4-6";
 
-// Sonnet 4.6 has 200K context. A 1-hour video transcript is ~40K chars.
-// Cap at 80K chars to cover up to ~2-hour videos while keeping latency within timeout.
-const MAX_TRANSCRIPT_CHARS = 300_000;
+// 40 K chars ≈ ~25 min of video transcript — well within the 150 MB edge-function limit
+const CHUNK_SIZE = 40_000;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -56,32 +56,21 @@ function buildTranscriptText(transcript: any): string {
   return JSON.stringify(transcript);
 }
 
-/**
- * Sample a long transcript evenly: take equal slices from the start,
- * middle, and end so the AI has context for the full video duration,
- * not just the opening minutes.
- */
-function sampleTranscriptEvenly(text: string, maxChars: number): string {
-  if (text.length <= maxChars) return text;
-
-  const chunkSize = Math.floor(maxChars / 3);
-
-  const start  = text.slice(0, chunkSize);
-  const midPos = Math.floor(text.length / 2) - Math.floor(chunkSize / 2);
-  const middle = text.slice(midPos, midPos + chunkSize);
-  const end    = text.slice(text.length - chunkSize);
-
-  return (
-    start  + "\n\n[... middle of video ...]\n\n" +
-    middle + "\n\n[... end of video ...]\n\n" +
-    end
-  );
+function chunkText(text: string, size: number): string[] {
+  if (!text) return [""];
+  if (text.length <= size) return [text];
+  const chunks: string[] = [];
+  let pos = 0;
+  while (pos < text.length) {
+    chunks.push(text.slice(pos, pos + size));
+    pos += size;
+  }
+  return chunks;
 }
 
 function buildFrameSummary(frames: any[], fps: number): string {
   if (!frames || frames.length === 0) return "No visual frame data available.";
 
-  // For 3 FPS collapse runs of identical OCR text (redundant frames).
   const segments: string[] = [];
   let prev = "";
   let count = 0;
@@ -99,12 +88,59 @@ function buildFrameSummary(frames: any[], fps: number): string {
       count = 1;
     }
   }
-  if (prev) {
-    segments.push(prev);
+  if (prev) segments.push(prev);
+
+  return segments.slice(0, 300).join("\n");
+}
+
+// ── Stitch chunks ─────────────────────────────────────────────────────────────
+// Mirrors mergePartPDFs: each chunk's JSON is merged by section type.
+// Singular sections (high-level descriptors) come from the first chunk.
+// Accumulative sections (concepts, quotes, etc.) are concatenated across all chunks.
+
+function stitchChunks(
+  parts: Record<string, any>[],
+  title: string,
+  duration: string
+): Record<string, any> {
+  if (parts.length === 0) return { module_title: title, duration, generated_at: new Date().toISOString() };
+  if (parts.length === 1) return { ...parts[0], generated_at: new Date().toISOString() };
+
+  const singular = [
+    "module_title", "duration", "primary_topic", "outcome",
+    // film
+    "genre_tone", "logline", "thematic_dna", "story_structure",
+    "protagonist_arc", "antagonist_function", "world_building", "tone_map",
+    "dialogue_style", "audio_energy_timeline", "adaptation_blueprint", "full_transcript",
+  ];
+
+  const accumulative = [
+    "executive_summary", "core_concepts", "frameworks", "visual_segments",
+    "key_claims", "questions", "actionable_takeaways", "cross_module_links",
+    "important_quotes", "prompt_starters", "decision_rules", "reasoning_patterns",
+    "speaker_belief_system", "cause_effect_chains", "hidden_patterns", "concept_tags",
+    // film
+    "character_profiles", "scene_breakdown", "power_dynamics", "emotional_architecture",
+    "signature_set_pieces", "subplot_structure",
+  ];
+
+  const result: Record<string, any> = { generated_at: new Date().toISOString() };
+
+  for (const key of singular) {
+    result[key] = parts[0][key] || "";
   }
 
-  // Cap to keep prompt size manageable
-  return segments.slice(0, 300).join("\n");
+  for (const key of accumulative) {
+    const pieces = parts
+      .map((p, i) => (p[key] ? `### Part ${i + 1}\n${p[key]}` : ""))
+      .filter(Boolean);
+    result[key] = pieces.join("\n\n");
+  }
+
+  const allTags = parts.flatMap(p => (Array.isArray(p.retrieval_tags) ? p.retrieval_tags : []));
+  result.retrieval_tags = [...new Set(allTags)];
+
+  return result;
 }
 
 // ── Claude call ──────────────────────────────────────────────────────────────
@@ -138,13 +174,6 @@ async function callClaude(
 }
 
 // ── Audio energy timeline ─────────────────────────────────────────────────────
-// Builds a structured audio narrative map from:
-// 1. Transcript gap analysis  — silence > 8s = music/action sequence
-// 2. AssemblyAI chapters      — emotional summaries per chapter
-// 3. AssemblyAI sentiment     — speech emotional polarity over time
-//
-// This captures what raw waveform analysis would show: where the music dominates,
-// where emotional peaks are, and the build/climax/resolution shape of the film.
 
 function buildAudioEnergyTimeline(
   transcript: Array<{ start: number; end?: number; text: string }>,
@@ -156,7 +185,6 @@ function buildAudioEnergyTimeline(
 
   const lines: string[] = ["=== AUDIO NARRATIVE ENERGY MAP ===", ""];
 
-  // ── 1. Chapter-level arc (broadest view) ───────────────────────────────────
   if (chapters && chapters.length > 0) {
     lines.push("CHAPTER ARC:");
     for (const ch of chapters) {
@@ -167,7 +195,6 @@ function buildAudioEnergyTimeline(
     lines.push("");
   }
 
-  // ── 2. Transcript gap analysis (finds music/action sequences) ─────────────
   lines.push("SPEECH vs NON-SPEECH TIMELINE:");
   const sorted = [...transcript].sort((a, b) => a.start - b.start);
   let lastEnd = 0;
@@ -184,10 +211,7 @@ function buildAudioEnergyTimeline(
       );
     }
     if (seg.text) {
-      // Attach sentiment if available for this segment
-      const sentimentMatch = sentiment.find(s =>
-        Math.abs(s.start - seg.start) < 5
-      );
+      const sentimentMatch = sentiment.find(s => Math.abs(s.start - seg.start) < 5);
       const sentimentTag = sentimentMatch
         ? ` [${sentimentMatch.sentiment} ${Math.round(sentimentMatch.confidence * 100)}%]`
         : "";
@@ -198,7 +222,6 @@ function buildAudioEnergyTimeline(
     lastEnd = seg.end ?? seg.start + 5;
   }
 
-  // Final non-speech segment
   if (videoDuration - lastEnd > 8) {
     const gap = videoDuration - lastEnd;
     const label = gap > 120 ? "MAJOR SEQUENCE" : gap > 30 ? "SUSTAINED" : "BRIEF";
@@ -212,7 +235,6 @@ function buildAudioEnergyTimeline(
   lines.push("");
   lines.push(`Total non-speech sequences: ${nonSpeechCount}`);
 
-  // ── 3. Sentiment arc summary (emotional polarity of speech) ───────────────
   if (sentiment && sentiment.length > 0) {
     const pos = sentiment.filter(s => s.sentiment === "POSITIVE").length;
     const neg = sentiment.filter(s => s.sentiment === "NEGATIVE").length;
@@ -220,7 +242,6 @@ function buildAudioEnergyTimeline(
     lines.push("");
     lines.push(`SPEECH SENTIMENT BREAKDOWN: ${pos} positive / ${neu} neutral / ${neg} negative`);
 
-    // Find peak negative moments (likely climax/conflict scenes)
     const peakNeg = sentiment
       .filter(s => s.sentiment === "NEGATIVE" && s.confidence > 0.85)
       .slice(0, 5);
@@ -248,9 +269,7 @@ function sampleFramesEvenly(frames: string[], maxFrames: number): string[] {
   return sampled;
 }
 
-// ── Film visual analysis — Claude vision pass on sampled keyframes ────────────
-// Runs before the knowledge layer prompt so visual descriptions enrich the output.
-// Samples ~1 frame per minute (max 60) and asks Claude to describe each frame.
+// ── Film visual analysis ──────────────────────────────────────────────────────
 
 async function buildFilmVisualDescriptions(
   anthropic: Anthropic,
@@ -259,7 +278,6 @@ async function buildFilmVisualDescriptions(
 ): Promise<string> {
   if (!frameUrls || frameUrls.length === 0) return "";
 
-  // 1 frame per minute, capped at 60 total
   const targetSamples = Math.min(60, Math.max(12, Math.floor(videoDuration / 60)));
   const sampled = sampleFramesEvenly(frameUrls, targetSamples);
   const frameDuration = videoDuration / Math.max(frameUrls.length, 1);
@@ -271,7 +289,6 @@ async function buildFilmVisualDescriptions(
   for (let i = 0; i < sampled.length; i += BATCH_SIZE) {
     const batch = sampled.slice(i, i + BATCH_SIZE);
 
-    // Build multi-image message for this batch
     const content: any[] = [];
     batch.forEach((url, batchIdx) => {
       const originalIdx = Math.floor((i + batchIdx) * (frameUrls.length / sampled.length));
@@ -339,10 +356,16 @@ function buildFilmUserPrompt(
   transcriptChunk: string,
   frameSummary: string,
   supplementalContent: string,
-  energyTimeline?: string
+  energyTimeline?: string,
+  chunkNum: number = 1,
+  totalChunks: number = 1
 ): string {
+  const chunkNote = totalChunks > 1
+    ? `\nTRANSCRIPT SECTION: Part ${chunkNum} of ${totalChunks} — analyse only what is present in this section.\n`
+    : "";
+
   return `TITLE: ${title}
-DURATION: ${duration}
+DURATION: ${duration}${chunkNote}
 
 --- VISUAL FRAME SUMMARY ---
 ${frameSummary}
@@ -350,8 +373,8 @@ ${frameSummary}
 --- DIALOGUE / TRANSCRIPT ---
 ${transcriptChunk}
 
-${energyTimeline ? `--- AUDIO NARRATIVE ENERGY MAP ---\n${energyTimeline}\n` : ''}
-${supplementalContent ? `--- SUPPLEMENTAL STORY STRUCTURE REFERENCE ---\n${supplementalContent}\n` : ''}
+${energyTimeline ? `--- AUDIO NARRATIVE ENERGY MAP ---\n${energyTimeline}\n` : ""}
+${supplementalContent ? `--- SUPPLEMENTAL STORY STRUCTURE REFERENCE ---\n${supplementalContent}\n` : ""}
 ---
 
 Produce the OneDuo Story Intelligence Layer using EXACTLY these sections:
@@ -489,7 +512,7 @@ For each:
 (Flat comma-separated tag list for semantic retrieval and cross-OneDuo reasoning)`;
 }
 
-// ── Training-mode prompts (the 21-section spec — Knowledge + Reasoning Layer) ──
+// ── Training-mode prompts ─────────────────────────────────────────────────────
 
 function buildSystemPrompt(fps: number): string {
   return `You are enhancing the existing OneDuo artifact pipeline.
@@ -524,16 +547,22 @@ function buildUserPrompt(
   duration: string,
   transcriptChunk: string,
   frameSummary: string,
-  fps: number
+  fps: number,
+  chunkNum: number = 1,
+  totalChunks: number = 1
 ): string {
+  const chunkNote = totalChunks > 1
+    ? `\nTRANSCRIPT SECTION: Part ${chunkNum} of ${totalChunks} — analyse only what is present in this section.\n`
+    : "";
+
   return `MODULE TITLE: ${moduleTitle}
 DURATION: ${duration}
-FRAME RATE: ${fps} FPS
+FRAME RATE: ${fps} FPS${chunkNote}
 
 --- VISUAL FRAME SUMMARY ---
 ${frameSummary}
 
---- TRANSCRIPT (evenly sampled: start / middle / end of full video) ---
+--- TRANSCRIPT (section ${chunkNum} of ${totalChunks}) ---
 ${transcriptChunk}
 
 ---
@@ -641,11 +670,13 @@ serve(async (req) => {
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
     const anthropic = new Anthropic({ apiKey: claudeApiKey });
 
-    // ── Fetch the target row ────────────────────────────────────────────────
+    // Only fetch the columns we actually use — avoids loading huge JSONB blobs unnecessarily
+    const NEEDED_COLS = "id, title, transcript, fps_target, density_mode, video_duration_seconds, content_type, frame_urls, audio_chapters, audio_sentiment, course_files, knowledge_layer_status";
+
     const table: "courses" | "course_modules" = moduleId ? "course_modules" : "courses";
     const { data: row, error: fetchErr } = moduleId
-      ? await supabase.from("course_modules").select("*").eq("id", moduleId).eq("course_id", courseId).maybeSingle()
-      : await supabase.from("courses").select("*").eq("id", courseId).maybeSingle();
+      ? await supabase.from("course_modules").select(NEEDED_COLS).eq("id", moduleId).eq("course_id", courseId).maybeSingle()
+      : await supabase.from("courses").select(NEEDED_COLS).eq("id", courseId).maybeSingle();
 
     if (fetchErr || !row) {
       return new Response(JSON.stringify({ error: "Record not found" }), {
@@ -654,7 +685,6 @@ serve(async (req) => {
       });
     }
 
-    // ── Guard: skip if already complete or already generating ──────────────
     if (row.knowledge_layer_status === "complete") {
       return new Response(
         JSON.stringify({ success: true, message: "Already complete — skipped" }),
@@ -668,29 +698,29 @@ serve(async (req) => {
       );
     }
 
-    // ── Mark as generating immediately ────────────────────────────────────
     await supabase
       .from(table)
       .update({ knowledge_layer_status: "generating" })
       .eq("id", moduleId || courseId);
 
-    // ── Resolve content type: prefer what caller passed, fall back to DB row ─
-    const isFilm = (incomingContentType || row.content_type || 'course') === 'film';
-
-    // ── Background work — no timeout, runs after response is sent ─────────
+    // ── Background work ───────────────────────────────────────────────────────
     const backgroundWork = async () => {
+      const targetId = moduleId || courseId;
+
       try {
         const fps: number = row.fps_target || (row.density_mode === "precision" ? 3 : 1);
         const durationSec: number = row.video_duration_seconds || 0;
         const durationStr = formatDuration(durationSec);
         const moduleTitle: string = row.title || "Untitled Module";
+        const isFilm = (incomingContentType || row.content_type || "course") === "film";
+        const chunkBasePath = `knowledge-layer/${targetId}`;
 
-        // Transcript
+        // ── Build transcript and chunk it ────────────────────────────────────
         let rawTranscript = buildTranscriptText(row.transcript);
         if (!rawTranscript && table === "courses") {
           const { data: firstMod } = await supabase
             .from("course_modules")
-            .select("transcript, title, video_duration_seconds")
+            .select("transcript")
             .eq("course_id", courseId)
             .order("module_number")
             .limit(1)
@@ -700,46 +730,41 @@ serve(async (req) => {
             console.log(`[KnowledgeLayer] Used module transcript fallback for course ${courseId}`);
           }
         }
-        const transcriptChunk = sampleTranscriptEvenly(rawTranscript, MAX_TRANSCRIPT_CHARS);
 
-        if (!transcriptChunk) {
-          console.warn(`[KnowledgeLayer] No transcript found for ${table}:${moduleId || courseId}`);
-        }
+        const chunks = chunkText(rawTranscript, CHUNK_SIZE);
+        const totalChunks = chunks.length;
+        console.log(`[KnowledgeLayer] ${totalChunks} chunk(s) for ${table}:${targetId} (${rawTranscript.length} chars total)`);
 
-        // Frames
+        // ── Frames — fetched once, shared across all chunks ──────────────────
         let frameSummary = "";
         if (row.frame_urls && Array.isArray(row.frame_urls) && row.frame_urls.length > 0) {
-          const fakFrames = (row.frame_urls as string[]).map((_, idx) => ({ frame_index: idx, ocr_text: "" }));
-          frameSummary = buildFrameSummary(fakFrames, fps);
+          const fakeFrames = (row.frame_urls as string[]).map((_, idx) => ({ frame_index: idx, ocr_text: "" }));
+          frameSummary = buildFrameSummary(fakeFrames, fps);
         }
         const { data: afRows } = await supabase
           .from("artifact_frames")
           .select("frame_index, ocr_text, timestamp_ms")
-          .eq("artifact_id", moduleId || courseId)
+          .eq("artifact_id", targetId)
           .order("frame_index")
-          .limit(500);
+          .limit(150);
         if (afRows && afRows.length > 0) {
           frameSummary = buildFrameSummary(afRows, fps);
         }
 
-        // ── Load supplemental files (story structure books, reference docs) ─
-        // These are uploaded alongside the video and stored in course_files.
-        // For film mode, this is where story structure books (Save the Cat, etc.) live.
+        // ── Supplemental files ───────────────────────────────────────────────
         let supplementalContent = "";
-        const courseFiles = row.course_files as Array<{ name: string; storagePath: string; size?: number }> | null;
+        const courseFiles = row.course_files as Array<{ name: string; storagePath: string }> | null;
         if (courseFiles && Array.isArray(courseFiles) && courseFiles.length > 0) {
           const parts: string[] = [];
           for (const cf of courseFiles) {
             try {
               const { data: fileData, error: fileErr } = await supabase.storage
-                .from('course-files')
+                .from("course-files")
                 .download(cf.storagePath);
               if (fileErr || !fileData) continue;
               const text = await fileData.text();
-              // Cap each file at 30K chars to stay within context limits
-              const capped = text.substring(0, 30_000);
-              parts.push(`=== ${cf.name} ===\n${capped}`);
-              console.log(`[KnowledgeLayer] Loaded supplemental file: ${cf.name} (${capped.length} chars)`);
+              parts.push(`=== ${cf.name} ===\n${text.substring(0, 20_000)}`);
+              console.log(`[KnowledgeLayer] Loaded supplemental file: ${cf.name} (${Math.min(text.length, 20_000)} chars)`);
             } catch (e) {
               console.warn(`[KnowledgeLayer] Could not load supplemental file ${cf.name}:`, e);
             }
@@ -747,66 +772,145 @@ serve(async (req) => {
           supplementalContent = parts.join("\n\n");
         }
 
-        // ── Film: audio energy timeline ───────────────────────────────────────
+        // ── Film extras (built once, not chunked) ────────────────────────────
         let energyTimeline = "";
+        let visualDescriptions = "";
         if (isFilm) {
-          const rawTranscriptArr = Array.isArray(row.transcript) ? row.transcript : [];
-          const audioChapters = Array.isArray(row.audio_chapters) ? row.audio_chapters : [];
-          const audioSentiment = Array.isArray(row.audio_sentiment) ? row.audio_sentiment : [];
-          energyTimeline = buildAudioEnergyTimeline(rawTranscriptArr, audioChapters, audioSentiment, durationSec);
-          if (energyTimeline) {
-            console.log(`[KnowledgeLayer] Audio energy timeline built — ${energyTimeline.length} chars`);
-          } else {
-            console.log(`[KnowledgeLayer] No audio energy data available (transcript may be empty or film not yet analysed)`);
+          energyTimeline = buildAudioEnergyTimeline(
+            Array.isArray(row.transcript) ? row.transcript : [],
+            Array.isArray(row.audio_chapters) ? row.audio_chapters : [],
+            Array.isArray(row.audio_sentiment) ? row.audio_sentiment : [],
+            durationSec
+          );
+          if (row.frame_urls && Array.isArray(row.frame_urls) && row.frame_urls.length > 0) {
+            console.log(`[KnowledgeLayer] Running film visual analysis on ${row.frame_urls.length} frames...`);
+            visualDescriptions = await buildFilmVisualDescriptions(anthropic, row.frame_urls as string[], durationSec);
+            console.log(`[KnowledgeLayer] Visual analysis complete — ${visualDescriptions.length} chars`);
           }
         }
 
-        // ── Film: visual analysis pass on sampled keyframes ──────────────────
-        let visualDescriptions = "";
-        if (isFilm && row.frame_urls && Array.isArray(row.frame_urls) && row.frame_urls.length > 0) {
-          console.log(`[KnowledgeLayer] Running film visual analysis on ${row.frame_urls.length} frames...`);
-          visualDescriptions = await buildFilmVisualDescriptions(anthropic, row.frame_urls as string[], durationSec);
-          console.log(`[KnowledgeLayer] Visual analysis complete — ${visualDescriptions.length} chars`);
+        // ── Free large row fields now that we've extracted everything we need ──
+        // Mirrors the PDF backend pattern — lets GC collect the JSONB arrays before
+        // the Claude calls start accumulating their own memory.
+        (row as any).transcript = null;
+        (row as any).frame_urls = null;
+        (row as any).audio_chapters = null;
+        (row as any).audio_sentiment = null;
+        (row as any).course_files = null;
+
+        // ── Build system prompt (same for all chunks) ────────────────────────
+        const systemPrompt = isFilm ? buildFilmSystemPrompt() : buildSystemPrompt(fps);
+
+        // ── Resume: check which chunks already exist in storage ──────────────
+        const { data: existingFiles } = await supabase.storage
+          .from("course-files")
+          .list(chunkBasePath);
+        const completedSet = new Set((existingFiles || []).map((f: any) => f.name));
+
+        // ── Process each chunk ───────────────────────────────────────────────
+        for (let i = 0; i < totalChunks; i++) {
+          const fileName = `chunk_${i + 1}_of_${totalChunks}.json`;
+
+          // Resume: skip chunks already in storage
+          if (completedSet.has(fileName)) {
+            console.log(`[KnowledgeLayer] Chunk ${i + 1}/${totalChunks} already in storage — skipping`);
+            continue;
+          }
+
+          // Cancel check between chunks (mirrors PDF backend cancel check)
+          const { data: statusCheck } = await supabase
+            .from(table)
+            .select("knowledge_layer_status")
+            .eq("id", targetId)
+            .single();
+          if (statusCheck?.knowledge_layer_status === "failed") {
+            console.log(`[KnowledgeLayer] Generation cancelled at chunk ${i + 1} — exiting`);
+            return;
+          }
+
+          let userPrompt: string;
+          if (isFilm) {
+            const enrichedFrameSummary = visualDescriptions
+              ? `--- AI VISUAL DESCRIPTIONS (sampled keyframes) ---\n${visualDescriptions}\n\n--- OCR TEXT (on-screen text only) ---\n${frameSummary}`
+              : frameSummary;
+            userPrompt = buildFilmUserPrompt(
+              moduleTitle, durationStr, chunks[i],
+              enrichedFrameSummary, supplementalContent, energyTimeline,
+              i + 1, totalChunks
+            );
+          } else {
+            userPrompt = buildUserPrompt(
+              moduleTitle, durationStr, chunks[i],
+              frameSummary, fps, i + 1, totalChunks
+            );
+          }
+
+          console.log(`[KnowledgeLayer] Calling Claude for chunk ${i + 1}/${totalChunks}...`);
+          const rawMarkdown = await callClaude(anthropic, systemPrompt, userPrompt);
+
+          if (!rawMarkdown || rawMarkdown.trim().length < 100) {
+            throw new Error(`Claude returned empty output for chunk ${i + 1}`);
+          }
+
+          const chunkJson = parseMarkdownToJson(rawMarkdown, moduleTitle, durationStr);
+          chunkJson.__raw_markdown = rawMarkdown;
+
+          const { error: uploadErr } = await supabase.storage
+            .from("course-files")
+            .upload(`${chunkBasePath}/${fileName}`, JSON.stringify(chunkJson), {
+              contentType: "application/json",
+              upsert: true,
+            });
+
+          if (uploadErr) throw new Error(`Chunk ${i + 1} upload failed: ${uploadErr.message}`);
+
+          console.log(`[KnowledgeLayer] Chunk ${i + 1}/${totalChunks} saved to storage`);
+
+          // Update progress hint in DB (non-blocking)
+          supabase.from(table)
+            .update({ knowledge_layer_error: `Processing: chunk ${i + 1} of ${totalChunks}` })
+            .eq("id", targetId)
+            .then(() => {});
         }
 
-        // ── Call Claude — branch on film vs course ─────────────────────────
-        let systemPrompt: string;
-        let userPrompt: string;
+        // ── Stitch: download all chunks and merge ────────────────────────────
+        console.log(`[KnowledgeLayer] Stitching ${totalChunks} chunk(s)...`);
+        const allParts: Record<string, any>[] = [];
+        const rawMarkdownParts: string[] = [];
 
-        if (isFilm) {
-          systemPrompt = buildFilmSystemPrompt();
-          // Merge visual descriptions into the frame summary for the film prompt
-          const enrichedFrameSummary = visualDescriptions
-            ? `--- AI VISUAL DESCRIPTIONS (sampled keyframes) ---\n${visualDescriptions}\n\n--- OCR TEXT (on-screen text only) ---\n${frameSummary}`
-            : frameSummary;
-          userPrompt = buildFilmUserPrompt(moduleTitle, durationStr, transcriptChunk, enrichedFrameSummary, supplementalContent, energyTimeline);
-          console.log(`[KnowledgeLayer] FILM MODE — calling Claude Sonnet 4.6 for ${table}:${moduleId || courseId}`);
-        } else {
-          systemPrompt = buildSystemPrompt(fps);
-          userPrompt = buildUserPrompt(moduleTitle, durationStr, transcriptChunk, frameSummary, fps);
-          console.log(`[KnowledgeLayer] COURSE MODE — calling Claude Sonnet 4.6 for ${table}:${moduleId || courseId}`);
+        for (let i = 0; i < totalChunks; i++) {
+          const fileName = `chunk_${i + 1}_of_${totalChunks}.json`;
+          const { data: fileData } = await supabase.storage
+            .from("course-files")
+            .download(`${chunkBasePath}/${fileName}`);
+          if (fileData) {
+            const parsed = JSON.parse(await fileData.text());
+            rawMarkdownParts.push(parsed.__raw_markdown || "");
+            delete parsed.__raw_markdown;
+            allParts.push(parsed);
+          }
         }
 
-        const rawMarkdown = await callClaude(anthropic, systemPrompt, userPrompt);
+        const stitched = stitchChunks(allParts, moduleTitle, durationStr);
+        const stitchedMarkdown = rawMarkdownParts.join("\n\n---\n\n");
 
-        if (!rawMarkdown || rawMarkdown.trim().length < 100) {
-          throw new Error("Claude returned empty or too-short output");
-        }
-
-        // ── Parse and persist ──────────────────────────────────────────────
-        const knowledgeLayer = parseMarkdownToJson(rawMarkdown, moduleTitle, durationStr);
-        const { error: saveErr } = await supabase
-          .from(table)
-          .update({
-            knowledge_layer: knowledgeLayer,
-            knowledge_layer_txt: rawMarkdown,
-            knowledge_layer_status: "complete",
-            knowledge_layer_error: null,
-          })
-          .eq("id", moduleId || courseId);
+        // ── Save final result to DB ──────────────────────────────────────────
+        const { error: saveErr } = await supabase.from(table).update({
+          knowledge_layer: stitched,
+          knowledge_layer_txt: stitchedMarkdown,
+          knowledge_layer_status: "complete",
+          knowledge_layer_error: null,
+        }).eq("id", targetId);
 
         if (saveErr) throw new Error(`DB save failed: ${saveErr.message}`);
-        console.log(`[KnowledgeLayer] Complete for ${table}:${moduleId || courseId} — ${rawMarkdown.length} chars`);
+
+        // ── Clean up chunk files from storage ────────────────────────────────
+        const pathsToDelete = Array.from({ length: totalChunks }, (_, i) =>
+          `${chunkBasePath}/chunk_${i + 1}_of_${totalChunks}.json`
+        );
+        await supabase.storage.from("course-files").remove(pathsToDelete);
+
+        console.log(`[KnowledgeLayer] Complete for ${table}:${targetId} — ${stitchedMarkdown.length} chars across ${totalChunks} chunk(s)`);
 
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -814,11 +918,10 @@ serve(async (req) => {
         await supabase
           .from(table)
           .update({ knowledge_layer_status: "failed", knowledge_layer_error: msg })
-          .eq("id", moduleId || courseId);
+          .eq("id", targetId);
       }
     };
 
-    // ── Respond immediately, run generation in background ─────────────────
     EdgeRuntime.waitUntil(backgroundWork());
 
     return new Response(
@@ -837,74 +940,41 @@ serve(async (req) => {
 });
 
 // ── Markdown → JSONB parser ───────────────────────────────────────────────────
-// Splits the Claude output into named sections for structured storage.
 
 function parseMarkdownToJson(md: string, title: string, duration: string): Record<string, any> {
   const sections: Record<string, string> = {};
 
-  // Section headers we expect (in order) — covers both course and film sections
   const SECTION_NAMES = [
     // Course sections
-    "MODULE TITLE",
-    "DURATION",
-    "PRIMARY TOPIC",
-    "OUTCOME",
-    "EXECUTIVE SUMMARY",
-    "CORE CONCEPTS",
-    "FRAMEWORKS / MODELS",
-    "VISUAL SEGMENTS",
-    "KEY CLAIMS / THESIS",
-    "QUESTIONS THIS MODULE ANSWERS",
-    "ACTIONABLE TAKEAWAYS",
+    "MODULE TITLE", "DURATION", "PRIMARY TOPIC", "OUTCOME", "EXECUTIVE SUMMARY",
+    "CORE CONCEPTS", "FRAMEWORKS / MODELS", "VISUAL SEGMENTS", "KEY CLAIMS / THESIS",
+    "QUESTIONS THIS MODULE ANSWERS", "ACTIONABLE TAKEAWAYS",
     // Film sections
-    "TITLE",
-    "GENRE & TONE",
-    "LOGLINE",
-    "THEMATIC DNA",
-    "STORY STRUCTURE",
-    "CHARACTER PROFILES",
-    "PROTAGONIST TRANSFORMATION ARC",
-    "ANTAGONIST FUNCTION",
-    "POWER DYNAMICS",
-    "SCENE-BY-SCENE BREAKDOWN",
-    "WORLD-BUILDING & DOMAIN LAYER",
-    "SUBPLOT & B-STORY STRUCTURE",
-    "TONE MAP",
-    "SIGNATURE SET PIECES",
-    "DIALOGUE STYLE PROFILE",
-    "EMOTIONAL ARCHITECTURE",
-    "AUDIO ENERGY TIMELINE",
+    "TITLE", "GENRE & TONE", "LOGLINE", "THEMATIC DNA", "STORY STRUCTURE",
+    "CHARACTER PROFILES", "PROTAGONIST TRANSFORMATION ARC", "ANTAGONIST FUNCTION",
+    "POWER DYNAMICS", "SCENE-BY-SCENE BREAKDOWN", "WORLD-BUILDING & DOMAIN LAYER",
+    "SUBPLOT & B-STORY STRUCTURE", "TONE MAP", "SIGNATURE SET PIECES",
+    "DIALOGUE STYLE PROFILE", "EMOTIONAL ARCHITECTURE", "AUDIO ENERGY TIMELINE",
     "ADAPTATION BLUEPRINT",
-    "CROSS-MODULE LINK OPPORTUNITIES",
-    "IMPORTANT QUOTES",
-    "PROMPT STARTERS FOR AI",
-    "DECISION RULES",
-    "REASONING PATTERNS",
-    "SPEAKER BELIEF SYSTEM",
-    "CAUSE & EFFECT CHAINS",
-    "HIDDEN PATTERNS",
-    "CONCEPT TAGS",
-    "RETRIEVAL TAGS",
+    // Shared
+    "CROSS-MODULE LINK OPPORTUNITIES", "IMPORTANT QUOTES", "PROMPT STARTERS FOR AI",
+    "DECISION RULES", "REASONING PATTERNS", "SPEAKER BELIEF SYSTEM",
+    "CAUSE & EFFECT CHAINS", "HIDDEN PATTERNS", "CONCEPT TAGS", "RETRIEVAL TAGS",
     "FULL CLEANED TRANSCRIPT",
   ];
 
-  // Split on ## headings
   const parts = md.split(/^##\s+/m);
 
   for (const part of parts) {
     const firstLine = part.split("\n")[0].trim().toUpperCase();
     const body = part.split("\n").slice(1).join("\n").trim();
     const matched = SECTION_NAMES.find((s) => firstLine.startsWith(s));
-    if (matched) {
-      sections[matched] = body;
-    }
+    if (matched) sections[matched] = body;
   }
 
-  // Ensure basics are always populated
   if (!sections["MODULE TITLE"]) sections["MODULE TITLE"] = title;
   if (!sections["DURATION"]) sections["DURATION"] = duration;
 
-  // Parse RETRIEVAL TAGS into an array
   const tags = sections["RETRIEVAL TAGS"]
     ? sections["RETRIEVAL TAGS"]
         .split(/[,\n]/)
@@ -913,13 +983,13 @@ function parseMarkdownToJson(md: string, title: string, duration: string): Recor
     : [];
 
   return {
-    // ── Shared ──────────────────────────────────────────────────────────────
+    // Shared
     module_title: sections["MODULE TITLE"] || sections["TITLE"] || title,
     duration: sections["DURATION"] || duration,
     retrieval_tags: tags,
     generated_at: new Date().toISOString(),
 
-    // ── Course / training fields ─────────────────────────────────────────────
+    // Course / training fields
     primary_topic: sections["PRIMARY TOPIC"] || "",
     outcome: sections["OUTCOME"] || "",
     executive_summary: sections["EXECUTIVE SUMMARY"] || "",
@@ -940,7 +1010,7 @@ function parseMarkdownToJson(md: string, title: string, duration: string): Recor
     concept_tags: sections["CONCEPT TAGS"] || "",
     full_transcript: sections["FULL CLEANED TRANSCRIPT"] || "",
 
-    // ── Film / TV fields ─────────────────────────────────────────────────────
+    // Film / TV fields
     genre_tone: sections["GENRE & TONE"] || "",
     logline: sections["LOGLINE"] || "",
     thematic_dna: sections["THEMATIC DNA"] || "",

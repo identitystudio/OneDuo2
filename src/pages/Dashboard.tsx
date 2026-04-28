@@ -918,22 +918,17 @@ export default function Dashboard() {
   // Download course file from storage
   const handleDownloadCourseFile = async (file: CourseFile) => {
     try {
-      const { data, error } = await supabase.storage
+      const { data: signedUrlData, error } = await supabase.storage
         .from('course-files')
-        .download(file.storagePath);
+        .createSignedUrl(file.storagePath, 3600, { download: file.name });
 
       if (error) throw error;
 
-      const url = URL.createObjectURL(data);
       const a = document.createElement('a');
-      a.href = url;
-      a.download = `${file.name}.pdf`;
+      a.href = signedUrlData.signedUrl;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-
-      toast.success(`Downloaded ${file.name}`);
     } catch (err) {
       console.error('Failed to download file:', err);
       toast.error('Failed to download file');
