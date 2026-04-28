@@ -7,7 +7,7 @@ import { ManualProcessingCard } from '@/components/ManualProcessingCard';
 import {
   Plus, RefreshCw,
   CheckCircle, Clock, Loader2, Sparkles, Check,
-  AlertTriangle, Zap, ArrowRight, Link2, FileText, ChevronDown, ChevronRight, Download, X, Layers, Mail, Upload, Globe, Lock, Paperclip, Pencil, Key, MoreHorizontal, Search
+  AlertTriangle, Zap, ArrowRight, Link2, FileText, ChevronDown, ChevronRight, Download, X, Layers, Mail, Upload, Globe, Lock, Paperclip, Pencil, Key, MoreHorizontal, Search, Trash2
 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
@@ -65,6 +65,7 @@ interface CourseFile {
   storagePath: string;
   size: number;
   uploadedAt?: string;
+  courseId?: string;
 }
 
 interface Course {
@@ -557,7 +558,7 @@ export default function Dashboard() {
         densityMode: blockCourses[0]?.density_mode || 'standard',
         fpsTarget: blockCourses[0]?.fps_target || 1,
         // Collect course files from all courses in this block
-        courseFiles: blockCourses.flatMap(c => c.course_files || []),
+        courseFiles: blockCourses.flatMap(c => (c.course_files || []).map(f => ({ ...f, courseId: c.id }))),
         // NEW: true when ALL modules are completed
         allCompleted: completedModules === totalModules && totalModules > 0,
       };
@@ -932,6 +933,36 @@ export default function Dashboard() {
     } catch (err) {
       console.error('Failed to download file:', err);
       toast.error('Failed to download file');
+    }
+  };
+
+  const handleDeleteCourseFile = async (file: CourseFile) => {
+    if (!file.courseId) return;
+    try {
+      const { data: courseData } = await supabase
+        .from('courses')
+        .select('course_files')
+        .eq('id', file.courseId)
+        .single();
+
+      const updatedFiles = ((courseData?.course_files as any[]) || [])
+        .filter((f: any) => f.storagePath !== file.storagePath && f.storage_path !== file.storagePath);
+
+      await supabase
+        .from('courses')
+        .update({ course_files: updatedFiles })
+        .eq('id', file.courseId);
+
+      setCourses(prev => prev.map(c =>
+        c.id === file.courseId
+          ? { ...c, course_files: (c.course_files || []).filter(f => f.storagePath !== file.storagePath) }
+          : c
+      ));
+
+      toast.success(`Deleted ${file.name}`);
+    } catch (err) {
+      console.error('Failed to delete file:', err);
+      toast.error('Failed to delete file');
     }
   };
 
@@ -3050,16 +3081,27 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                                       </div>
                                       <div className="flex flex-wrap gap-2">
                                         {block.courseFiles.map((file, idx) => (
-                                          <button
+                                          <div
                                             key={idx}
-                                            onClick={() => handleDownloadCourseFile(file)}
-                                            className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/20 hover:bg-amber-500/20 transition-colors group"
+                                            className="flex items-center rounded-lg bg-amber-500/10 border border-amber-500/20 overflow-hidden"
                                           >
-                                            <FileText className="w-3.5 h-3.5 text-amber-400" />
-                                            <span className="text-sm text-white/80 group-hover:text-white">{file.name}</span>
-                                            <span className="text-xs text-white/40">{formatFileSize(file.size)}</span>
-                                            <Download className="w-3 h-3 text-amber-400/60 group-hover:text-amber-400" />
-                                          </button>
+                                            <button
+                                              onClick={() => handleDownloadCourseFile(file)}
+                                              className="flex items-center gap-2 px-3 py-1.5 hover:bg-amber-500/20 transition-colors group"
+                                            >
+                                              <FileText className="w-3.5 h-3.5 text-amber-400" />
+                                              <span className="text-sm text-white/80 group-hover:text-white">{file.name}</span>
+                                              <span className="text-xs text-white/40">{formatFileSize(file.size)}</span>
+                                              <Download className="w-3 h-3 text-amber-400/60 group-hover:text-amber-400" />
+                                            </button>
+                                            <button
+                                              onClick={() => handleDeleteCourseFile(file)}
+                                              className="px-2 py-1.5 border-l border-amber-500/20 hover:bg-red-500/20 transition-colors group"
+                                              title="Delete file"
+                                            >
+                                              <Trash2 className="w-3.5 h-3.5 text-white/30 group-hover:text-red-400 transition-colors" />
+                                            </button>
+                                          </div>
                                         ))}
                                       </div>
                                     </div>
