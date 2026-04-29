@@ -670,8 +670,9 @@ serve(async (req) => {
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
     const anthropic = new Anthropic({ apiKey: claudeApiKey });
 
-    // Only fetch the columns we actually use — avoids loading huge JSONB blobs unnecessarily
-    const NEEDED_COLS = "id, title, transcript, fps_target, density_mode, video_duration_seconds, content_type, frame_urls, audio_chapters, audio_sentiment, course_files, knowledge_layer_status";
+    // Only fetch the columns we actually use — avoids loading huge JSONB blobs unnecessarily.
+    // frame_urls, audio_chapters, audio_sentiment are fetched separately only when needed (film mode).
+    const NEEDED_COLS = "id, title, transcript, fps_target, density_mode, video_duration_seconds, content_type, course_files, knowledge_layer_status";
 
     const table: "courses" | "course_modules" = moduleId ? "course_modules" : "courses";
     const { data: row, error: fetchErr } = moduleId
@@ -735,12 +736,25 @@ serve(async (req) => {
         const totalChunks = chunks.length;
         console.log(`[KnowledgeLayer] ${totalChunks} chunk(s) for ${table}:${targetId} (${rawTranscript.length} chars total)`);
 
-        // ── Frames — fetched once, shared across all chunks ──────────────────
-        let frameSummary = "";
-        if (row.frame_urls && Array.isArray(row.frame_urls) && row.frame_urls.length > 0) {
-          const fakeFrames = (row.frame_urls as string[]).map((_, idx) => ({ frame_index: idx, ocr_text: "" }));
-          frameSummary = buildFrameSummary(fakeFrames, fps);
+        // ── Film-only: fetch large JSONB columns separately so course jobs never load them ──
+        let filmFrameUrls: string[] = [];
+        let audioChapters: any[] = [];
+        let audioSentiment: any[] = [];
+        if (isFilm) {
+          const { data: filmData } = await supabase
+            .from(table)
+            .select("frame_urls, audio_chapters, audio_sentiment")
+            .eq("id", targetId)
+            .maybeSingle();
+          filmFrameUrls = Array.isArray(filmData?.frame_urls) ? filmData.frame_urls as string[] : [];
+          audioChapters = Array.isArray(filmData?.audio_chapters) ? filmData.audio_chapters : [];
+          audioSentiment = Array.isArray(filmData?.audio_sentiment) ? filmData.audio_sentiment : [];
         }
+
+        // ── Frames — use artifact_frames (real OCR data, capped at 150 rows) ──
+        // frame_urls is no longer fetched for course content — it contained 7,200 URLs
+        // with empty ocr_text that produced no useful output anyway.
+        let frameSummary = "";
         const { data: afRows } = await supabase
           .from("artifact_frames")
           .select("frame_index, ocr_text, timestamp_ms")
@@ -753,10 +767,20 @@ serve(async (req) => {
 
         // ── Supplemental files ───────────────────────────────────────────────
         let supplementalContent = "";
-        const courseFiles = row.course_files as Array<{ name: string; storagePath: string }> | null;
+        const courseFiles = row.course_files as Array<{ name: string; storagePath: string; type?: string }> | null;
         if (courseFiles && Array.isArray(courseFiles) && courseFiles.length > 0) {
           const parts: string[] = [];
           for (const cf of courseFiles) {
+            // Skip generated PDFs and any binary PDF files — .text() on a PDF blob
+            // returns raw binary garbage that gives Claude zero useful information,
+            // and large PDFs (100–200 MB) will OOM the edge function before slicing.
+            const isPdf = (cf.name || "").toLowerCase().endsWith(".pdf")
+              || cf.type === "visual_transcription_pdf"
+              || cf.type === "pdf";
+            if (isPdf) {
+              console.log(`[KnowledgeLayer] Skipping binary PDF: ${cf.name}`);
+              continue;
+            }
             try {
               const { data: fileData, error: fileErr } = await supabase.storage
                 .from("course-files")
@@ -778,24 +802,19 @@ serve(async (req) => {
         if (isFilm) {
           energyTimeline = buildAudioEnergyTimeline(
             Array.isArray(row.transcript) ? row.transcript : [],
-            Array.isArray(row.audio_chapters) ? row.audio_chapters : [],
-            Array.isArray(row.audio_sentiment) ? row.audio_sentiment : [],
+            audioChapters,
+            audioSentiment,
             durationSec
           );
-          if (row.frame_urls && Array.isArray(row.frame_urls) && row.frame_urls.length > 0) {
-            console.log(`[KnowledgeLayer] Running film visual analysis on ${row.frame_urls.length} frames...`);
-            visualDescriptions = await buildFilmVisualDescriptions(anthropic, row.frame_urls as string[], durationSec);
+          if (filmFrameUrls.length > 0) {
+            console.log(`[KnowledgeLayer] Running film visual analysis on ${filmFrameUrls.length} frames...`);
+            visualDescriptions = await buildFilmVisualDescriptions(anthropic, filmFrameUrls, durationSec);
             console.log(`[KnowledgeLayer] Visual analysis complete — ${visualDescriptions.length} chars`);
           }
         }
 
-        // ── Free large row fields now that we've extracted everything we need ──
-        // Mirrors the PDF backend pattern — lets GC collect the JSONB arrays before
-        // the Claude calls start accumulating their own memory.
+        // ── Free large fields so GC can collect before Claude calls start ────
         (row as any).transcript = null;
-        (row as any).frame_urls = null;
-        (row as any).audio_chapters = null;
-        (row as any).audio_sentiment = null;
         (row as any).course_files = null;
 
         // ── Build system prompt (same for all chunks) ────────────────────────

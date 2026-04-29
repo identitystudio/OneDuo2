@@ -195,6 +195,8 @@ export default function Dashboard() {
   const [isFoldersLoading, setIsFoldersLoading] = useState(true);
   const [moveToFolderOpen, setMoveToFolderOpen] = useState(false);
 
+  const [klProgress, setKlProgress] = useState<Record<string, { percent: number; label: string }>>({});
+
   const lastSelfRecoveryAtRef = useRef(0);
   const apiKeysRef = useRef<HTMLDivElement>(null);
 
@@ -216,6 +218,50 @@ export default function Dashboard() {
 
     return () => clearInterval(watchdogInterval);
   }, []);
+
+  // Poll knowledge_layer_error for generating items to drive the progress bar
+  useEffect(() => {
+    const generatingCourseIds = courses
+      .filter(c => c.knowledge_layer_status === 'generating')
+      .map(c => ({ id: c.id, table: 'courses' as const }));
+    const generatingModuleIds = courses.flatMap(c =>
+      (c.modules || [])
+        .filter(m => m.knowledge_layer_status === 'generating')
+        .map(m => ({ id: m.id, table: 'course_modules' as const }))
+    );
+    const generating = [...generatingCourseIds, ...generatingModuleIds];
+    if (generating.length === 0) return;
+
+    const poll = async () => {
+      const updates: Record<string, { percent: number; label: string }> = {};
+      await Promise.all(generating.map(async ({ id, table }) => {
+        const { data } = await supabase
+          .from(table)
+          .select('knowledge_layer_error, knowledge_layer_status')
+          .eq('id', id)
+          .single();
+        if (!data) return;
+        if (data.knowledge_layer_status === 'complete') {
+          updates[id] = { percent: 100, label: 'Complete' };
+          return;
+        }
+        const match = (data.knowledge_layer_error || '').match(/chunk (\d+) of (\d+)/i);
+        if (match) {
+          const current = parseInt(match[1]);
+          const total = parseInt(match[2]);
+          const percent = Math.round((current / total) * 90) + 5;
+          updates[id] = { percent, label: `Chunk ${current} of ${total}` };
+        } else {
+          updates[id] = { percent: 5, label: 'Starting...' };
+        }
+      }));
+      setKlProgress(prev => ({ ...prev, ...updates }));
+    };
+
+    poll();
+    const interval = setInterval(poll, 3000);
+    return () => clearInterval(interval);
+  }, [courses]);
 
   // Check for just-uploaded flag from Upload page
   useEffect(() => {
@@ -254,7 +300,9 @@ export default function Dashboard() {
       const hasProcessing = currentCourses.some(c =>
         !['completed', 'failed'].includes(c.status) ||
         c.modules?.some(m => !['completed', 'failed'].includes(m.status)) ||
-        c.pdf_generation_status === 'generating'
+        c.pdf_generation_status === 'generating' ||
+        c.knowledge_layer_status === 'generating' ||
+        c.modules?.some(m => m.knowledge_layer_status === 'generating')
       );
 
       // Auto-retry stalled PDF generation (function timed out silently)
@@ -2534,10 +2582,26 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                                   })()}
                                   {/* Txt File — generate or download depending on status */}
                                   {block.courses[0]?.knowledge_layer_status === 'generating' ? (
-                                    <Button size="sm" variant="outline" disabled className="gap-1.5 border-emerald-500/30 text-emerald-400">
-                                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                                      <span className="hidden sm:inline">Generating...</span>
-                                    </Button>
+                                    <div className="flex flex-col gap-1 min-w-[140px]">
+                                      <div className="flex items-center justify-between gap-2">
+                                        <span className="text-xs text-emerald-400 flex items-center gap-1">
+                                          <Loader2 className="w-3 h-3 animate-spin" />
+                                          Generating...
+                                        </span>
+                                        <span className="text-xs text-emerald-400 font-medium">
+                                          {klProgress[block.courses[0].id]?.percent ?? 5}%
+                                        </span>
+                                      </div>
+                                      <div className="w-full h-1.5 bg-emerald-500/10 rounded-full overflow-hidden">
+                                        <div
+                                          className="h-full bg-emerald-400 rounded-full transition-all duration-700"
+                                          style={{ width: `${klProgress[block.courses[0].id]?.percent ?? 5}%` }}
+                                        />
+                                      </div>
+                                      <span className="text-[10px] text-white/30">
+                                        {klProgress[block.courses[0].id]?.label ?? 'Starting...'}
+                                      </span>
+                                    </div>
                                   ) : block.courses[0]?.knowledge_layer_status === 'complete' ? (
                                     <Button
                                       size="sm"
@@ -3023,10 +3087,26 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                                                 {/* AI Artifact — per-module generate or download */}
                                                 {item.isModule && (
                                                   item.knowledge_layer_status === 'generating' ? (
-                                                    <Button size="sm" variant="ghost" disabled className="h-6 px-2 text-xs text-emerald-400/70 gap-1">
-                                                      <Loader2 className="w-3 h-3 animate-spin" />
-                                                      Generating...
-                                                    </Button>
+                                                    <div className="flex flex-col gap-0.5 min-w-[120px]">
+                                                      <div className="flex items-center justify-between gap-1">
+                                                        <span className="text-[10px] text-emerald-400/70 flex items-center gap-1">
+                                                          <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                                                          Generating...
+                                                        </span>
+                                                        <span className="text-[10px] text-emerald-400/70 font-medium">
+                                                          {klProgress[item.id]?.percent ?? 5}%
+                                                        </span>
+                                                      </div>
+                                                      <div className="w-full h-1 bg-emerald-500/10 rounded-full overflow-hidden">
+                                                        <div
+                                                          className="h-full bg-emerald-400/70 rounded-full transition-all duration-700"
+                                                          style={{ width: `${klProgress[item.id]?.percent ?? 5}%` }}
+                                                        />
+                                                      </div>
+                                                      <span className="text-[9px] text-white/20">
+                                                        {klProgress[item.id]?.label ?? 'Starting...'}
+                                                      </span>
+                                                    </div>
                                                   ) : item.knowledge_layer_status === 'complete' ? (
                                                     <>
                                                       <Button
