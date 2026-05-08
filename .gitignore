@@ -25,3 +25,8 @@ dist-ssr
 
 # Custom Ignores
 aaa-exampleproject/oneduo
+
+# Environment variables
+.env
+.env.*
+!.env.example
