@@ -92,8 +92,8 @@ export default function Upload() {
   // Processing mode: 'quick' = transcript + PDF only, 'deep' = full knowledge layer
   const [processingMode, setProcessingMode] = useState<'quick' | 'deep'>('quick');
 
-  // Processing mode: false = Fast (1 FPS), true = Precision (3 FPS)
-  const [precisionMode, setPrecisionMode] = useState(false);
+  // Extraction FPS mode: 'fast' = 1 FPS, 'precision' = 3 FPS, 'cinematic' = 5 FPS
+  const [fpsMode, setFpsMode] = useState<'fast' | 'precision' | 'cinematic'>('fast');
 
   // Merged Course Mode: All videos become chapters in ONE unified PDF
   // When true: One PDF with TOC + chapters, single completion email
@@ -494,7 +494,7 @@ export default function Upload() {
     // Submit batch - all videos go to cloud
     // If adding to existing course, pass the existingCourseId
     const result = await submitBatch(modules, email, courseTitle, {
-      extractionFps: precisionMode ? 3 : 1, // Fast Mode = 1 FPS, Precision Mode = 3 FPS
+      extractionFps: fpsMode === 'cinematic' ? 5 : fpsMode === 'precision' ? 3 : 1,
       teamNotificationEmail: teamNotificationEmail || undefined,
       teamNotificationRole: teamNotificationRole || undefined,
       courseFiles: courseFileUrls.length > 0 ? courseFileUrls : undefined,
@@ -930,25 +930,34 @@ export default function Upload() {
                   {/* Signed in as - minimal */}
                   <p className="text-xs text-muted-foreground text-center">{email}</p>
 
-                  {/* Processing Mode Toggle - Minimal */}
-                  <div className="flex items-center justify-between p-3 rounded-lg bg-muted/30 border border-border">
-                    <span className="text-sm text-foreground">
-                      {precisionMode ? 'Precision (3 FPS)' : 'Fast (1 FPS)'}
-                    </span>
-                    <button
-                      onClick={() => setPrecisionMode(!precisionMode)}
-                      className={cn(
-                        "relative inline-flex h-6 w-11 items-center rounded-full transition-colors",
-                        precisionMode ? "bg-amber-500" : "bg-primary"
-                      )}
-                    >
-                      <span
-                        className={cn(
-                          "inline-block h-4 w-4 transform rounded-full bg-white transition-transform",
-                          precisionMode ? "translate-x-6" : "translate-x-1"
-                        )}
-                      />
-                    </button>
+                  {/* Extraction FPS Selector */}
+                  <div className="flex flex-col gap-1.5 p-3 rounded-lg bg-muted/30 border border-border">
+                    <span className="text-xs text-muted-foreground">Frame Extraction</span>
+                    <div className="flex gap-1.5">
+                      {([
+                        { key: 'fast', label: 'Fast', sub: '1 FPS' },
+                        { key: 'precision', label: 'Precision', sub: '3 FPS' },
+                        { key: 'cinematic', label: 'Cinematic', sub: '5 FPS' },
+                      ] as const).map(({ key, label, sub }) => (
+                        <button
+                          key={key}
+                          onClick={() => setFpsMode(key)}
+                          className={cn(
+                            "flex-1 flex flex-col items-center py-1.5 px-1 rounded-md text-xs font-medium transition-colors border",
+                            fpsMode === key
+                              ? key === 'cinematic'
+                                ? "bg-violet-600 text-white border-violet-600"
+                                : key === 'precision'
+                                ? "bg-amber-500 text-white border-amber-500"
+                                : "bg-primary text-primary-foreground border-primary"
+                              : "bg-transparent text-muted-foreground border-border hover:border-foreground/30"
+                          )}
+                        >
+                          <span>{label}</span>
+                          <span className="opacity-70">{sub}</span>
+                        </button>
+                      ))}
+                    </div>
                   </div>
 
                   {/* Output Mode Toggle - Clearer labels per beta feedback */}
