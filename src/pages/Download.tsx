@@ -66,6 +66,8 @@ const DownloadPage = () => {
   const [downloadingChunkIdx, setDownloadingChunkIdx] = useState<number | null>(null);
   const [completedChunks, setCompletedChunks] = useState<Set<number>>(new Set());
   const [visualTranscriptionQueued, setVisualTranscriptionQueued] = useState(false);
+  const [intelPackQueued, setIntelPackQueued] = useState(false);
+  const [intelPackLoading, setIntelPackLoading] = useState(false);
 
   useEffect(() => {
     if (!courseId) {
@@ -374,6 +376,28 @@ const DownloadPage = () => {
     }
   };
 
+  const handleIntelPack = async () => {
+    if (!courseId) return;
+    setIntelPackLoading(true);
+    try {
+      const { error } = await supabase.functions.invoke('generate-pdf-backend', {
+        body: {
+          courseId,
+          email: userEmail,
+          action: 'generateIntelPack',
+        },
+      });
+      if (error) throw error;
+      setIntelPackQueued(true);
+      toast.success("Training Intelligence Pack is being generated. You'll receive an email with the download link when ready!");
+    } catch (err: any) {
+      console.error('Intel pack generation failed:', err);
+      toast.error('Failed to start generation. Please try again.');
+    } finally {
+      setIntelPackLoading(false);
+    }
+  };
+
   // Handle no data available state
   if (noDataAvailable) {
     return (
@@ -642,9 +666,43 @@ const DownloadPage = () => {
                     >
                       {downloading
                         ? <><Loader2 className="h-5 w-5 mr-2 animate-spin" /> Queuing...</>
-                        : <><Layers className="h-5 w-5 mr-2" /> Generate &amp; Email PDF</>
+                        : <><Layers className="h-5 w-5 mr-2" /> Generate Full Archive PDF</>
                       }
                     </Button>
+
+                    {/* Training Intelligence Pack */}
+                    <div className="pt-2 border-t border-border/40">
+                      {intelPackQueued ? (
+                        <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-center">
+                          <CheckCircle className="h-6 w-6 text-emerald-400 mx-auto mb-1" />
+                          <p className="text-sm font-medium text-emerald-400">Training Intelligence Pack queued</p>
+                          <p className="text-xs text-muted-foreground mt-1">
+                            We'll email <span className="font-medium">{userEmail}</span> with a zip download when ready.
+                          </p>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-left mb-2">
+                            <p className="text-xs text-emerald-400 font-medium">5-file intelligence pack • Zip download</p>
+                            <p className="text-xs text-muted-foreground mt-1">
+                              Full transcript · Visual spine PDF · Chat analysis · Timestamp index · Resources extracted.
+                              Upload your Zoom chat file as a supplemental file for richer analysis.
+                            </p>
+                          </div>
+                          <Button
+                            onClick={handleIntelPack}
+                            size="lg"
+                            className="w-full py-5 bg-emerald-700 hover:bg-emerald-600 text-white"
+                            disabled={intelPackLoading}
+                          >
+                            {intelPackLoading
+                              ? <><Loader2 className="h-5 w-5 mr-2 animate-spin" /> Queuing...</>
+                              : <><Package className="h-5 w-5 mr-2" /> Generate Training Intelligence Pack</>
+                            }
+                          </Button>
+                        </>
+                      )}
+                    </div>
                   </div>
                 )
               ) : isLongVideo && selectedFormat === 'pdf' ? (

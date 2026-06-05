@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 import { PDFDocument, StandardFonts, rgb } from "https://esm.sh/pdf-lib@1.17.1";
+import JSZip from "https://esm.sh/jszip@3.10.1";
 const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -104,6 +105,28 @@ interface ProsodyData {
     cliffhanger_moments?: CliffhangerMoment[];
 }
 
+// ============================================
+// INTEL PACK TYPES
+// ============================================
+
+interface ChatMessage {
+    timeStr: string;
+    secondsOffset: number;
+    speaker: string;
+    message: string;
+}
+
+interface EnrichedFrame {
+    url: string;
+    globalIndex: number;
+    timestamp: number;
+    pixelDiffScore: number;
+    reason: string;
+    transcriptText: string;
+    speakerLabel: string;
+    chatExcerpt: string;
+}
+
 function formatTime(seconds: number): string {
     if (!seconds || !isFinite(seconds)) return '0:00';
     const m = Math.floor(seconds / 60);
@@ -199,6 +222,415 @@ async function filterToSlideChanges(
 
     console.log(`[generate-pdf-backend] Pixel diff scene detect: ${filtered.length}/${frameUrls.length} frames (threshold=${SCENE_CHANGE_THRESHOLD})`);
     return filtered.length > 0 ? filtered : frameUrls;
+}
+
+// ============================================
+// INTEL PACK: CHAT PARSING
+// ============================================
+
+function isChatLine(line: string): boolean {
+    return /^\d{2}:\d{2}:\d{2}/.test(line.trim());
+}
+
+function parseChatFile(content: string): ChatMessage[] {
+    const messages: ChatMessage[] = [];
+    for (const line of content.split('\n')) {
+        if (!isChatLine(line)) continue;
+        // Zoom formats:
+        // "00:09:17	From Name :	Hello" (tab-delimited with From prefix)
+        // "00:09:17	Name	Hello"
+        // "[00:09:17] Name: Hello"
+        const m =
+            line.match(/^(\d{2}:\d{2}:\d{2})\s+From\s+(.+?):\s+(.+)$/) ||
+            line.match(/^(\d{2}:\d{2}:\d{2})\t(.+?)\t(.+)$/) ||
+            line.match(/^\[?(\d{2}:\d{2}:\d{2})\]?\s+(.+?):\s+(.+)$/);
+        if (!m) continue;
+        const [, timeStr, speaker, message] = m;
+        const [h, mn, s] = timeStr.split(':').map(Number);
+        messages.push({
+            timeStr,
+            secondsOffset: h * 3600 + mn * 60 + s,
+            speaker: speaker.replace(/^From\s+/i, '').replace(/:$/, '').trim(),
+            message: message.trim(),
+        });
+    }
+    return messages;
+}
+
+function detectChatFile(supplementalFiles: any[]): ChatMessage[] {
+    if (!supplementalFiles?.length) return [];
+    for (const file of supplementalFiles) {
+        if (!file.content?.trim()) continue;
+        if (!(file.name || '').toLowerCase().endsWith('.txt')) continue;
+        const lines = file.content.split('\n').filter((l: string) => l.trim());
+        const chatLines = lines.filter((l: string) => isChatLine(l));
+        if (chatLines.length >= 5 && chatLines.length / lines.length > 0.35) {
+            console.log(`[intel-pack] Chat file detected: ${file.name} (${chatLines.length} messages)`);
+            return parseChatFile(file.content);
+        }
+    }
+    return [];
+}
+
+// ============================================
+// INTEL PACK: FRAME ENRICHMENT
+// ============================================
+
+function classifyFrameReason(
+    pixelDiffScore: number,
+    isFirst: boolean,
+    transcriptText: string,
+    chatNearby: number,
+): string {
+    if (isFirst) return 'Session start';
+    const t = transcriptText.toLowerCase();
+    if (/https?:|\.com|password|passcode|pw:|download|template|resource/.test(t)) return 'Resource shown';
+    if (/click|go to|type here|step \d|let me show|watch this|open|navigate/.test(t)) return 'Instructor demonstrating';
+    if (chatNearby >= 5) return 'High chat activity';
+    if (chatNearby >= 2) return 'Chat questions present';
+    if (pixelDiffScore >= 0.4) return 'Major screen change';
+    if (pixelDiffScore >= 0.15) return 'New screen or app opened';
+    if (pixelDiffScore >= 0.08) return 'Significant content change';
+    return 'Teaching state change';
+}
+
+function enrichFrames(
+    filteredUrls: string[],
+    allFrameUrls: string[],
+    frameAnalyses: any[],
+    videoDuration: number,
+    transcript: any[],
+    chatMessages: ChatMessage[],
+): EnrichedFrame[] {
+    const fps = videoDuration > 0 && allFrameUrls.length > 0 ? allFrameUrls.length / videoDuration : 1;
+    const analysisMap = new Map<number, any>();
+    for (const a of frameAnalyses) {
+        const idx = a.frameIndex ?? a.frame_index;
+        if (idx !== undefined) analysisMap.set(idx, a);
+    }
+
+    return filteredUrls.map((url, fi) => {
+        const globalIndex = allFrameUrls.indexOf(url);
+        const effectiveIndex = globalIndex >= 0 ? globalIndex : fi;
+        const timestamp = effectiveIndex / Math.max(fps, 0.001);
+        const analysis = analysisMap.get(effectiveIndex) || {};
+        const pixelDiffScore = analysis.pixel_diff_score ?? 0.08;
+
+        const seg = (transcript || []).find((s: any) => timestamp >= (s.start || 0) && timestamp <= (s.end || (s.start || 0) + 30))
+            || (transcript || []).reduce((closest: any, s: any) => {
+                if (!closest) return s;
+                return Math.abs((s.start || 0) - timestamp) < Math.abs((closest.start || 0) - timestamp) ? s : closest;
+            }, null);
+
+        const transcriptText = seg?.text || '';
+        const speakerLabel = seg?.speaker || '';
+        const nearby = chatMessages.filter(c => Math.abs(c.secondsOffset - timestamp) <= 30);
+        const chatExcerpt = nearby.slice(0, 3).map(c => `${c.timeStr} ${c.speaker}: ${c.message}`).join(' | ');
+        const reason = classifyFrameReason(pixelDiffScore, fi === 0, transcriptText, nearby.length);
+
+        return { url, globalIndex: effectiveIndex, timestamp, pixelDiffScore, reason, transcriptText, speakerLabel, chatExcerpt };
+    });
+}
+
+// ============================================
+// INTEL PACK: TEXT FILE BUILDERS
+// ============================================
+
+function buildFullTranscriptText(transcript: any[], courseTitle: string): string {
+    const lines = [
+        'FULL TRANSCRIPT',
+        `Course: ${courseTitle}`,
+        `Generated: ${new Date().toISOString()}`,
+        `Segments: ${transcript.length}`,
+        '',
+        '='.repeat(60),
+        '',
+    ];
+    for (const seg of transcript) {
+        const start = formatTime(seg.start || 0);
+        const end = seg.end ? ` -> ${formatTime(seg.end)}` : '';
+        const speaker = seg.speaker ? `[${seg.speaker}] ` : '';
+        lines.push(`[${start}${end}] ${speaker}${seg.text || ''}`);
+        lines.push('');
+    }
+    return lines.join('\n');
+}
+
+function buildChatGoldText(chatMessages: ChatMessage[], courseTitle: string, transcript: any[]): string {
+    if (chatMessages.length === 0) {
+        return `CHAT INTELLIGENCE LOG\nCourse: ${courseTitle}\n\nChat unavailable for this session.\n`;
+    }
+    const lines = [
+        'CHAT INTELLIGENCE LOG',
+        `Course: ${courseTitle}`,
+        `Generated: ${new Date().toISOString()}`,
+        `Total messages: ${chatMessages.length}`,
+        '',
+        '='.repeat(60),
+        '',
+    ];
+
+    const buckets = new Map<number, ChatMessage[]>();
+    for (const msg of chatMessages) {
+        const b = Math.floor(msg.secondsOffset / 300);
+        if (!buckets.has(b)) buckets.set(b, []);
+        buckets.get(b)!.push(msg);
+    }
+
+    for (const [bucket, msgs] of [...buckets.entries()].sort((a, b) => a[0] - b[0])) {
+        const startMin = bucket * 5;
+        const endMin = startMin + 5;
+        const bucketStart = bucket * 300;
+        const bucketEnd = bucketStart + 300;
+        const instructorVoice = (transcript || [])
+            .filter((s: any) => (s.start || 0) >= bucketStart && (s.start || 0) < bucketEnd)
+            .map((s: any) => s.text || '')
+            .join(' ')
+            .substring(0, 200);
+
+        lines.push(`-- SECTION ${startMin}:00 - ${endMin}:00 --`);
+        if (instructorVoice) lines.push(`Instructor: "${instructorVoice}${instructorVoice.length >= 200 ? '...' : ''}"`);
+        lines.push('');
+        for (const msg of msgs) lines.push(`  ${msg.timeStr}  ${msg.speaker}: ${msg.message}`);
+
+        const confusion = msgs.filter(m => /confused|don.t understand|lost|what does|how do|why is/i.test(m.message));
+        const questions = msgs.filter(m => m.message.includes('?'));
+        if (confusion.length >= 2) lines.push(`  [Teaching flag: ${confusion.length} signs of confusion]`);
+        else if (questions.length >= 2) lines.push(`  [${questions.length} questions raised]`);
+        lines.push('');
+    }
+    return lines.join('\n');
+}
+
+function buildTimestampIndexText(enrichedFrames: EnrichedFrame[], courseTitle: string): string {
+    const lines = [
+        'TIMESTAMP INDEX',
+        `Course: ${courseTitle}`,
+        `Generated: ${new Date().toISOString()}`,
+        `Frames: ${enrichedFrames.length}`,
+        '',
+        `${'Timestamp'.padEnd(10)} | ${'Topic'.padEnd(42)} | ${'Why kept'.padEnd(28)} | Chat`,
+        `${'-'.repeat(10)}-+-${'-'.repeat(42)}-+-${'-'.repeat(28)}-+-${'-'.repeat(38)}`,
+    ];
+    for (const f of enrichedFrames) {
+        const ts = formatTime(f.timestamp).padEnd(10);
+        const topic = (f.transcriptText || '').replace(/\n/g, ' ').substring(0, 40).padEnd(42);
+        const reason = f.reason.substring(0, 26).padEnd(28);
+        const chat = f.chatExcerpt ? f.chatExcerpt.substring(0, 36) : '';
+        lines.push(`${ts} | ${topic} | ${reason} | ${chat}`);
+    }
+    lines.push('');
+    return lines.join('\n');
+}
+
+function buildResourcesSeenText(transcript: any[], chatMessages: ChatMessage[], frameAnalyses: any[], courseTitle: string): string {
+    const allText = [
+        ...transcript.map((s: any) => s.text || ''),
+        ...chatMessages.map(c => c.message),
+        ...frameAnalyses.map((a: any) => a.text || ''),
+    ].join('\n');
+
+    const urls = [...new Set((allText.match(/https?:\/\/[^\s\)\]"'<>\n]+/g) || []))];
+    const passcodes = [...new Set((allText.match(/(?:password|passcode|pw|access code)[:\s]+([^\s\n,]{3,30})/gi) || []))];
+    const toolKeywords = ['ChatGPT', 'Claude', 'Notion', 'Figma', 'Canva', 'Slack', 'Loom', 'Miro', 'Airtable',
+        'HubSpot', 'Zapier', 'Make.com', 'Google Sheets', 'Google Docs', 'Google Drive', 'Dropbox',
+        'GitHub', 'Cursor', 'OpenAI', 'Anthropic', 'Perplexity', 'Midjourney', 'Adobe', 'LinkedIn', 'YouTube'];
+    const toolsFound = toolKeywords.filter(t => new RegExp(t, 'i').test(allText));
+    const downloads = [...new Set((allText.match(/(?:download|template|resource|handout)[s]?[:\s]+([^\n.!?]{5,60})/gi) || []).map(d => d.trim()))].slice(0, 20);
+
+    const lines = [
+        'RESOURCES SEEN',
+        `Course: ${courseTitle}`,
+        `Generated: ${new Date().toISOString()}`,
+        '',
+        '='.repeat(60),
+        '',
+        `-- URLS (${urls.length}) --`,
+        ...(urls.length > 0 ? urls.map(u => `  ${u}`) : ['  None detected.']),
+        '',
+        `-- PASSCODES / PASSWORDS (${passcodes.length}) --`,
+        ...(passcodes.length > 0 ? passcodes.map(p => `  ${p}`) : ['  None detected.']),
+        '',
+        `-- TOOLS & APPS (${toolsFound.length}) --`,
+        toolsFound.length > 0 ? `  ${toolsFound.join(', ')}` : '  None detected.',
+        '',
+        `-- DOWNLOADS & TEMPLATES (${downloads.length}) --`,
+        ...(downloads.length > 0 ? downloads.map(d => `  ${d}`) : ['  None detected.']),
+        '',
+    ];
+    return lines.join('\n');
+}
+
+function buildReadmeText(courseTitle: string, chatSource: string, frameCount: number, transcriptSegments: number): string {
+    return [
+        'TRAINING INTELLIGENCE PACK',
+        `Course: ${courseTitle}`,
+        `Generated: ${new Date().toISOString()}`,
+        '',
+        'This pack contains 5 files:',
+        '',
+        '01_full_transcript.txt',
+        '  Complete timestamped transcript with speaker labels.',
+        '  Use for: keyword search, AI analysis, quote sourcing.',
+        '',
+        '02_visual_training_spine.pdf',
+        `  ${frameCount} meaningful teaching moments (screenshots).`,
+        '  Each page: timestamp + screenshot + spoken words + why this frame was kept.',
+        '  Use for: curriculum design, slide rebuilding, visual documentation.',
+        '',
+        '03_chat_gold.txt',
+        `  Chat questions analyzed by section. Source: ${chatSource === 'file' ? 'Zoom chat export' : 'unavailable'}.`,
+        '  Use for: FAQ development, confusion mapping, student pain points.',
+        '',
+        '04_timestamp_index.txt',
+        '  Compact timeline: timestamp | topic | why kept | chat.',
+        '  Use for: quick navigation, AI indexing, course mapping.',
+        '',
+        '05_resources_seen.txt',
+        '  All URLs, tools, passcodes, downloads extracted from transcript + chat + OCR.',
+        '  Use for: resource list building, link verification, toolkit documentation.',
+        '',
+        '-'.repeat(45),
+        `Stats: ${transcriptSegments} transcript segments | ${frameCount} visual frames | chat: ${chatSource}`,
+        '',
+        'Generated by OneDuo Intelligence System.',
+        'For authorized educational use only.',
+    ].join('\n');
+}
+
+// ============================================
+// INTEL PACK: VISUAL TRAINING SPINE PDF (02)
+// ============================================
+
+async function buildVisualTrainingSpinePDF(
+    courseTitle: string,
+    enrichedFrames: EnrichedFrame[],
+    userEmail: string,
+): Promise<Uint8Array> {
+    const pdfDoc = await PDFDocument.create();
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+    const italicFont = await pdfDoc.embedFont(StandardFonts.HelveticaOblique);
+
+    const PAGE_WIDTH = 595.28;
+    const PAGE_HEIGHT = 841.89;
+    const MARGIN = 42;
+    const CONTENT_WIDTH = PAGE_WIDTH - MARGIN * 2;
+    const FOOTER_Y = 30;
+    const watermarkTs = new Date().toISOString().replace('T', ' ').substring(0, 19) + ' UTC';
+
+    let currentPage = pdfDoc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+    let y = PAGE_HEIGHT - MARGIN;
+
+    const addFooter = (page: any) => {
+        if (!userEmail) return;
+        page.drawText(`OneDuo Training Intelligence | ${userEmail} | ${watermarkTs}`, {
+            x: MARGIN, y: FOOTER_Y, size: 6, font, color: rgb(0.6, 0.6, 0.6),
+        });
+    };
+
+    const newPage = () => {
+        addFooter(currentPage);
+        currentPage = pdfDoc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+        y = PAGE_HEIGHT - MARGIN;
+    };
+
+    const ensureSpace = (needed: number) => {
+        if (y - needed < FOOTER_Y + 20) newPage();
+    };
+
+    const drawWrappedText = (text: string, opts: { x?: number; size?: number; usedFont?: any; color?: any; maxWidth?: number } = {}) => {
+        const { x = MARGIN, size = 9, usedFont = font, color = rgb(0, 0, 0), maxWidth = CONTENT_WIDTH } = opts;
+        const safe = safeText(text);
+        if (!safe) return;
+        const lineH = size * 1.3;
+        const words = safe.split(' ');
+        let line = '';
+        for (const word of words) {
+            const test = line ? `${line} ${word}` : word;
+            if (usedFont.widthOfTextAtSize(test, size) > maxWidth && line) {
+                ensureSpace(lineH);
+                currentPage.drawText(line, { x, y, size, font: usedFont, color });
+                y -= lineH;
+                line = word;
+            } else {
+                line = test;
+            }
+        }
+        if (line) {
+            ensureSpace(lineH);
+            currentPage.drawText(line, { x, y, size, font: usedFont, color });
+            y -= lineH;
+        }
+    };
+
+    // Cover page
+    y = PAGE_HEIGHT - 120;
+    currentPage.drawText(safeText(courseTitle), { x: MARGIN, y, size: 22, font: boldFont, color: rgb(0, 0, 0) });
+    y -= 35;
+    currentPage.drawText('02 -- VISUAL TRAINING SPINE', { x: MARGIN, y, size: 14, font, color: rgb(0.2, 0.2, 0.6) });
+    y -= 18;
+    currentPage.drawText(safeText(`${enrichedFrames.length} teaching moments | ${watermarkTs}`), {
+        x: MARGIN, y, size: 9, font, color: rgb(0.4, 0.4, 0.4),
+    });
+    y -= 16;
+    currentPage.drawText('Only meaningful visual moments. Each page = one teaching state.', {
+        x: MARGIN, y, size: 8, font: italicFont, color: rgb(0.4, 0.4, 0.4),
+    });
+    addFooter(currentPage);
+
+    for (let fi = 0; fi < enrichedFrames.length; fi++) {
+        const frame = enrichedFrames[fi];
+        newPage();
+
+        // Header
+        currentPage.drawText(safeText(`${formatTime(frame.timestamp)}  |  Frame ${frame.globalIndex + 1}  |  ${frame.reason}`), {
+            x: MARGIN, y, size: 7, font: boldFont, color: rgb(0.2, 0.2, 0.5),
+        });
+        y -= 10;
+
+        // Screenshot
+        try {
+            const resp = await fetch(compressFrameUrl(frame.url), { signal: AbortSignal.timeout(10000) });
+            if (resp.ok) {
+                const imgBytes = new Uint8Array(await resp.arrayBuffer());
+                const ct = resp.headers.get('content-type') || '';
+                const image = ct.includes('png') || frame.url.includes('.png')
+                    ? await pdfDoc.embedPng(imgBytes)
+                    : await pdfDoc.embedJpg(imgBytes);
+                const imgW = Math.min(CONTENT_WIDTH, 420);
+                const imgH = imgW * (image.height / image.width);
+                ensureSpace(imgH + 5);
+                currentPage.drawImage(image, { x: MARGIN, y: y - imgH, width: imgW, height: imgH });
+                y -= imgH + 4;
+            }
+        } catch {
+            currentPage.drawText('[Frame unavailable]', { x: MARGIN, y, size: 7, font: italicFont, color: rgb(0.7, 0.3, 0.3) });
+            y -= 12;
+        }
+
+        // Transcript caption
+        if (frame.transcriptText) {
+            const speaker = frame.speakerLabel ? `${frame.speakerLabel}: ` : '';
+            const caption = `"${speaker}${frame.transcriptText}"`.substring(0, 350);
+            ensureSpace(24);
+            currentPage.drawRectangle({
+                x: MARGIN, y: y - 3, width: CONTENT_WIDTH, height: 1.5,
+                color: rgb(0.8, 0.8, 0.8),
+            });
+            y -= 6;
+            drawWrappedText(caption, { size: 8, usedFont: italicFont, color: rgb(0.15, 0.15, 0.15) });
+        }
+
+        // Chat excerpt
+        if (frame.chatExcerpt) {
+            ensureSpace(14);
+            drawWrappedText(`Chat: ${frame.chatExcerpt}`, { size: 7, color: rgb(0.15, 0.4, 0.15) });
+        }
+    }
+
+    addFooter(currentPage);
+    return pdfDoc.save();
 }
 
 // ============================================
@@ -1558,6 +1990,147 @@ serve(async (req) => {
                         pdf_generation_status: 'failed',
                         pdf_generation_progress: {
                             ...(progressRow?.pdf_generation_progress || {}),
+                            failedAt: new Date().toISOString(),
+                            error: error instanceof Error ? error.message : String(error),
+                        },
+                    }).eq('id', courseId);
+                }
+                return;
+            }
+
+            // ========== ACTION: generateIntelPack ==========
+            if (action === 'generateIntelPack') {
+                try {
+                    await supabase.from('courses').update({
+                        pdf_generation_status: 'generating',
+                        pdf_generation_progress: { startedAt: new Date().toISOString(), step: 'starting' },
+                    }).eq('id', courseId);
+
+                    const { course, allFrameUrls, videoDuration, transcript } = await fetchCourseData();
+                    const userEmail = email || course.email || '';
+                    const frameAnalyses: any[] = (course as any).frame_analyses || [];
+
+                    // Supplemental files from course_files — only those with extracted text content
+                    const supplementalFiles = ((course.course_files as any[]) || []).filter((f: any) => f.content);
+
+                    // Chat tier 1: detect separate chat file by timestamp pattern
+                    let chatMessages: ChatMessage[] = detectChatFile(supplementalFiles);
+                    const chatSource = chatMessages.length > 0 ? 'file' : 'none';
+                    // Chat tier 2: frame OCR extraction is low-signal for chat; skip — tier 3 fallback already handled in buildChatGoldText
+
+                    await supabase.from('courses').update({
+                        pdf_generation_progress: { step: 'filtering_frames', chatSource },
+                    }).eq('id', courseId);
+
+                    // Filter to scene-change frames only
+                    const filteredUrls = await filterToSlideChanges(supabase, courseId, allFrameUrls);
+                    console.log(`[intel-pack] Scene-change filter: ${allFrameUrls.length} -> ${filteredUrls.length} frames`);
+
+                    await supabase.from('courses').update({
+                        pdf_generation_progress: { step: 'enriching_frames', frameCount: filteredUrls.length },
+                    }).eq('id', courseId);
+
+                    const enrichedFrames = enrichFrames(filteredUrls, allFrameUrls, frameAnalyses, videoDuration, transcript, chatMessages);
+
+                    await supabase.from('courses').update({
+                        pdf_generation_progress: { step: 'building_files' },
+                    }).eq('id', courseId);
+
+                    // Build the PDF (serial — large async operation) then the text files
+                    const spineBytes = await buildVisualTrainingSpinePDF(course.title, enrichedFrames, userEmail);
+
+                    const transcriptText = buildFullTranscriptText(transcript, course.title);
+                    const chatGoldText = buildChatGoldText(chatMessages, course.title, transcript);
+                    const timestampIndexText = buildTimestampIndexText(enrichedFrames, course.title);
+                    const resourcesText = buildResourcesSeenText(transcript, chatMessages, frameAnalyses, course.title);
+                    const readmeText = buildReadmeText(course.title, chatSource, enrichedFrames.length, transcript.length);
+
+                    await supabase.from('courses').update({
+                        pdf_generation_progress: { step: 'zipping' },
+                    }).eq('id', courseId);
+
+                    // Bundle into zip
+                    const zip = new JSZip();
+                    const dateStr = new Date().toISOString().split('T')[0];
+                    const safeTitle = (course.title || 'course').replace(/[^a-zA-Z0-9 -]/g, '').replace(/\s+/g, '-').substring(0, 40);
+
+                    zip.file('01_full_transcript.txt', transcriptText);
+                    zip.file('02_visual_training_spine.pdf', spineBytes);
+                    zip.file('03_chat_gold.txt', chatGoldText);
+                    zip.file('04_timestamp_index.txt', timestampIndexText);
+                    zip.file('05_resources_seen.txt', resourcesText);
+                    zip.file('README.txt', readmeText);
+
+                    const zipBytes = await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE', compressionOptions: { level: 6 } });
+
+                    // Upload zip
+                    const ts = Date.now();
+                    const zipStoragePath = `exports/${courseId}/${ts}_training-intelligence-pack.zip`;
+                    const zipFilename = `training-intelligence-pack-${safeTitle}-${dateStr}.zip`;
+
+                    const { error: zipUploadErr } = await supabase.storage
+                        .from('course-files')
+                        .upload(zipStoragePath, zipBytes, { contentType: 'application/zip', upsert: true });
+                    if (zipUploadErr) throw new Error(`Zip upload failed: ${zipUploadErr.message}`);
+
+                    // Register in course_files
+                    const existingFiles = ((course.course_files as any[]) || []).filter((f: any) => f?.type !== 'intel_pack');
+                    await supabase.from('courses').update({
+                        course_files: [
+                            ...existingFiles,
+                            {
+                                type: 'intel_pack',
+                                name: zipFilename,
+                                filename: zipFilename,
+                                storagePath: zipStoragePath,
+                                storage_path: `course-files/${zipStoragePath}`,
+                                size: zipBytes.length,
+                                uploaded_at: new Date().toISOString(),
+                                generated_by: 'backend',
+                                chatSource,
+                                frameCount: enrichedFrames.length,
+                            },
+                        ],
+                        pdf_generation_status: 'complete',
+                        pdf_generation_progress: {
+                            step: 'complete',
+                            zipStoragePath,
+                            frameCount: enrichedFrames.length,
+                            chatSource,
+                            completedAt: new Date().toISOString(),
+                        },
+                    }).eq('id', courseId);
+
+                    // Email with 7-day signed download link
+                    if (userEmail) {
+                        const { data: signedData } = await supabase.storage
+                            .from('course-files')
+                            .createSignedUrl(zipStoragePath, 60 * 60 * 24 * 7);
+                        if (signedData?.signedUrl) {
+                            try {
+                                await fetch(`${supabaseUrl}/functions/v1/send-pdf-email`, {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${supabaseServiceKey}` },
+                                    body: JSON.stringify({
+                                        email: userEmail,
+                                        courseTitle: course.title,
+                                        downloadUrl: signedData.signedUrl,
+                                        courseId,
+                                        subject: `Your Training Intelligence Pack is ready: ${course.title}`,
+                                    }),
+                                });
+                            } catch (emailErr) {
+                                console.warn(`[intel-pack] Email failed:`, emailErr);
+                            }
+                        }
+                    }
+
+                    console.log(`[intel-pack] Complete: ${courseId} | ${enrichedFrames.length} frames | ${zipBytes.length} bytes | chat: ${chatSource}`);
+                } catch (error) {
+                    console.error('[intel-pack] generateIntelPack failed:', error);
+                    await supabase.from('courses').update({
+                        pdf_generation_status: 'failed',
+                        pdf_generation_progress: {
                             failedAt: new Date().toISOString(),
                             error: error instanceof Error ? error.message : String(error),
                         },
