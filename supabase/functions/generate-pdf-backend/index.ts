@@ -748,6 +748,24 @@ const SUPP_MAX_BYTES = 25 * 1024 * 1024; // 25MB/file (Edge ~150MB RAM ceiling)
 const SUPP_MAX_FILES = 50;
 const SUPP_PLAIN_EXTS = ['txt', 'md', 'json', 'js', 'ts', 'jsx', 'tsx', 'html', 'css', 'csv', 'xml', 'yaml', 'yml', 'py', 'sh', 'env', 'log', 'vtt', 'srt'];
 const SUPP_BINARY_EXTS = ['mp4', 'mov', 'avi', 'mkv', 'webm', 'rar', '7z', 'exe', 'dll', 'bin', 'zip', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'heic'];
+// --- Build identification (bump BUILD_COMMIT at deploy; Deno runtime can't read git) ---
+const BUILD_COMMIT = '90bd3ca';
+const VISUAL_SPINE_VERSION = 'v1.0';
+const RESOURCE_INGESTION_VERSION = 'v1.2'; // ext-from-storagePath + verbatim object key + 25MB cap
+const CHAT_PARSING_VERSION = 'v1.1'; // content-based detection over loaded supplemental text
+
+function buildInfoText(courseTitle: string, generatedAt: string): string {
+    return [
+        'BUILD INFO',
+        `Course: ${courseTitle || 'Untitled'}`,
+        `Generated: ${generatedAt}`,
+        `Git commit: ${BUILD_COMMIT}`,
+        `Visual Spine version: ${VISUAL_SPINE_VERSION}`,
+        `Resource Ingestion version: ${RESOURCE_INGESTION_VERSION}`,
+        `Chat Parsing version: ${CHAT_PARSING_VERSION}`,
+    ].join('\n');
+}
+
 const TOOL_KEYWORDS = ['ChatGPT', 'Claude', 'Notion', 'Figma', 'Canva', 'Slack', 'Loom', 'Miro', 'Airtable',
     'HubSpot', 'Zapier', 'Make.com', 'Google Sheets', 'Google Docs', 'Google Drive', 'Dropbox',
     'GitHub', 'Cursor', 'OpenAI', 'Anthropic', 'Perplexity', 'Midjourney', 'Adobe', 'LinkedIn', 'YouTube'];
@@ -786,7 +804,8 @@ async function loadSupplementalFiles(supabase: any, courseFiles: any[]): Promise
         const rawPath = f?.storagePath || f?.storage_path || '';
         // Extension lives in storagePath (upload keeps it there); name has it stripped. storagePath first, name fallback.
         const ext = fileExt(rawPath) || fileExt(name);
-        const storagePath = rawPath.replace(/^course-files\//, '');
+        // Stored storagePath IS the true object key (upload baked "course-files/" into the key). Use verbatim — do not strip.
+        const storagePath = rawPath;
         const doc: ResourceDoc = { name, type: ext || 'unknown', size: Number(f?.size) || 0, content: '', parseStatus: 'unsupported', charCount: 0 };
 
         if (SUPP_BINARY_EXTS.includes(ext)) { doc.parseStatus = 'skipped (binary/media)'; out.push(doc); continue; }
@@ -2657,6 +2676,12 @@ serve(async (req) => {
                     const dateStr = new Date().toISOString().split('T')[0];
                     const safeTitle = (course.title || 'course').replace(/[^a-zA-Z0-9 -]/g, '').replace(/\s+/g, '-').substring(0, 40);
 
+                    // Build identification banner (top of README + standalone BUILD_INFO.txt)
+                    const generatedAt = new Date().toISOString();
+                    const buildBanner = buildInfoText(course.title, generatedAt);
+                    const readmeWithBuild = `${buildBanner}\n\n${'='.repeat(60)}\n\n${readmeText}`;
+
+                    zip.file('BUILD_INFO.txt', buildBanner);
                     zip.file('01_full_transcript.txt', transcriptText);
                     zip.file('02_visual_training_spine.pdf', spineBytes);
                     zip.file('03_chat_gold.txt', chatGoldText);
@@ -2664,14 +2689,14 @@ serve(async (req) => {
                     zip.file('05_resources_seen.txt', resourcesText);
                     zip.file('06_resource_docs_index.txt', resourceDocsIndexText);
                     zip.file('07_course_rebuild_notes.txt', rebuildNotesText);
-                    zip.file('README.txt', readmeText);
+                    zip.file('README.txt', readmeWithBuild);
 
                     const zipBytes = await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE', compressionOptions: { level: 6 } });
 
                     // Upload zip
                     const ts = Date.now();
                     const zipStoragePath = `exports/${courseId}/${ts}_training-intelligence-pack.zip`;
-                    const zipFilename = `training-intelligence-pack-${safeTitle}-${dateStr}.zip`;
+                    const zipFilename = `training-intelligence-pack-${safeTitle}-build-${BUILD_COMMIT}-${ts}.zip`;
 
                     const { error: zipUploadErr } = await supabase.storage
                         .from('course-files')
