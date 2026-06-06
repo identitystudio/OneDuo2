@@ -127,6 +127,15 @@ interface EnrichedFrame {
     chatExcerpt: string;
 }
 
+interface ResourceDoc {
+    name: string;
+    type: string;        // file extension, or 'unknown'
+    size: number;        // bytes
+    content: string;     // extracted text ('' if failed/unsupported)
+    parseStatus: string; // 'ok' | 'image-pdf ...' | 'unsupported ...' | 'too-large ...' | 'download-failed' | 'empty' | 'parse-failed' | 'error: ...'
+    charCount: number;
+}
+
 function formatTime(seconds: number): string {
     if (!seconds || !isFinite(seconds)) return '0:00';
     const m = Math.floor(seconds / 60);
@@ -257,19 +266,26 @@ function parseChatFile(content: string): ChatMessage[] {
     return messages;
 }
 
+// Content-based chat detector (extension-agnostic). A Zoom/webinar chat export
+// is mostly lines prefixed with an HH:MM:SS timestamp. Used to separate chat
+// logs from generic resource docs regardless of how the file was named.
+function looksLikeChatContent(content: string): boolean {
+    if (!content?.trim()) return false;
+    const lines = content.split('\n').filter((l: string) => l.trim());
+    if (lines.length === 0) return false;
+    const chatLines = lines.filter((l: string) => isChatLine(l));
+    return chatLines.length >= 5 && chatLines.length / lines.length > 0.35;
+}
+
 function detectChatFile(supplementalFiles: any[]): ChatMessage[] {
     if (!supplementalFiles?.length) return [];
+    let all: ChatMessage[] = [];
     for (const file of supplementalFiles) {
-        if (!file.content?.trim()) continue;
-        if (!(file.name || '').toLowerCase().endsWith('.txt')) continue;
-        const lines = file.content.split('\n').filter((l: string) => l.trim());
-        const chatLines = lines.filter((l: string) => isChatLine(l));
-        if (chatLines.length >= 5 && chatLines.length / lines.length > 0.35) {
-            console.log(`[intel-pack] Chat file detected: ${file.name} (${chatLines.length} messages)`);
-            return parseChatFile(file.content);
-        }
+        if (!looksLikeChatContent(file.content || '')) continue;
+        console.log(`[intel-pack] Chat file detected: ${file.name}`);
+        all = all.concat(parseChatFile(file.content));
     }
-    return [];
+    return all;
 }
 
 // ============================================
@@ -423,11 +439,12 @@ function buildTimestampIndexText(enrichedFrames: EnrichedFrame[], courseTitle: s
     return lines.join('\n');
 }
 
-function buildResourcesSeenText(transcript: any[], chatMessages: ChatMessage[], frameAnalyses: any[], courseTitle: string): string {
+function buildResourcesSeenText(transcript: any[], chatMessages: ChatMessage[], frameAnalyses: any[], courseTitle: string, resourceDocs: ResourceDoc[] = []): string {
     const allText = [
         ...transcript.map((s: any) => s.text || ''),
         ...chatMessages.map(c => c.message),
         ...frameAnalyses.map((a: any) => a.text || ''),
+        ...resourceDocs.map(d => d.content || ''),
     ].join('\n');
 
     const urls = [...new Set((allText.match(/https?:\/\/[^\s\)\]"'<>\n]+/g) || []))];
@@ -461,13 +478,13 @@ function buildResourcesSeenText(transcript: any[], chatMessages: ChatMessage[], 
     return lines.join('\n');
 }
 
-function buildReadmeText(courseTitle: string, chatSource: string, frameCount: number, transcriptSegments: number): string {
+function buildReadmeText(courseTitle: string, chatSource: string, frameCount: number, transcriptSegments: number, resourceDocCount = 0): string {
     return [
         'TRAINING INTELLIGENCE PACK',
         `Course: ${courseTitle}`,
         `Generated: ${new Date().toISOString()}`,
         '',
-        'This pack contains 5 files:',
+        'This pack contains 7 files:',
         '',
         '01_full_transcript.txt',
         '  Complete timestamped transcript with speaker labels.',
@@ -479,7 +496,7 @@ function buildReadmeText(courseTitle: string, chatSource: string, frameCount: nu
         '  Use for: curriculum design, slide rebuilding, visual documentation.',
         '',
         '03_chat_gold.txt',
-        `  Chat questions analyzed by section. Source: ${chatSource === 'file' ? 'Zoom chat export' : 'unavailable'}.`,
+        `  Chat questions analyzed by section. Source: ${chatSource === 'file' ? 'chat export' : 'unavailable'}.`,
         '  Use for: FAQ development, confusion mapping, student pain points.',
         '',
         '04_timestamp_index.txt',
@@ -487,15 +504,371 @@ function buildReadmeText(courseTitle: string, chatSource: string, frameCount: nu
         '  Use for: quick navigation, AI indexing, course mapping.',
         '',
         '05_resources_seen.txt',
-        '  All URLs, tools, passcodes, downloads extracted from transcript + chat + OCR.',
+        '  All URLs, tools, passcodes, downloads extracted from transcript + chat + OCR + resource docs.',
         '  Use for: resource list building, link verification, toolkit documentation.',
         '',
+        '06_resource_docs_index.txt',
+        `  Index of ${resourceDocCount} uploaded resource document(s): type, size, parse status,`,
+        '  char count, excerpt, and links/passcodes/tools/downloads found inside each.',
+        '  Use for: knowing what materials the instructor supplied and what is inside them.',
+        '',
+        '07_course_rebuild_notes.txt',
+        '  Teaching reconstruction: what was taught and in what order, materials used,',
+        '  where students were confused, and what should be rebuilt or taught better.',
+        '  Use for: rebuilding the course, improving clarity, prioritizing fixes.',
+        '',
         '-'.repeat(45),
-        `Stats: ${transcriptSegments} transcript segments | ${frameCount} visual frames | chat: ${chatSource}`,
+        `Stats: ${transcriptSegments} transcript segments | ${frameCount} visual frames | ${resourceDocCount} resource docs | chat: ${chatSource}`,
         '',
         'Generated by OneDuo Intelligence System.',
         'For authorized educational use only.',
     ].join('\n');
+}
+
+// ============================================
+// INTEL PACK: SUPPLEMENTAL FILE INGESTION (Phase A)
+// Download + parse course_files from storage at generate time.
+// No reliance on a persisted `content` field — no upload path writes one.
+// ============================================
+
+const SUPP_MAX_BYTES = 5 * 1024 * 1024; // 5MB/file (Edge ~150MB RAM ceiling)
+const SUPP_MAX_FILES = 50;
+const SUPP_PLAIN_EXTS = ['txt', 'md', 'json', 'js', 'ts', 'jsx', 'tsx', 'html', 'css', 'csv', 'xml', 'yaml', 'yml', 'py', 'sh', 'env', 'log', 'vtt', 'srt'];
+const SUPP_BINARY_EXTS = ['mp4', 'mov', 'avi', 'mkv', 'webm', 'rar', '7z', 'exe', 'dll', 'bin', 'zip', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'heic'];
+const TOOL_KEYWORDS = ['ChatGPT', 'Claude', 'Notion', 'Figma', 'Canva', 'Slack', 'Loom', 'Miro', 'Airtable',
+    'HubSpot', 'Zapier', 'Make.com', 'Google Sheets', 'Google Docs', 'Google Drive', 'Dropbox',
+    'GitHub', 'Cursor', 'OpenAI', 'Anthropic', 'Perplexity', 'Midjourney', 'Adobe', 'LinkedIn', 'YouTube'];
+
+function fileExt(name: string): string {
+    const m = (name || '').toLowerCase().match(/\.([a-z0-9]+)$/);
+    return m ? m[1] : '';
+}
+
+// Skip artifacts the pack itself generated (zips, intel packs, exports/*).
+function isGeneratedArtifact(f: any): boolean {
+    const name = (f?.name || f?.filename || '').toLowerCase();
+    const path = (f?.storagePath || f?.storage_path || '').toLowerCase();
+    return f?.type === 'intel_pack'
+        || f?.generated_by === 'backend'
+        || name.endsWith('.zip')
+        || path.includes('exports/');
+}
+
+// Pull links / passcodes / tools / downloads out of any text blob.
+function extractSignals(text: string): { urls: string[]; passcodes: string[]; tools: string[]; downloads: string[] } {
+    const t = text || '';
+    const urls = [...new Set((t.match(/https?:\/\/[^\s\)\]"'<>\n]+/g) || []))];
+    const passcodes = [...new Set((t.match(/(?:password|passcode|pw|access code)[:\s]+([^\s\n,]{3,30})/gi) || []))];
+    const tools = TOOL_KEYWORDS.filter(k => new RegExp(k.replace(/\./g, '\\.'), 'i').test(t));
+    const downloads = [...new Set((t.match(/(?:download|template|resource|handout)[s]?[:\s]+([^\n.!?]{5,60})/gi) || []).map(d => d.trim()))].slice(0, 20);
+    return { urls, passcodes, tools, downloads };
+}
+
+async function loadSupplementalFiles(supabase: any, courseFiles: any[]): Promise<ResourceDoc[]> {
+    const out: ResourceDoc[] = [];
+    const candidates = (courseFiles || []).filter((f: any) => !isGeneratedArtifact(f)).slice(0, SUPP_MAX_FILES);
+
+    for (const f of candidates) {
+        const name = f?.name || f?.filename || 'unnamed';
+        const ext = fileExt(name);
+        const rawPath = f?.storagePath || f?.storage_path || '';
+        const storagePath = rawPath.replace(/^course-files\//, '');
+        const doc: ResourceDoc = { name, type: ext || 'unknown', size: Number(f?.size) || 0, content: '', parseStatus: 'unsupported', charCount: 0 };
+
+        if (SUPP_BINARY_EXTS.includes(ext)) { doc.parseStatus = 'skipped (binary/media)'; out.push(doc); continue; }
+        if (!storagePath) { doc.parseStatus = 'no storage path'; out.push(doc); continue; }
+
+        const parseable = SUPP_PLAIN_EXTS.includes(ext) || ext === 'pdf' || ext === 'docx' || ext === 'pptx';
+        if (!parseable) { doc.parseStatus = `unsupported (.${ext || '?'})`; out.push(doc); continue; }
+
+        try {
+            const { data: fileData, error: dlErr } = await supabase.storage.from('course-files').download(storagePath);
+            if (dlErr || !fileData) { doc.parseStatus = 'download-failed'; out.push(doc); continue; }
+            doc.size = doc.size || fileData.size;
+            if (fileData.size > SUPP_MAX_BYTES) {
+                doc.parseStatus = `too-large (${(fileData.size / 1024 / 1024).toFixed(1)}MB > 5MB)`;
+                out.push(doc); continue;
+            }
+
+            let text = '';
+            if (SUPP_PLAIN_EXTS.includes(ext)) text = await fileData.text();
+            else if (ext === 'pdf') text = await extractPdfText(fileData);
+            else if (ext === 'docx') text = await extractDocxText(fileData);
+            else if (ext === 'pptx') text = await extractPptxText(fileData);
+
+            text = (text || '').trim();
+            doc.content = text;
+            doc.charCount = text.length;
+            if (!text) doc.parseStatus = 'empty';
+            else if (/^\[PDF appears to be image-based/i.test(text)) doc.parseStatus = 'image-pdf (no text layer)';
+            else if (/^\[(PDF|DOCX|PPTX) extraction failed/i.test(text)) doc.parseStatus = 'parse-failed';
+            else doc.parseStatus = 'ok';
+        } catch (e) {
+            doc.parseStatus = `error: ${e instanceof Error ? e.message : String(e)}`;
+        }
+        out.push(doc);
+    }
+    console.log(`[intel-pack] loadSupplementalFiles: ${out.length} file(s) | ${out.filter(d => d.parseStatus === 'ok').length} parsed ok`);
+    return out;
+}
+
+// --- Document text extractors (ported from extract-document-text edge fn) ---
+
+function decodePdfString(str: string): string {
+    return str
+        .replace(/\\n/g, '\n').replace(/\\r/g, '\r').replace(/\\t/g, '\t')
+        .replace(/\\\(/g, '(').replace(/\\\)/g, ')').replace(/\\\\/g, '\\')
+        .replace(/\\(\d{1,3})/g, (_, octal) => String.fromCharCode(parseInt(octal, 8)));
+}
+
+function extractTextFromXml(xml: string): string {
+    const textParts: string[] = [];
+    const textRegex = /<(?:a:|w:|)t[^>]*>([^<]*)<\/(?:a:|w:|)t>/g;
+    let match: RegExpExecArray | null;
+    let currentLine: string[] = [];
+    let prevEndIndex = 0;
+    while ((match = textRegex.exec(xml)) !== null) {
+        const text = match[1];
+        const between = xml.substring(prevEndIndex, match.index);
+        if (between.includes('</a:p>') || between.includes('</w:p>')) {
+            if (currentLine.length > 0) { textParts.push(currentLine.join('')); currentLine = []; }
+        }
+        if (text.trim()) currentLine.push(text);
+        prevEndIndex = match.index + match[0].length;
+    }
+    if (currentLine.length > 0) textParts.push(currentLine.join(''));
+    return textParts.join('\n')
+        .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"').replace(/&apos;/g, "'")
+        .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(parseInt(code)));
+}
+
+async function extractPdfText(blob: Blob): Promise<string> {
+    try {
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        const pdfString = new TextDecoder('latin1').decode(bytes);
+        const textParts: string[] = [];
+        const textBlockRegex = /BT\s*([\s\S]*?)\s*ET/g;
+        let match: RegExpExecArray | null;
+        while ((match = textBlockRegex.exec(pdfString)) !== null) {
+            const block = match[1];
+            const tjRegex = /\(([^)]*)\)\s*Tj/g;
+            const tjArrayRegex = /\[([\s\S]*?)\]\s*TJ/g;
+            let tjMatch: RegExpExecArray | null;
+            while ((tjMatch = tjRegex.exec(block)) !== null) {
+                const text = decodePdfString(tjMatch[1]);
+                if (text.trim()) textParts.push(text);
+            }
+            while ((tjMatch = tjArrayRegex.exec(block)) !== null) {
+                const arrayContent = tjMatch[1];
+                const stringRegex = /\(([^)]*)\)/g;
+                let stringMatch: RegExpExecArray | null;
+                const lineParts: string[] = [];
+                while ((stringMatch = stringRegex.exec(arrayContent)) !== null) {
+                    const text = decodePdfString(stringMatch[1]);
+                    if (text) lineParts.push(text);
+                }
+                if (lineParts.length > 0) textParts.push(lineParts.join(''));
+            }
+        }
+        if (textParts.length < 10) {
+            const readableRegex = /[\x20-\x7E]{20,}/g;
+            let readableMatch: RegExpExecArray | null;
+            while ((readableMatch = readableRegex.exec(pdfString)) !== null) {
+                const text = readableMatch[0].trim();
+                if (!text.includes('/') && !text.includes('<<') && !text.match(/^\d+\s+\d+\s+obj/) && !textParts.includes(text)) {
+                    textParts.push(text);
+                }
+            }
+        }
+        const result = textParts.join('\n').trim();
+        if (!result || result.length < 50) {
+            return '[PDF appears to be image-based or encrypted. Text extraction limited. Consider using OCR or uploading a text version.]';
+        }
+        return result;
+    } catch (error) {
+        return `[PDF extraction failed: ${error instanceof Error ? error.message : 'Unknown error'}]`;
+    }
+}
+
+async function extractDocxText(blob: Blob): Promise<string> {
+    try {
+        const zip = await JSZip.loadAsync(await blob.arrayBuffer());
+        const documentXml = await zip.file('word/document.xml')?.async('string');
+        if (!documentXml) return '[Could not find document.xml in DOCX file]';
+        return extractTextFromXml(documentXml);
+    } catch (error) {
+        return `[DOCX extraction failed: ${error instanceof Error ? error.message : 'Unknown error'}]`;
+    }
+}
+
+async function extractPptxText(blob: Blob): Promise<string> {
+    try {
+        const zip = await JSZip.loadAsync(await blob.arrayBuffer());
+        const textParts: string[] = [];
+        const slideFiles = Object.keys(zip.files)
+            .filter(name => name.match(/^ppt\/slides\/slide\d+\.xml$/))
+            .sort((a, b) => parseInt(a.match(/slide(\d+)/)?.[1] || '0') - parseInt(b.match(/slide(\d+)/)?.[1] || '0'));
+        for (const slidePath of slideFiles) {
+            const slideContent = await zip.file(slidePath)?.async('string');
+            if (slideContent) {
+                const slideText = extractTextFromXml(slideContent);
+                if (slideText.trim()) textParts.push(`--- Slide ${slidePath.match(/slide(\d+)/)?.[1] || '?'} ---\n${slideText}`);
+            }
+        }
+        const notesFiles = Object.keys(zip.files).filter(name => name.match(/^ppt\/notesSlides\/notesSlide\d+\.xml$/)).sort();
+        if (notesFiles.length > 0) {
+            textParts.push('\n--- Speaker Notes ---');
+            for (const notesPath of notesFiles) {
+                const notesContent = await zip.file(notesPath)?.async('string');
+                if (notesContent) {
+                    const notesText = extractTextFromXml(notesContent);
+                    if (notesText.trim()) textParts.push(notesText);
+                }
+            }
+        }
+        return textParts.join('\n\n');
+    } catch (error) {
+        return `[PPTX extraction failed: ${error instanceof Error ? error.message : 'Unknown error'}]`;
+    }
+}
+
+// ============================================
+// INTEL PACK: RESOURCE DOCS INDEX (06)
+// ============================================
+
+function buildResourceDocsIndexText(resourceDocs: ResourceDoc[], courseTitle: string): string {
+    const lines = [
+        'RESOURCE DOCUMENTS INDEX',
+        `Course: ${courseTitle}`,
+        `Generated: ${new Date().toISOString()}`,
+        `Documents: ${resourceDocs.length}`,
+        '',
+        '='.repeat(60),
+        '',
+    ];
+    if (resourceDocs.length === 0) {
+        lines.push('No supplemental resource documents were uploaded for this session.');
+        lines.push('');
+        return lines.join('\n');
+    }
+    let i = 1;
+    for (const d of resourceDocs) {
+        const sig = extractSignals(d.content || '');
+        const excerpt = (d.content || '').replace(/\s+/g, ' ').trim().substring(0, 280);
+        lines.push(`[${String(i).padStart(2, '0')}] ${d.name}`);
+        lines.push(`     Type:         ${d.type}`);
+        lines.push(`     Size:         ${d.size ? (d.size / 1024).toFixed(1) + ' KB' : 'unknown'}`);
+        lines.push(`     Parse status: ${d.parseStatus}`);
+        lines.push(`     Char count:   ${d.charCount}`);
+        lines.push(`     Links:        ${sig.urls.length ? sig.urls.join(' , ') : 'none'}`);
+        lines.push(`     Passcodes:    ${sig.passcodes.length ? sig.passcodes.join(' , ') : 'none'}`);
+        lines.push(`     Tools:        ${sig.tools.length ? sig.tools.join(', ') : 'none'}`);
+        lines.push(`     Downloads:    ${sig.downloads.length ? sig.downloads.join(' ; ') : 'none'}`);
+        lines.push(`     Excerpt:      ${excerpt || '(no extractable text)'}`);
+        lines.push('');
+        i++;
+    }
+    return lines.join('\n');
+}
+
+// ============================================
+// INTEL PACK: COURSE REBUILD NOTES (07)
+// Synthesize transcript + visual spine + chat + resource docs into a
+// teaching reconstruction. Deterministic (no LLM).
+// ============================================
+
+function buildCourseRebuildNotesText(
+    courseTitle: string,
+    transcript: any[],
+    enrichedFrames: EnrichedFrame[],
+    chatMessages: ChatMessage[],
+    resourceDocs: ResourceDoc[],
+): string {
+    const lines = [
+        'COURSE REBUILD NOTES',
+        `Course: ${courseTitle}`,
+        `Generated: ${new Date().toISOString()}`,
+        '',
+        'Teaching reconstruction synthesized from transcript + visual spine + chat + resource docs.',
+        '',
+        '='.repeat(60),
+        '',
+    ];
+
+    // 1. WHAT WAS TAUGHT, IN WHAT ORDER
+    lines.push('-- WHAT WAS TAUGHT (in order) --');
+    let taught = 0;
+    for (const f of enrichedFrames) {
+        const topic = (f.transcriptText || '').replace(/\s+/g, ' ').trim().substring(0, 90);
+        if (!topic) continue;
+        lines.push(`  ${formatTime(f.timestamp)}  ${topic}  [${f.reason}]`);
+        taught++;
+    }
+    if (taught === 0) lines.push('  (No spoken topics aligned to visual frames.)');
+    lines.push('');
+
+    // 2. MATERIALS USED
+    lines.push('-- MATERIALS USED --');
+    if (resourceDocs.length) {
+        for (const d of resourceDocs) lines.push(`  - ${d.name} (${d.type}, ${d.parseStatus})`);
+    } else {
+        lines.push('  No external documents were supplied.');
+    }
+    const allTools = [...new Set(resourceDocs.flatMap(d => extractSignals(d.content || '').tools))];
+    if (allTools.length) lines.push(`  Tools referenced in materials: ${allTools.join(', ')}`);
+    lines.push('');
+
+    // 3. WHERE STUDENTS WERE CONFUSED
+    lines.push('-- WHERE STUDENTS WERE CONFUSED --');
+    if (chatMessages.length) {
+        const buckets = new Map<number, ChatMessage[]>();
+        for (const m of chatMessages) {
+            const b = Math.floor(m.secondsOffset / 300);
+            if (!buckets.has(b)) buckets.set(b, []);
+            buckets.get(b)!.push(m);
+        }
+        let flagged = 0;
+        for (const [b, msgs] of [...buckets.entries()].sort((a, b) => a[0] - b[0])) {
+            const confusion = msgs.filter(m => /confused|don.?t understand|lost|what does|how do|why is|stuck|not working|doesn.?t work/i.test(m.message));
+            const questions = msgs.filter(m => m.message.includes('?'));
+            if (confusion.length >= 2 || questions.length >= 3) {
+                const t0 = b * 300;
+                const topicSeg = (transcript || []).find((s: any) => (s.start || 0) >= t0 && (s.start || 0) < t0 + 300);
+                const topic = (topicSeg?.text || '').replace(/\s+/g, ' ').substring(0, 70);
+                lines.push(`  ${formatTime(t0)}  ${confusion.length} confusion / ${questions.length} questions  -- ${topic || '(topic unclear)'}`);
+                for (const c of confusion.slice(0, 3)) lines.push(`       "${c.message.substring(0, 80)}"`);
+                flagged++;
+            }
+        }
+        if (!flagged) lines.push('  No significant confusion clusters detected in chat.');
+    } else {
+        lines.push('  No chat log available -- confusion analysis skipped.');
+    }
+    lines.push('');
+
+    // 4. WHAT TO REBUILD / TEACH BETTER
+    lines.push('-- WHAT TO REBUILD / TEACH BETTER --');
+    const rebuild: string[] = [];
+    for (const d of resourceDocs) {
+        if (/image-pdf|parse-failed|empty|too-large|unsupported|download-failed|error:/i.test(d.parseStatus)) {
+            rebuild.push(`Re-supply "${d.name}" in a text-readable form (current: ${d.parseStatus}).`);
+        }
+    }
+    if (chatMessages.length) {
+        const confusionTotal = chatMessages.filter(m => /confused|don.?t understand|lost|stuck|not working/i.test(m.message)).length;
+        if (confusionTotal >= 5) rebuild.push(`High overall confusion (${confusionTotal} signals) -- add a recap or worked-example pass.`);
+    }
+    const spokenSignals = extractSignals((transcript || []).map((s: any) => s.text || '').join('\n'));
+    if (spokenSignals.downloads.length && resourceDocs.length === 0) {
+        rebuild.push('Instructor referenced downloads/templates but no resource docs were attached -- collect and include them.');
+    }
+    if (spokenSignals.urls.length) rebuild.push(`${spokenSignals.urls.length} link(s) mentioned aloud -- verify they are captured in 05_resources_seen.txt and still live.`);
+    if (!rebuild.length) rebuild.push('No major rebuild flags. Session materials and clarity look complete.');
+    for (const r of rebuild) lines.push(`  * ${r}`);
+    lines.push('');
+
+    return lines.join('\n');
 }
 
 // ============================================
@@ -2010,13 +2383,17 @@ serve(async (req) => {
                     const userEmail = email || course.email || '';
                     const frameAnalyses: any[] = (course as any).frame_analyses || [];
 
-                    // Supplemental files from course_files — only those with extracted text content
-                    const supplementalFiles = ((course.course_files as any[]) || []).filter((f: any) => f.content);
+                    // Phase A: download + parse supplemental files from storage at generate time.
+                    // No reliance on a persisted `content` field — no upload path writes one.
+                    // Works for files uploaded with the video OR added later via AddFilesDialog.
+                    const loadedFiles = await loadSupplementalFiles(supabase, (course.course_files as any[]) || []);
 
-                    // Chat tier 1: detect separate chat file by timestamp pattern
-                    let chatMessages: ChatMessage[] = detectChatFile(supplementalFiles);
+                    // Classify: chat-like content -> chat gold (03); everything else -> resource docs (06/07).
+                    const resourceDocs: ResourceDoc[] = loadedFiles.filter((f) => !looksLikeChatContent(f.content));
+                    const chatFiles: ResourceDoc[] = loadedFiles.filter((f) => looksLikeChatContent(f.content));
+                    let chatMessages: ChatMessage[] = detectChatFile(chatFiles);
                     const chatSource = chatMessages.length > 0 ? 'file' : 'none';
-                    // Chat tier 2: frame OCR extraction is low-signal for chat; skip — tier 3 fallback already handled in buildChatGoldText
+                    console.log(`[intel-pack] supplemental: ${chatFiles.length} chat file(s), ${resourceDocs.length} resource doc(s), ${chatMessages.length} chat messages`);
 
                     await supabase.from('courses').update({
                         pdf_generation_progress: { step: 'filtering_frames', chatSource },
@@ -2042,8 +2419,10 @@ serve(async (req) => {
                     const transcriptText = buildFullTranscriptText(transcript, course.title);
                     const chatGoldText = buildChatGoldText(chatMessages, course.title, transcript);
                     const timestampIndexText = buildTimestampIndexText(enrichedFrames, course.title);
-                    const resourcesText = buildResourcesSeenText(transcript, chatMessages, frameAnalyses, course.title);
-                    const readmeText = buildReadmeText(course.title, chatSource, enrichedFrames.length, transcript.length);
+                    const resourcesText = buildResourcesSeenText(transcript, chatMessages, frameAnalyses, course.title, resourceDocs);
+                    const resourceDocsIndexText = buildResourceDocsIndexText(resourceDocs, course.title);
+                    const rebuildNotesText = buildCourseRebuildNotesText(course.title, transcript, enrichedFrames, chatMessages, resourceDocs);
+                    const readmeText = buildReadmeText(course.title, chatSource, enrichedFrames.length, transcript.length, resourceDocs.length);
 
                     await supabase.from('courses').update({
                         pdf_generation_progress: { step: 'zipping' },
@@ -2059,6 +2438,8 @@ serve(async (req) => {
                     zip.file('03_chat_gold.txt', chatGoldText);
                     zip.file('04_timestamp_index.txt', timestampIndexText);
                     zip.file('05_resources_seen.txt', resourcesText);
+                    zip.file('06_resource_docs_index.txt', resourceDocsIndexText);
+                    zip.file('07_course_rebuild_notes.txt', rebuildNotesText);
                     zip.file('README.txt', readmeText);
 
                     const zipBytes = await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE', compressionOptions: { level: 6 } });
@@ -2089,6 +2470,7 @@ serve(async (req) => {
                                 generated_by: 'backend',
                                 chatSource,
                                 frameCount: enrichedFrames.length,
+                                resourceDocCount: resourceDocs.length,
                             },
                         ],
                         pdf_generation_status: 'complete',
@@ -2097,6 +2479,7 @@ serve(async (req) => {
                             zipStoragePath,
                             frameCount: enrichedFrames.length,
                             chatSource,
+                            resourceDocCount: resourceDocs.length,
                             completedAt: new Date().toISOString(),
                         },
                     }).eq('id', courseId);
