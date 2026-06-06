@@ -80,6 +80,7 @@ interface Course {
   updated_at?: string;
   completed_at?: string;
   density_mode: string;
+  content_type?: string;
   fps_target?: number;
   video_duration_seconds?: number;
   total_frames?: number;
@@ -468,6 +469,23 @@ export default function Dashboard() {
       }));
 
       setCourses(newCourses);
+
+      // Enrich with content_type (not returned by get-dashboard) to drive export-button emphasis.
+      // Frontend-only direct read — no backend changes.
+      const enrichIds = (newCourses as Course[]).map((c) => c.id);
+      if (enrichIds.length > 0) {
+        supabase
+          .from('courses')
+          .select('id, content_type')
+          .in('id', enrichIds)
+          .then(({ data: ctRows }) => {
+            if (!ctRows?.length) return;
+            const ctMap = new Map(ctRows.map((r: any) => [r.id, r.content_type]));
+            setCourses((prev) =>
+              prev.map((c) => (ctMap.has(c.id) ? { ...c, content_type: ctMap.get(c.id) } : c))
+            );
+          });
+      }
 
       // Self-recovery: if we see a course in any non-terminal status for 3+ minutes,
       // trigger the backend watchdog to repair it (throttled).
@@ -2525,6 +2543,8 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                                     const isFailed = pdfStatus === 'failed';
                                     const isQueuing = generatingPDF === `vt-${course0?.id}`;
                                     const isQueuingIntel = generatingPDF === `intel-${course0?.id}`;
+                                    // Film -> Archive/story output is primary; course -> Training Intel Pack is primary.
+                                    const isFilm = course0?.content_type === 'film';
                                     return (
                                       <div className="flex flex-col items-end gap-0.5">
                                         <div className="flex items-center gap-1.5">
@@ -2562,14 +2582,14 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                                             </>
                                           ) : (
                                             <>
-                                              {/* EXPORT MODE 1 — Full Archive PDF (LEGACY generateAll) */}
+                                              {/* EXPORT MODE 1 — Full Archive PDF (LEGACY generateAll). Primary for film. */}
                                               <Button
                                                 size="sm"
                                                 variant="outline"
                                                 disabled={isQueuing || isQueuingIntel}
-                                                className="relative gap-1.5 font-bold border-2 bg-transparent border-pink-500 text-pink-500 hover:bg-pink-500/10"
+                                                className={`relative gap-1.5 font-bold border-2 border-pink-500 ${isFilm ? 'order-1 bg-pink-500 text-white hover:bg-pink-600' : 'order-2 bg-transparent text-pink-500 hover:bg-pink-500/10'}`}
                                                 onClick={() => handleGenerateVisualTranscriptionPDF(course0?.id, block.name || course0?.title || 'Course')}
-                                                title="Full Archive PDF — one page per frame, very large file, emailed when ready"
+                                                title={isFilm ? 'Film / Story output — visual story spine PDF, emailed when ready' : 'Full Archive PDF — one page per frame, very large file, emailed when ready'}
                                               >
                                                 {isQueuing ? (
                                                   <><Loader2 className="w-4 h-4 animate-spin" /><span className="hidden sm:inline">Queuing...</span></>
@@ -2590,7 +2610,7 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                                                 size="sm"
                                                 variant="outline"
                                                 disabled={isQueuing || isQueuingIntel}
-                                                className="gap-1.5 font-bold border-2 bg-transparent border-emerald-500 text-emerald-400 hover:bg-emerald-500/10"
+                                                className={`gap-1.5 font-bold border-2 border-emerald-500 ${isFilm ? 'order-2 bg-transparent text-emerald-400 hover:bg-emerald-500/10' : 'order-1 bg-emerald-500 text-white hover:bg-emerald-600'}`}
                                                 onClick={() => handleGenerateIntelPack(course0?.id, block.name || course0?.title || 'Course')}
                                                 title="Training Intelligence Pack — ZIP with transcript, visual spine, chat gold, timestamp index, resources seen"
                                               >

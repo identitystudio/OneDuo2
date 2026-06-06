@@ -11,7 +11,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Upload as UploadIcon, X, FileVideo, CheckCircle2, Loader2, GripVertical, ArrowRight, ArrowLeft, Paperclip, FileText, AlertTriangle, Cloud, Music, Clapperboard, GraduationCap } from 'lucide-react';
+import { Upload as UploadIcon, X, FileVideo, CheckCircle2, Loader2, GripVertical, ArrowRight, ArrowLeft, Paperclip, FileText, AlertTriangle, Cloud, Music, Clapperboard, GraduationCap, Sparkles, Wrench, Youtube, ChevronDown } from 'lucide-react';
 import { RotatingWord } from '@/components/RotatingWord';
 import { UploadCelebration } from '@/components/UploadCelebration';
 import { Button } from '@/components/ui/button';
@@ -86,14 +86,21 @@ export default function Upload() {
   // Course-level files (PDFs, docs, etc.)
   const [courseFiles, setCourseFiles] = useState<AttachmentFile[]>([]);
 
-  // Content type: 'course' = Training/Webinar, 'film' = Movie/TV Show
-  const [contentType, setContentType] = useState<'course' | 'film'>('course');
+  // OneDuo type: user-facing use-case selection. Drives content_type + processing_mode internally.
+  // Only 'training' and 'film' are active; the others are coming soon.
+  const [oneduoType, setOneduoType] = useState<'training' | 'film'>('training');
 
-  // Processing mode: 'quick' = transcript + PDF only, 'deep' = full knowledge layer
-  const [processingMode, setProcessingMode] = useState<'quick' | 'deep'>('quick');
+  // Derived backend values (no separate user toggles anymore):
+  // - Training Intelligence Pack -> content_type 'course'
+  // - Film / TV Story Modeling   -> content_type 'film'
+  // Both run the full pipeline (processing_mode 'deep').
+  const contentType: 'course' | 'film' = oneduoType === 'film' ? 'film' : 'course';
+  const processingMode: 'quick' | 'deep' = 'deep';
 
-  // Extraction FPS mode: 'fast' = 1 FPS, 'precision' = 3 FPS, 'cinematic' = 5 FPS
-  const [fpsMode, setFpsMode] = useState<'fast' | 'precision' | 'cinematic'>('fast');
+  // Extraction FPS mode (Advanced settings only): 'fast' = 1 FPS, 'precision' = 3 FPS.
+  // Cinematic (5 FPS) removed — process-course only honors 1 or 3, so 5 silently downgraded to 1.
+  const [fpsMode, setFpsMode] = useState<'fast' | 'precision'>('fast');
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
   // Merged Course Mode: All videos become chapters in ONE unified PDF
   // When true: One PDF with TOC + chapters, single completion email
@@ -494,7 +501,7 @@ export default function Upload() {
     // Submit batch - all videos go to cloud
     // If adding to existing course, pass the existingCourseId
     const result = await submitBatch(modules, email, courseTitle, {
-      extractionFps: fpsMode === 'cinematic' ? 5 : fpsMode === 'precision' ? 3 : 1,
+      extractionFps: fpsMode === 'precision' ? 3 : 1,
       teamNotificationEmail: teamNotificationEmail || undefined,
       teamNotificationRole: teamNotificationRole || undefined,
       courseFiles: courseFileUrls.length > 0 ? courseFileUrls : undefined,
@@ -614,67 +621,74 @@ export default function Upload() {
                   )}
 
 
-                  {/* Content Type Toggle */}
+                  {/* Choose your OneDuo type */}
                   {!addToExistingCourseId && (
-                    <div className="flex rounded-xl border border-border bg-card p-1 gap-1">
-                      <button
-                        type="button"
-                        onClick={() => setContentType('course')}
-                        className={cn(
-                          "flex-1 flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium transition-all duration-200",
-                          contentType === 'course'
-                            ? "bg-primary text-primary-foreground shadow-sm"
-                            : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
-                        )}
-                      >
-                        <GraduationCap className="w-4 h-4" />
-                        Training / Course
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setContentType('film')}
-                        className={cn(
-                          "flex-1 flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium transition-all duration-200",
-                          contentType === 'film'
-                            ? "bg-primary text-primary-foreground shadow-sm"
-                            : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
-                        )}
-                      >
-                        <Clapperboard className="w-4 h-4" />
-                        Film / TV Show
-                      </button>
-                    </div>
-                  )}
+                    <div className="space-y-3">
+                      <span className="text-sm font-medium text-foreground">Choose your OneDuo type</span>
 
-                  {/* Processing Mode Toggle */}
-                  {!addToExistingCourseId && (
-                    <div className="flex rounded-xl border border-border bg-card p-1 gap-1">
-                      <button
-                        type="button"
-                        onClick={() => setProcessingMode('quick')}
-                        className={cn(
-                          "flex-1 flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium transition-all duration-200",
-                          processingMode === 'quick'
-                            ? "bg-primary text-primary-foreground shadow-sm"
-                            : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
-                        )}
-                      >
-                        <ArrowRight className="w-4 h-4" />
-                        Quick — Transcript + PDF
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setProcessingMode('deep')}
-                        className={cn(
-                          "flex-1 flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium transition-all duration-200",
-                          processingMode === 'deep'
-                            ? "bg-primary text-primary-foreground shadow-sm"
-                            : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
-                        )}
-                      >
-                        <Cloud className="w-4 h-4" />
-                        Deep — Full AI Analysis
-                      </button>
+                      {/* Active types */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setOneduoType('training')}
+                          className={cn(
+                            "text-left rounded-xl border p-4 transition-all duration-200",
+                            oneduoType === 'training'
+                              ? "border-primary bg-primary/5 ring-1 ring-primary shadow-sm"
+                              : "border-border bg-card hover:border-foreground/30"
+                          )}
+                        >
+                          <div className="flex items-center gap-2">
+                            <GraduationCap className="w-5 h-5 text-primary" />
+                            <span className="text-sm font-semibold text-foreground">Training Intelligence Pack</span>
+                          </div>
+                          <p className="mt-1.5 text-xs text-muted-foreground leading-snug">
+                            Zoom/webinar/course trainings with screen share, transcript, chat log, and resource docs.
+                          </p>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setOneduoType('film')}
+                          className={cn(
+                            "text-left rounded-xl border p-4 transition-all duration-200",
+                            oneduoType === 'film'
+                              ? "border-primary bg-primary/5 ring-1 ring-primary shadow-sm"
+                              : "border-border bg-card hover:border-foreground/30"
+                          )}
+                        >
+                          <div className="flex items-center gap-2">
+                            <Clapperboard className="w-5 h-5 text-primary" />
+                            <span className="text-sm font-semibold text-foreground">Film / TV Story Modeling</span>
+                          </div>
+                          <p className="mt-1.5 text-xs text-muted-foreground leading-snug">
+                            Movies & shows — story structure, pacing, character dynamics, and domain-swap adaptation.
+                          </p>
+                        </button>
+                      </div>
+
+                      {/* Coming soon types (disabled) */}
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                        {[
+                          { icon: Sparkles, label: 'Visual Prompt Extractor' },
+                          { icon: Wrench, label: 'Build-Along Reconstruction' },
+                          { icon: Youtube, label: 'YouTube Learning Pack' },
+                        ].map(({ icon: Icon, label }) => (
+                          <div
+                            key={label}
+                            aria-disabled="true"
+                            className="rounded-xl border border-dashed border-border bg-muted/20 p-3 opacity-60 cursor-not-allowed"
+                          >
+                            <div className="flex items-center gap-2">
+                              <Icon className="w-4 h-4 text-muted-foreground" />
+                              <span className="text-xs font-medium text-muted-foreground">{label}</span>
+                            </div>
+                            <span className="mt-1 inline-block text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+                              Coming soon
+                            </span>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   )}
 
@@ -930,34 +944,47 @@ export default function Upload() {
                   {/* Signed in as - minimal */}
                   <p className="text-xs text-muted-foreground text-center">{email}</p>
 
-                  {/* Extraction FPS Selector */}
-                  <div className="flex flex-col gap-1.5 p-3 rounded-lg bg-muted/30 border border-border">
-                    <span className="text-xs text-muted-foreground">Frame Extraction</span>
-                    <div className="flex gap-1.5">
-                      {([
-                        { key: 'fast', label: 'Fast', sub: '1 FPS' },
-                        { key: 'precision', label: 'Precision', sub: '3 FPS' },
-                        { key: 'cinematic', label: 'Cinematic', sub: '5 FPS' },
-                      ] as const).map(({ key, label, sub }) => (
-                        <button
-                          key={key}
-                          onClick={() => setFpsMode(key)}
-                          className={cn(
-                            "flex-1 flex flex-col items-center py-1.5 px-1 rounded-md text-xs font-medium transition-colors border",
-                            fpsMode === key
-                              ? key === 'cinematic'
-                                ? "bg-violet-600 text-white border-violet-600"
-                                : key === 'precision'
-                                ? "bg-amber-500 text-white border-amber-500"
-                                : "bg-primary text-primary-foreground border-primary"
-                              : "bg-transparent text-muted-foreground border-border hover:border-foreground/30"
-                          )}
-                        >
-                          <span>{label}</span>
-                          <span className="opacity-70">{sub}</span>
-                        </button>
-                      ))}
-                    </div>
+                  {/* Advanced settings (collapsed) — Frame Extraction FPS */}
+                  <div className="rounded-lg bg-muted/30 border border-border">
+                    <button
+                      type="button"
+                      onClick={() => setShowAdvanced(v => !v)}
+                      className="w-full flex items-center justify-between px-3 py-2.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      <span>Advanced settings</span>
+                      <ChevronDown className={cn("w-4 h-4 transition-transform", showAdvanced && "rotate-180")} />
+                    </button>
+                    {showAdvanced && (
+                      <div className="flex flex-col gap-1.5 px-3 pb-3">
+                        <span className="text-xs text-muted-foreground">Frame Extraction</span>
+                        <div className="flex gap-1.5">
+                          {([
+                            { key: 'fast', label: 'Fast', sub: '1 FPS' },
+                            { key: 'precision', label: 'Precision', sub: '3 FPS' },
+                          ] as const).map(({ key, label, sub }) => (
+                            <button
+                              key={key}
+                              type="button"
+                              onClick={() => setFpsMode(key)}
+                              className={cn(
+                                "flex-1 flex flex-col items-center py-1.5 px-1 rounded-md text-xs font-medium transition-colors border",
+                                fpsMode === key
+                                  ? key === 'precision'
+                                    ? "bg-amber-500 text-white border-amber-500"
+                                    : "bg-primary text-primary-foreground border-primary"
+                                  : "bg-transparent text-muted-foreground border-border hover:border-foreground/30"
+                              )}
+                            >
+                              <span>{label}</span>
+                              <span className="opacity-70">{sub}</span>
+                            </button>
+                          ))}
+                        </div>
+                        <span className="text-[10px] text-muted-foreground/70 leading-tight">
+                          Higher FPS captures more frames (slower, larger). Default is Fast.
+                        </span>
+                      </div>
+                    )}
                   </div>
 
                   {/* Output Mode Toggle - Clearer labels per beta feedback */}
