@@ -2515,7 +2515,7 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                                                 size="sm"
                                                 variant="outline"
                                                 disabled
-                                                className="gap-1.5 font-bold border-2 bg-transparent border-red-500 text-red-500"
+                                                className="gap-1.5 font-bold border-2 bg-transparent border-pink-500 text-pink-500"
                                               >
                                                 <Loader2 className="w-4 h-4 animate-spin" />
                                                 <span className="hidden sm:inline">Generating...</span>
@@ -2546,7 +2546,7 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                                               size="sm"
                                               variant="outline"
                                               disabled={isQueuing}
-                                              className="relative gap-1.5 font-bold border-2 bg-transparent border-red-500 text-red-500 hover:bg-red-500/10"
+                                              className="relative gap-1.5 font-bold border-2 bg-transparent border-pink-500 text-pink-500 hover:bg-pink-500/10"
                                               onClick={() => handleGenerateVisualTranscriptionPDF(course0?.id, block.name || course0?.title || 'Course')}
                                               title="Generate Visual Transcription PDF — every frame with AI analysis, emailed when ready"
                                             >
