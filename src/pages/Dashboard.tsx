@@ -7,7 +7,7 @@ import { ManualProcessingCard } from '@/components/ManualProcessingCard';
 import {
   Plus, RefreshCw,
   CheckCircle, Clock, Loader2, Sparkles, Check,
-  AlertTriangle, Zap, ArrowRight, Link2, FileText, ChevronDown, ChevronRight, Download, X, Layers, Mail, Upload, Globe, Lock, Paperclip, Pencil, Key, MoreHorizontal, Search, Trash2
+  AlertTriangle, Zap, ArrowRight, Link2, FileText, ChevronDown, ChevronRight, Download, X, Layers, Mail, Upload, Globe, Lock, Paperclip, Pencil, Key, MoreHorizontal, Search, Trash2, Package
 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
@@ -1565,6 +1565,24 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
     }
   };
 
+  // Training Intelligence Pack — filtered teaching states, builds 6-file ZIP on backend, emails when done
+  const handleGenerateIntelPack = async (courseId: string, courseTitle: string) => {
+    const userEmail = user?.email;
+    setGeneratingPDF(`intel-${courseId}`);
+    try {
+      const { error } = await supabase.functions.invoke('generate-pdf-backend', {
+        body: { courseId, email: userEmail, action: 'generateIntelPack' },
+      });
+      if (error) throw error;
+      toast.success(`Training Intelligence Pack queued for "${courseTitle}". We'll email ${userEmail} a ZIP download link when ready.`, { duration: 6000 });
+    } catch (err: any) {
+      console.error('Intel pack generation failed:', err);
+      toast.error('Failed to start Training Intelligence Pack. Please try again.');
+    } finally {
+      setGeneratingPDF(null);
+    }
+  };
+
   const handleCancelPDFGeneration = async (courseId: string) => {
     try {
       await supabase.from('courses').update({ pdf_generation_status: 'cancelled' }).eq('id', courseId);
@@ -2506,6 +2524,7 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                                     const isGenerating = pdfStatus === 'generating';
                                     const isFailed = pdfStatus === 'failed';
                                     const isQueuing = generatingPDF === `vt-${course0?.id}`;
+                                    const isQueuingIntel = generatingPDF === `intel-${course0?.id}`;
                                     return (
                                       <div className="flex flex-col items-end gap-0.5">
                                         <div className="flex items-center gap-1.5">
@@ -2542,30 +2561,53 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                                               </Button>
                                             </>
                                           ) : (
-                                            <Button
-                                              size="sm"
-                                              variant="outline"
-                                              disabled={isQueuing}
-                                              className="relative gap-1.5 font-bold border-2 bg-transparent border-pink-500 text-pink-500 hover:bg-pink-500/10"
-                                              onClick={() => handleGenerateVisualTranscriptionPDF(course0?.id, block.name || course0?.title || 'Course')}
-                                              title="Generate Visual Transcription PDF — every frame with AI analysis, emailed when ready"
-                                            >
-                                              {isQueuing ? (
-                                                <><Loader2 className="w-4 h-4 animate-spin" /><span className="hidden sm:inline">Queuing...</span></>
-                                              ) : (
-                                                <>
-                                                  <Download className="w-4 h-4" />
-                                                  <span className="hidden sm:inline">
-                                                    {isFailed ? 'Retry Merge' : pdfStatus === 'complete' ? 'Re-generate PDF' : 'Generate PDF'}
-                                                  </span>
-                                                  {course0?.pdf_revision_pending && (
-                                                    <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-blue-400 rounded-full animate-pulse" />
-                                                  )}
-                                                </>
-                                              )}
-                                            </Button>
+                                            <>
+                                              {/* EXPORT MODE 1 — Full Archive PDF (LEGACY generateAll) */}
+                                              <Button
+                                                size="sm"
+                                                variant="outline"
+                                                disabled={isQueuing || isQueuingIntel}
+                                                className="relative gap-1.5 font-bold border-2 bg-transparent border-pink-500 text-pink-500 hover:bg-pink-500/10"
+                                                onClick={() => handleGenerateVisualTranscriptionPDF(course0?.id, block.name || course0?.title || 'Course')}
+                                                title="Full Archive PDF — one page per frame, very large file, emailed when ready"
+                                              >
+                                                {isQueuing ? (
+                                                  <><Loader2 className="w-4 h-4 animate-spin" /><span className="hidden sm:inline">Queuing...</span></>
+                                                ) : (
+                                                  <>
+                                                    <Download className="w-4 h-4" />
+                                                    <span className="hidden sm:inline">
+                                                      {isFailed ? 'Retry Merge' : pdfStatus === 'complete' ? 'Re-gen Archive PDF' : 'Full Archive PDF'}
+                                                    </span>
+                                                    {course0?.pdf_revision_pending && (
+                                                      <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-blue-400 rounded-full animate-pulse" />
+                                                    )}
+                                                  </>
+                                                )}
+                                              </Button>
+                                              {/* EXPORT MODE 2 — Training Intelligence Pack (generateIntelPack ZIP) */}
+                                              <Button
+                                                size="sm"
+                                                variant="outline"
+                                                disabled={isQueuing || isQueuingIntel}
+                                                className="gap-1.5 font-bold border-2 bg-transparent border-emerald-500 text-emerald-400 hover:bg-emerald-500/10"
+                                                onClick={() => handleGenerateIntelPack(course0?.id, block.name || course0?.title || 'Course')}
+                                                title="Training Intelligence Pack — ZIP with transcript, visual spine, chat gold, timestamp index, resources seen"
+                                              >
+                                                {isQueuingIntel ? (
+                                                  <><Loader2 className="w-4 h-4 animate-spin" /><span className="hidden sm:inline">Queuing...</span></>
+                                                ) : (
+                                                  <><Package className="w-4 h-4" /><span className="hidden sm:inline">Training Intel Pack</span></>
+                                                )}
+                                              </Button>
+                                            </>
                                           )}
                                         </div>
+                                        {!isGenerating && (
+                                          <span className="text-[10px] text-white/40 text-right max-w-[260px] leading-tight">
+                                            <span className="text-pink-400">Archive PDF</span> = full frame dump (very large). <span className="text-emerald-400">Intel Pack</span> = ZIP: transcript, visual spine, chat gold, timestamp index, resources seen.
+                                          </span>
+                                        )}
                                         {isGenerating && pdfProgress && (
                                           <span className="text-xs text-orange-400 font-mono">
                                             {pdfProgress.currentFrame}/{pdfProgress.totalFrames} frames · Part {pdfProgress.currentPart}/{pdfProgress.totalParts}
