@@ -125,6 +125,8 @@ interface EnrichedFrame {
     transcriptText: string;
     speakerLabel: string;
     chatExcerpt: string;
+    screenText: string;   // on-screen OCR text excerpt (from frame_analyses[].text)
+    topicLabel: string;   // best heading/keyElement/intent for the timestamp index
 }
 
 interface ResourceDoc {
@@ -234,6 +236,218 @@ async function filterToSlideChanges(
 }
 
 // ============================================
+// INTEL PACK: CONTENT-AWARE FRAME SELECTION
+// Replaces blind 1-frame-per-minute sampling. Selects frames from OCR/screen
+// state in frame_analyses[] so slow document scroll, new headings, links,
+// passwords, commands, settings and app switches are all preserved, while
+// near-duplicate talking-head/resource-site frames are suppressed.
+// ============================================
+
+// Regexes for "protected signal" detection on on-screen text.
+const SIG_URL = /(https?:\/\/[^\s)\]"'<>]+|\bwww\.[^\s)\]"'<>]+|\b[a-z0-9-]+\.(?:com|io|org|net|dev|app|ai|co)\b)/i;
+const SIG_PASS = /\b(password|passcode|pass\s?code|access\s?code|pin|api[\s_-]?key|secret|token)\b\s*[:=]?/i;
+const SIG_CMD = /(\bnpm\b|\bnpx\b|\byarn\b|\bpnpm\b|\bgit\b|\bsudo\b|\bpip\b|\bcurl\b|\bdocker\b|\bcd\s|```|=>|\bconst\b|\blet\b|\bfunction\b|\bimport\b|\bexport\b|\bSELECT\b|\bFROM\b|\$\s|\bbrew\b|\bdef\b|\breturn\b)/;
+const SIG_CHECK = /(?:^|\n)\s*(?:\[[ xX]\]|[-*•▢☐☑✓✔]\s|\d+[.)]\s)/;
+const SIG_SETTINGS = /\b(settings|preferences|configuration|config|toggle|enabled|disabled|environment|env\s?var|permissions?|integration)\b/i;
+const DEMO_INTENT = /\b(demonstrat|setup|set up|configur|install|walk\s?through|show|step|click|navigate|open|create|connect|enable|deploy|build)\b/i;
+const CONFUSION_RE = /confused|don.?t understand|lost|what does|how do|why is|stuck|not working|doesn.?t work/i;
+
+function normTextForCompare(s: string): string {
+    return (s || '').toLowerCase().replace(/[^\w\s:/.#@-]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function tokenSetOf(s: string): Set<string> {
+    const out = new Set<string>();
+    for (const w of normTextForCompare(s).split(' ')) {
+        if (w.length > 2) out.add(w);
+    }
+    return out;
+}
+
+// Fraction of CURRENT tokens that are new vs previous kept frame (0..1).
+function newTokenFraction(prev: Set<string>, cur: Set<string>): number {
+    if (cur.size === 0) return 0;
+    let novel = 0;
+    for (const t of cur) if (!prev.has(t)) novel++;
+    return novel / cur.size;
+}
+
+// Fraction of CURRENT tokens already present in previous kept frame (0..1).
+function tokenOverlap(prev: Set<string>, cur: Set<string>): number {
+    if (cur.size === 0) return prev.size === 0 ? 1 : 0;
+    let common = 0;
+    for (const t of cur) if (prev.has(t)) common++;
+    return common / cur.size;
+}
+
+// Detect protected signals present in a frame's on-screen text + keyElements.
+function protectedSignalsOf(text: string, keyElements: string[]): Set<string> {
+    const hay = [text || '', ...(keyElements || [])].join('\n');
+    const sig = new Set<string>();
+    if (SIG_URL.test(hay)) sig.add('url');
+    if (SIG_PASS.test(hay)) sig.add('password');
+    if (SIG_CMD.test(hay)) sig.add('command');
+    if (SIG_CHECK.test(hay)) sig.add('checklist');
+    if (SIG_SETTINGS.test(hay)) sig.add('settings');
+    return sig;
+}
+
+interface SelectedFrame {
+    url: string;
+    globalIndex: number;
+    keepReason: string;
+    mustKeep: boolean; // protected/confusion/first — preferred when applying the hard cap
+}
+
+// Compute the "why kept" label from the actual trigger, comparing this frame to
+// the previous KEPT frame. Order = priority (most specific first).
+function reasonForKeep(opts: {
+    isFirst: boolean;
+    uiChanged: boolean;
+    typeChanged: boolean;
+    newSignals: Set<string>;
+    confusionSpike: boolean;
+    newHeading: boolean;
+    demoIntent: boolean;
+    novelFrac: number;
+}): string {
+    if (opts.isFirst) return 'Session start';
+    if (opts.confusionSpike) return 'Chat confusion spike';
+    if (opts.newSignals.has('password') || opts.newSignals.has('url')) return 'Resource/link shown';
+    if (opts.newSignals.has('settings')) return 'Settings/configuration shown';
+    if (opts.newSignals.has('command') || opts.newSignals.has('checklist')) return 'Software step demonstrated';
+    if (opts.uiChanged) return 'New tool/app opened';
+    if (opts.newHeading) return 'New heading revealed';
+    if (opts.demoIntent) return 'Software step demonstrated';
+    if (!opts.typeChanged && opts.novelFrac > 0 && opts.novelFrac < 0.6) return 'Document scroll';
+    return 'Significant screen text change';
+}
+
+function selectTeachingFrames(
+    allFrameUrls: string[],
+    frameAnalyses: any[],
+    videoDuration: number,
+    chatMessages: ChatMessage[],
+): SelectedFrame[] {
+    if (allFrameUrls.length === 0) return [];
+
+    const fps = videoDuration > 0 ? allFrameUrls.length / videoDuration : 1;
+    const durationMinutes = Math.max(1, Math.round((videoDuration || allFrameUrls.length) / 60));
+
+    const analysisMap = new Map<number, any>();
+    for (const a of frameAnalyses) {
+        const idx = a.frameIndex ?? a.frame_index;
+        if (idx !== undefined) analysisMap.set(idx, a);
+    }
+
+    // No OCR data at all → safe fallback: 1 frame per minute (legacy behaviour).
+    const hasOcr = frameAnalyses.some((a) => (a?.text || '').trim().length > 0);
+    if (!hasOcr) {
+        const stride = Math.max(1, Math.round(allFrameUrls.length / durationMinutes));
+        const out: SelectedFrame[] = [];
+        for (let i = 0; i < allFrameUrls.length; i += stride) {
+            out.push({ url: allFrameUrls[i], globalIndex: i, keepReason: i === 0 ? 'Session start' : 'Significant screen text change', mustKeep: i === 0 });
+        }
+        console.log(`[intel-pack] No OCR text — fallback 1/min: ${out.length} frames`);
+        return out;
+    }
+
+    // Tuning thresholds.
+    const NEW_TOKEN_KEEP = 0.18;   // >=18% new on-screen tokens = meaningful change
+    const DUP_OVERLAP = 0.85;      // >=85% token overlap = near-duplicate
+    const NEAR_GAP_SEC = 3;        // suppression window: within 3s of last kept frame
+
+    const selected: SelectedFrame[] = [];
+    let prevTokens = new Set<string>();
+    let prevAnalysis: any = null;
+    let prevSignals = new Set<string>();
+    let prevTs = -Infinity;
+
+    for (let i = 0; i < allFrameUrls.length; i++) {
+        const a = analysisMap.get(i) || {};
+        const text = a.text || '';
+        const keyElements: string[] = Array.isArray(a.keyElements) ? a.keyElements : [];
+        const ts = i / Math.max(fps, 0.001);
+        const isFirst = selected.length === 0;
+
+        const curTokens = tokenSetOf(`${text} ${keyElements.join(' ')}`);
+        const curSignals = protectedSignalsOf(text, keyElements);
+        // Signals that are NEW vs the previous kept frame.
+        const newSignals = new Set<string>();
+        for (const s of curSignals) if (!prevSignals.has(s)) newSignals.add(s);
+
+        const uiChanged = !isFirst && !!a.ui_state && a.ui_state !== 'unknown'
+            && !!prevAnalysis?.ui_state && a.ui_state !== prevAnalysis.ui_state;
+        const typeChanged = !isFirst && !!a.textType && a.textType !== 'other'
+            && !!prevAnalysis?.textType && a.textType !== prevAnalysis.textType;
+        const novelFrac = newTokenFraction(prevTokens, curTokens);
+        const overlap = tokenOverlap(prevTokens, curTokens);
+        const demoIntent = DEMO_INTENT.test(a.instructorIntent || '');
+        const newHeading = !!a.emphasisFlags?.bold_text && novelFrac >= 0.12;
+
+        // Confusion spike: >=2 confused chat lines near this timestamp.
+        const confusionSpike = chatMessages.filter(
+            (c) => Math.abs(c.secondsOffset - ts) <= 20 && CONFUSION_RE.test(c.message),
+        ).length >= 2;
+
+        // ---- KEEP decision (OR-rule) ----
+        let keep = isFirst
+            || novelFrac >= NEW_TOKEN_KEEP
+            || uiChanged
+            || typeChanged
+            || newSignals.size > 0
+            || newHeading
+            || demoIntent
+            || confusionSpike;
+
+        // ---- Near-duplicate suppression (protected signals & confusion override) ----
+        if (keep && !isFirst) {
+            const withinGap = (ts - prevTs) <= NEAR_GAP_SEC;
+            const nearDup = withinGap && overlap >= DUP_OVERLAP;
+            const hasNewProtected = newSignals.size > 0;
+            if (nearDup && !hasNewProtected && !confusionSpike) keep = false;
+        }
+
+        if (!keep) continue;
+
+        const keepReason = reasonForKeep({ isFirst, uiChanged, typeChanged, newSignals, confusionSpike, newHeading, demoIntent, novelFrac });
+        const mustKeep = isFirst || newSignals.size > 0 || confusionSpike;
+        selected.push({ url: allFrameUrls[i], globalIndex: i, keepReason, mustKeep });
+
+        prevTokens = curTokens;
+        prevAnalysis = a;
+        prevSignals = curSignals;
+        prevTs = ts;
+    }
+
+    // ---- Hard cap for long videos (prevents runaway thousand-page outputs) ----
+    // Generous: ~15 frames/min, floored at 200, ceilinged at 1500.
+    const HARD_CAP = Math.min(1500, Math.max(200, durationMinutes * 15));
+    if (selected.length > HARD_CAP) {
+        const must = selected.filter((s) => s.mustKeep);
+        const rest = selected.filter((s) => !s.mustKeep);
+        let kept: SelectedFrame[];
+        if (must.length >= HARD_CAP) {
+            // Even when must-keeps alone overflow, downsample them uniformly.
+            const stride = must.length / HARD_CAP;
+            kept = [];
+            for (let k = 0; k < HARD_CAP; k++) kept.push(must[Math.floor(k * stride)]);
+        } else {
+            const budget = HARD_CAP - must.length;
+            const stride = Math.max(1, Math.round(rest.length / budget));
+            const filler: SelectedFrame[] = [];
+            for (let k = 0; k < rest.length && filler.length < budget; k += stride) filler.push(rest[k]);
+            kept = [...must, ...filler].sort((x, y) => x.globalIndex - y.globalIndex);
+        }
+        console.log(`[intel-pack] Content-aware select: ${selected.length} -> capped ${kept.length} (cap=${HARD_CAP}, must-keep=${must.length})`);
+        return kept;
+    }
+
+    console.log(`[intel-pack] Content-aware select: ${selected.length}/${allFrameUrls.length} frames kept (cap=${HARD_CAP})`);
+    return selected;
+}
+
+// ============================================
 // INTEL PACK: CHAT PARSING
 // ============================================
 
@@ -292,26 +506,23 @@ function detectChatFile(supplementalFiles: any[]): ChatMessage[] {
 // INTEL PACK: FRAME ENRICHMENT
 // ============================================
 
-function classifyFrameReason(
-    pixelDiffScore: number,
-    isFirst: boolean,
-    transcriptText: string,
-    chatNearby: number,
-): string {
-    if (isFirst) return 'Session start';
-    const t = transcriptText.toLowerCase();
-    if (/https?:|\.com|password|passcode|pw:|download|template|resource/.test(t)) return 'Resource shown';
-    if (/click|go to|type here|step \d|let me show|watch this|open|navigate/.test(t)) return 'Instructor demonstrating';
-    if (chatNearby >= 5) return 'High chat activity';
-    if (chatNearby >= 2) return 'Chat questions present';
-    if (pixelDiffScore >= 0.4) return 'Major screen change';
-    if (pixelDiffScore >= 0.15) return 'New screen or app opened';
-    if (pixelDiffScore >= 0.08) return 'Significant content change';
-    return 'Teaching state change';
+// Best topic label for the timestamp index: prefer a real on-screen heading /
+// keyElement / instructor intent; fall back to the spoken transcript snippet.
+function buildTopicLabel(analysis: any, transcriptText: string): string {
+    const keyElements: string[] = Array.isArray(analysis?.keyElements) ? analysis.keyElements : [];
+    // First non-trivial keyElement reads as the on-screen heading/topic.
+    const heading = keyElements.map((k) => (k || '').trim()).find((k) => k.length >= 4 && k.length <= 80);
+    if (heading) return heading;
+    const intent = (analysis?.instructorIntent || '').trim();
+    if (intent.length >= 4) return intent;
+    // First line of OCR text if it looks like a heading.
+    const firstLine = (analysis?.text || '').split('\n').map((l: string) => l.trim()).find((l: string) => l.length >= 4 && l.length <= 80);
+    if (firstLine) return firstLine;
+    return (transcriptText || '').trim();
 }
 
 function enrichFrames(
-    filteredUrls: string[],
+    selected: SelectedFrame[],
     allFrameUrls: string[],
     frameAnalyses: any[],
     videoDuration: number,
@@ -325,9 +536,8 @@ function enrichFrames(
         if (idx !== undefined) analysisMap.set(idx, a);
     }
 
-    return filteredUrls.map((url, fi) => {
-        const globalIndex = allFrameUrls.indexOf(url);
-        const effectiveIndex = globalIndex >= 0 ? globalIndex : fi;
+    return selected.map((sel) => {
+        const effectiveIndex = sel.globalIndex;
         const timestamp = effectiveIndex / Math.max(fps, 0.001);
         const analysis = analysisMap.get(effectiveIndex) || {};
         const pixelDiffScore = analysis.pixel_diff_score ?? 0.08;
@@ -342,9 +552,12 @@ function enrichFrames(
         const speakerLabel = seg?.speaker || '';
         const nearby = chatMessages.filter(c => Math.abs(c.secondsOffset - timestamp) <= 30);
         const chatExcerpt = nearby.slice(0, 3).map(c => `${c.timeStr} ${c.speaker}: ${c.message}`).join(' | ');
-        const reason = classifyFrameReason(pixelDiffScore, fi === 0, transcriptText, nearby.length);
 
-        return { url, globalIndex: effectiveIndex, timestamp, pixelDiffScore, reason, transcriptText, speakerLabel, chatExcerpt };
+        // On-screen text excerpt (single-spaced, capped at render time).
+        const screenText = (analysis.text || '').replace(/\s+/g, ' ').trim();
+        const topicLabel = buildTopicLabel(analysis, transcriptText);
+
+        return { url: sel.url, globalIndex: effectiveIndex, timestamp, pixelDiffScore, reason: sel.keepReason, transcriptText, speakerLabel, chatExcerpt, screenText, topicLabel };
     });
 }
 
@@ -430,7 +643,7 @@ function buildTimestampIndexText(enrichedFrames: EnrichedFrame[], courseTitle: s
     ];
     for (const f of enrichedFrames) {
         const ts = formatTime(f.timestamp).padEnd(10);
-        const topic = (f.transcriptText || '').replace(/\n/g, ' ').substring(0, 40).padEnd(42);
+        const topic = ((f.topicLabel || f.transcriptText) || '').replace(/\s+/g, ' ').substring(0, 40).padEnd(42);
         const reason = f.reason.substring(0, 26).padEnd(28);
         const chat = f.chatExcerpt ? f.chatExcerpt.substring(0, 36) : '';
         lines.push(`${ts} | ${topic} | ${reason} | ${chat}`);
@@ -993,6 +1206,15 @@ async function buildVisualTrainingSpinePDF(
             });
             y -= 6;
             drawWrappedText(caption, { size: 8, usedFont: italicFont, color: rgb(0.15, 0.15, 0.15) });
+        }
+
+        // Screen text excerpt (what was actually visible on-screen, ~300 chars)
+        if (frame.screenText) {
+            const excerpt = frame.screenText.length > 300 ? `${frame.screenText.substring(0, 300)}...` : frame.screenText;
+            ensureSpace(16);
+            y -= 4;
+            drawWrappedText('Screen text:', { size: 7, usedFont: boldFont, color: rgb(0.25, 0.25, 0.5) });
+            drawWrappedText(excerpt, { size: 7, usedFont: font, color: rgb(0.3, 0.3, 0.3) });
         }
 
         // Chat excerpt
@@ -2399,15 +2621,16 @@ serve(async (req) => {
                         pdf_generation_progress: { step: 'filtering_frames', chatSource },
                     }).eq('id', courseId);
 
-                    // Filter to scene-change frames only
-                    const filteredUrls = await filterToSlideChanges(supabase, courseId, allFrameUrls);
-                    console.log(`[intel-pack] Scene-change filter: ${allFrameUrls.length} -> ${filteredUrls.length} frames`);
+                    // Content-aware teaching-state selection from OCR/screen state.
+                    // (Replaces blind 1-frame-per-minute sampling. Archive PDF still uses filterToSlideChanges.)
+                    const selectedFrames = selectTeachingFrames(allFrameUrls, frameAnalyses, videoDuration, chatMessages);
+                    console.log(`[intel-pack] Content-aware select: ${allFrameUrls.length} -> ${selectedFrames.length} frames`);
 
                     await supabase.from('courses').update({
-                        pdf_generation_progress: { step: 'enriching_frames', frameCount: filteredUrls.length },
+                        pdf_generation_progress: { step: 'enriching_frames', frameCount: selectedFrames.length },
                     }).eq('id', courseId);
 
-                    const enrichedFrames = enrichFrames(filteredUrls, allFrameUrls, frameAnalyses, videoDuration, transcript, chatMessages);
+                    const enrichedFrames = enrichFrames(selectedFrames, allFrameUrls, frameAnalyses, videoDuration, transcript, chatMessages);
 
                     await supabase.from('courses').update({
                         pdf_generation_progress: { step: 'building_files' },
