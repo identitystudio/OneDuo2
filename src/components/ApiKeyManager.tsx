@@ -380,7 +380,7 @@ export function ApiKeyManager() {
         <div className="mt-6 p-4 bg-muted/50 rounded-lg">
           <h4 className="font-medium mb-2">Quick Start</h4>
           <pre className="text-xs bg-background p-3 rounded border overflow-x-auto">
-{`curl -X POST https://gtfvtezmjrcsmoebuxrw.supabase.co/functions/v1/api-transform/v1/transform \\
+{`curl -X POST https://jzsfacnzztutqzlfkbqf.supabase.co/functions/v1/api-transform/v1/transform \\
   -H "Authorization: Bearer YOUR_API_KEY" \\
   -H "Content-Type: application/json" \\
   -d '{"video_url": "https://example.com/video.mp4"}'`}
