@@ -744,7 +744,7 @@ function buildReadmeText(courseTitle: string, chatSource: string, frameCount: nu
 // No reliance on a persisted `content` field — no upload path writes one.
 // ============================================
 
-const SUPP_MAX_BYTES = 5 * 1024 * 1024; // 5MB/file (Edge ~150MB RAM ceiling)
+const SUPP_MAX_BYTES = 25 * 1024 * 1024; // 25MB/file (Edge ~150MB RAM ceiling)
 const SUPP_MAX_FILES = 50;
 const SUPP_PLAIN_EXTS = ['txt', 'md', 'json', 'js', 'ts', 'jsx', 'tsx', 'html', 'css', 'csv', 'xml', 'yaml', 'yml', 'py', 'sh', 'env', 'log', 'vtt', 'srt'];
 const SUPP_BINARY_EXTS = ['mp4', 'mov', 'avi', 'mkv', 'webm', 'rar', '7z', 'exe', 'dll', 'bin', 'zip', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'heic'];
@@ -783,8 +783,9 @@ async function loadSupplementalFiles(supabase: any, courseFiles: any[]): Promise
 
     for (const f of candidates) {
         const name = f?.name || f?.filename || 'unnamed';
-        const ext = fileExt(name);
         const rawPath = f?.storagePath || f?.storage_path || '';
+        // Extension lives in storagePath (upload keeps it there); name has it stripped. storagePath first, name fallback.
+        const ext = fileExt(rawPath) || fileExt(name);
         const storagePath = rawPath.replace(/^course-files\//, '');
         const doc: ResourceDoc = { name, type: ext || 'unknown', size: Number(f?.size) || 0, content: '', parseStatus: 'unsupported', charCount: 0 };
 
@@ -799,7 +800,7 @@ async function loadSupplementalFiles(supabase: any, courseFiles: any[]): Promise
             if (dlErr || !fileData) { doc.parseStatus = 'download-failed'; out.push(doc); continue; }
             doc.size = doc.size || fileData.size;
             if (fileData.size > SUPP_MAX_BYTES) {
-                doc.parseStatus = `too-large (${(fileData.size / 1024 / 1024).toFixed(1)}MB > 5MB)`;
+                doc.parseStatus = `too-large (${(fileData.size / 1024 / 1024).toFixed(1)}MB > ${(SUPP_MAX_BYTES / 1024 / 1024).toFixed(0)}MB)`;
                 out.push(doc); continue;
             }
 
