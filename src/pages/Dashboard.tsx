@@ -1942,6 +1942,9 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
 
     for (const course of courses) {
       if (course.status !== 'completed') continue;
+      // FILM ONLY: courses no longer generate Knowledge Layer / Txt Files (Intel Pack ZIP is their deliverable).
+      // TODO(deprecate-course-kl): drop course KL entirely after exporter dep review.
+      if (course.content_type !== 'film') continue;
       if (course.modules && course.modules.length > 0) {
         for (const mod of course.modules) {
           if (mod.status === 'completed' && mod.knowledge_layer_status !== 'complete' && mod.knowledge_layer_status !== 'generating') {
@@ -2119,7 +2122,8 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
             >
               <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
             </Button>
-            {courses.some(c => c.status === 'completed' && c.knowledge_layer_status !== 'complete' && c.knowledge_layer_status !== 'generating') && (
+            {/* "Generate All Txt Files" — FILM ONLY. Courses ship via Training Intel Pack ZIP. */}
+            {courses.some(c => c.content_type === 'film' && c.status === 'completed' && c.knowledge_layer_status !== 'complete' && c.knowledge_layer_status !== 'generating') && (
               <Button
                 variant="outline"
                 onClick={handleUpgradeAllKnowledgeLayer}
@@ -2654,8 +2658,15 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                                       </div>
                                     );
                                   })()}
-                                  {/* Txt File — generate or download depending on status */}
-                                  {block.courses[0]?.knowledge_layer_status === 'generating' ? (
+                                  {/* Txt File / Knowledge Layer — FILM ONLY.
+                                      Courses deliver via Training Intel Pack ZIP, which has zero knowledge_layer
+                                      dependency. Gating on content_type also makes the UI ignore any stuck/legacy
+                                      knowledge_layer_status='generating' on old course rows (no ghost "5%" banner).
+                                      TODO(deprecate-course-kl): course knowledge_layer can be fully removed later
+                                      after reviewing exporter deps (pdfExporter.ts, memoryExporter.ts) + Archive PDF.
+                                      Backend producer (generate-knowledge-layer / worker) intentionally untouched. */}
+                                  {block.courses[0]?.content_type === 'film' && (
+                                    block.courses[0]?.knowledge_layer_status === 'generating' ? (
                                     <div className="flex flex-col gap-1 min-w-[140px]">
                                       <div className="flex items-center justify-between gap-2">
                                         <span className="text-xs text-emerald-400 flex items-center gap-1">
@@ -2698,7 +2709,7 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                                       <Sparkles className="w-3.5 h-3.5" />
                                       <span className="hidden sm:inline">Generate Txt File</span>
                                     </Button>
-                                  )}
+                                  ))}
                                 </>
                               )}
                               {isExpanded && (
@@ -2768,7 +2779,8 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                                     <Paperclip className="w-4 h-4" />
                                     Add Files
                                   </DropdownMenuItem>
-                                  {block.allCompleted && block.courses[0]?.knowledge_layer_status === 'complete' && (
+                                  {/* "Regenerate Txt" — FILM ONLY (Knowledge Layer / Story Intelligence). */}
+                                  {block.allCompleted && block.courses[0]?.content_type === 'film' && block.courses[0]?.knowledge_layer_status === 'complete' && (
                                     <>
                                       <DropdownMenuSeparator className="bg-white/10" />
                                       <DropdownMenuItem
@@ -3158,8 +3170,11 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                                                 {item.video_duration_seconds && (
                                                   <span className="text-xs text-white/30">• {formatDuration(item.video_duration_seconds)}</span>
                                                 )}
-                                                {/* AI Artifact — per-module generate or download */}
-                                                {item.isModule && (
+                                                {/* AI Artifact (Knowledge Layer / Txt File) — FILM ONLY.
+                                                    Courses use the Training Intel Pack ZIP; gating here also hides
+                                                    any stuck/legacy knowledge_layer_status on old course modules.
+                                                    TODO(deprecate-course-kl): remove course KL fully after exporter dep review. */}
+                                                {item.isModule && parentCourse?.content_type === 'film' && (
                                                   item.knowledge_layer_status === 'generating' ? (
                                                     <div className="flex flex-col gap-0.5 min-w-[120px]">
                                                       <div className="flex items-center justify-between gap-1">
