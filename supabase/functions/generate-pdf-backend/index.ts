@@ -744,7 +744,7 @@ function buildReadmeText(courseTitle: string, chatSource: string, frameCount: nu
 // No reliance on a persisted `content` field — no upload path writes one.
 // ============================================
 
-const SUPP_MAX_BYTES = 25 * 1024 * 1024; // 25MB/file (Edge ~150MB RAM ceiling)
+const SUPP_MAX_BYTES = 3 * 1024 * 1024; // 3MB/file (regex parse CPU cap; larger files listed too-large)
 const SUPP_MAX_FILES = 50;
 const SUPP_PLAIN_EXTS = ['txt', 'md', 'json', 'js', 'ts', 'jsx', 'tsx', 'html', 'css', 'csv', 'xml', 'yaml', 'yml', 'py', 'sh', 'env', 'log', 'vtt', 'srt'];
 const SUPP_BINARY_EXTS = ['mp4', 'mov', 'avi', 'mkv', 'webm', 'rar', '7z', 'exe', 'dll', 'bin', 'zip', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'heic'];
@@ -1197,14 +1197,14 @@ async function buildVisualTrainingSpinePDF(
 
         // Screenshot
         try {
-            const resp = await fetch(compressFrameUrl(frame.url), { signal: AbortSignal.timeout(10000) });
+            const resp = await fetch(compressFrameUrl(frame.url, 960, 75), { signal: AbortSignal.timeout(10000) });
             if (resp.ok) {
                 const imgBytes = new Uint8Array(await resp.arrayBuffer());
                 const ct = resp.headers.get('content-type') || '';
                 const image = ct.includes('png') || frame.url.includes('.png')
                     ? await pdfDoc.embedPng(imgBytes)
                     : await pdfDoc.embedJpg(imgBytes);
-                const imgW = Math.min(CONTENT_WIDTH, 420);
+                const imgW = CONTENT_WIDTH;
                 const imgH = imgW * (image.height / image.width);
                 ensureSpace(imgH + 5);
                 currentPage.drawImage(image, { x: MARGIN, y: y - imgH, width: imgW, height: imgH });
@@ -2717,7 +2717,7 @@ serve(async (req) => {
                     zip.file('07_course_rebuild_notes.txt', rebuildNotesText);
                     zip.file('README.txt', readmeWithBuild);
 
-                    const zipBytes = await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE', compressionOptions: { level: 6 } });
+                    const zipBytes = await zip.generateAsync({ type: 'uint8array', compression: 'STORE' });
 
                     // Upload zip
                     const ts = Date.now();

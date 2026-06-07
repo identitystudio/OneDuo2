@@ -26,6 +26,9 @@ dist-ssr
 # Custom Ignores
 aaa-exampleproject/oneduo
 
+# YouTube Import downloads (never commit videos)
+/downloads/oneduo-imports/
+
 # Environment variables
 .env
 .env.*

@@ -10,6 +10,50 @@ interface CourseFile {
   storagePath: string;
   size: number;
   uploadedAt?: string;
+  type?: string;
+  parentZip?: string;
+}
+
+// File tagged with zip-origin metadata (set during extraction).
+type TaggedFile = File & { __relPath?: string; __fromZip?: string };
+
+// Minimal shape of a JSZip entry (avoids depending on jszip types).
+interface ZipEntry {
+  dir: boolean;
+  name: string;
+  async: (type: 'blob') => Promise<Blob>;
+}
+
+const SUPPORTED_EXTS = ['pdf', 'doc', 'docx', 'txt', 'md', 'json', 'js', 'ts', 'html', 'css', 'csv', 'xml', 'yaml', 'yml', 'jsx', 'tsx', 'py', 'sh', 'env'];
+
+// ZIP intake guardrails
+const ZIP_MAX_BYTES = 100 * 1024 * 1024;        // max uploaded .zip size
+const ZIP_MAX_ENTRIES = 200;                     // max files extracted per zip
+const ZIP_MAX_UNCOMPRESSED = 300 * 1024 * 1024;  // max total uncompressed bytes
+const ZIP_MAX_PER_FILE = 25 * 1024 * 1024;       // max single extracted file
+
+function formatBytes(b: number): string {
+  if (b < 1024) return `${b} B`;
+  if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`;
+  return `${(b / (1024 * 1024)).toFixed(0)} MB`;
+}
+
+function isSupportedExt(name: string): boolean {
+  const ext = name.split('.').pop()?.toLowerCase() || '';
+  return SUPPORTED_EXTS.includes(ext);
+}
+
+// Block zip-slip / path traversal. Returns a clean relative path, or null if unsafe.
+function sanitizeZipPath(rawName: string): string | null {
+  if (!rawName) return null;
+  const p = rawName.replace(/\\/g, '/');         // normalize windows separators
+  if (/^[a-zA-Z]:/.test(p)) return null;          // drive-letter absolute
+  if (p.startsWith('/')) return null;             // absolute
+  if (p.includes('\0')) return null;              // null byte
+  const segs = p.split('/').filter(s => s.length > 0 && s !== '.');
+  if (segs.length === 0) return null;
+  if (segs.some(s => s === '..')) return null;     // traversal
+  return segs.join('/');
 }
 
 interface AddFilesDialogProps {
@@ -37,20 +81,87 @@ export function AddFilesDialog({
   const [currentFileIndex, setCurrentFileIndex] = useState(0);
   const [uploadedCount, setUploadedCount] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [zipArchives, setZipArchives] = useState<File[]>([]);
+  const [isExpanding, setIsExpanding] = useState(false);
 
-  const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const selectedFiles = Array.from(e.target.files || []);
-    const validFiles = selectedFiles.filter(f => {
-      const ext = f.name.split('.').pop()?.toLowerCase();
-      return ['pdf', 'doc', 'docx', 'txt', 'md', 'json', 'js', 'ts', 'html', 'css', 'csv', 'xml', 'yaml', 'yml', 'jsx', 'tsx', 'py', 'sh', 'env'].includes(ext || '');
-    });
-    
-    if (validFiles.length < selectedFiles.length) {
-      toast.warning('Some files were skipped. Unsupported file type.');
+  // Extract a .zip in-browser (JSZip). Keeps supported types, preserves folder
+  // structure, enforces guardrails, blocks zip-slip. Returns extracted Files + skip count.
+  const expandZip = useCallback(async (zipFile: File): Promise<{ files: File[]; skipped: number }> => {
+    if (zipFile.size > ZIP_MAX_BYTES) {
+      toast.error(`ZIP "${zipFile.name}" exceeds ${formatBytes(ZIP_MAX_BYTES)} limit.`);
+      return { files: [], skipped: 0 };
     }
-    
-    setFiles(prev => [...prev, ...validFiles]);
+    const JSZip = (await import('jszip')).default;
+    let zip;
+    try {
+      zip = await JSZip.loadAsync(zipFile);
+    } catch {
+      toast.error(`Could not read ZIP "${zipFile.name}".`);
+      return { files: [], skipped: 0 };
+    }
+    const out: File[] = [];
+    let totalBytes = 0, count = 0, skipped = 0;
+    for (const entry of Object.values(zip.files) as ZipEntry[]) {
+      if (entry.dir) continue;
+      const clean = sanitizeZipPath(entry.name);
+      if (!clean) { skipped++; continue; }                 // zip-slip / bad path
+      if (!isSupportedExt(clean)) { skipped++; continue; }  // unsupported type
+      if (count >= ZIP_MAX_ENTRIES) {
+        toast.warning(`ZIP "${zipFile.name}": stopped at ${ZIP_MAX_ENTRIES} files (count cap).`);
+        break;
+      }
+      const blob = await entry.async('blob');
+      if (blob.size > ZIP_MAX_PER_FILE) { skipped++; continue; }
+      if (totalBytes + blob.size > ZIP_MAX_UNCOMPRESSED) {
+        toast.warning(`ZIP "${zipFile.name}": stopped at ${formatBytes(ZIP_MAX_UNCOMPRESSED)} uncompressed (size cap).`);
+        break;
+      }
+      totalBytes += blob.size;
+      count++;
+      const baseName = clean.split('/').pop() || clean;
+      const f = new File([blob], baseName, { type: blob.type }) as TaggedFile;
+      f.__relPath = clean;
+      f.__fromZip = zipFile.name;
+      out.push(f);
+    }
+    return { files: out, skipped };
   }, []);
+
+  const handleFileSelect = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selected = Array.from(e.target.files || []);
+    if (e.target) e.target.value = ''; // allow re-selecting same file later
+    const direct: File[] = [];
+    const zips: File[] = [];
+    let skipped = 0;
+    for (const f of selected) {
+      const ext = f.name.split('.').pop()?.toLowerCase() || '';
+      if (ext === 'zip') zips.push(f);
+      else if (SUPPORTED_EXTS.includes(ext)) direct.push(f);
+      else skipped++;
+    }
+
+    const extracted: File[] = [];
+    const archives: File[] = [];
+    if (zips.length > 0) {
+      setIsExpanding(true);
+      try {
+        for (const z of zips) {
+          const r = await expandZip(z);
+          extracted.push(...r.files);
+          skipped += r.skipped;
+          if (r.files.length > 0) archives.push(z);
+        }
+      } finally {
+        setIsExpanding(false);
+      }
+    }
+
+    if (skipped > 0) toast.warning(`${skipped} file(s) skipped (unsupported or unsafe path).`);
+    if (extracted.length > 0) toast.success(`Extracted ${extracted.length} file(s) from ZIP.`);
+
+    setFiles(prev => [...prev, ...direct, ...extracted]);
+    if (archives.length > 0) setZipArchives(prev => [...prev, ...archives]);
+  }, [expandZip]);
 
   const removeFile = useCallback((index: number) => {
     setFiles(prev => prev.filter((_, i) => i !== index));
@@ -84,32 +195,48 @@ export function AddFilesDialog({
       
       for (let i = 0; i < files.length; i++) {
         setCurrentFileIndex(i);
-        const file = files[i];
-        const storagePath = `${courseId}/supplementary/${Date.now()}_${file.name}`;
-        
-        // Upload to storage
+        const file = files[i] as TaggedFile;
+        const relName = file.__relPath || file.name; // preserves folder structure for zip files
+        const fromZip = file.__fromZip;
+        const storagePath = `${courseId}/supplementary/${Date.now()}_${relName}`;
+
+        // Upload to storage (folder structure preserved via slashes in relName)
         const { error: uploadError } = await supabase.storage
           .from('course-files')
           .upload(storagePath, file, {
-            contentType: file.type,
+            contentType: file.type || 'application/octet-stream',
             upsert: false
           });
 
         if (uploadError) {
-          console.error(`Failed to upload ${file.name}:`, uploadError);
-          toast.error(`Failed to upload ${file.name}`);
+          console.error(`Failed to upload ${relName}:`, uploadError);
+          toast.error(`Failed to upload ${relName}`);
           continue;
         }
 
         uploadedFiles.push({
-          name: file.name,
+          name: relName,
           storagePath,
           size: file.size,
-          uploadedAt: new Date().toISOString()
+          uploadedAt: new Date().toISOString(),
+          ...(fromZip ? { parentZip: fromZip, type: 'zip_extracted' } : {})
         });
 
         setUploadedCount(uploadedFiles.length);
         setUploadProgress(((i + 1) / files.length) * 50); // First 50% is uploading
+      }
+
+      // Archive original ZIP containers (stored for reference, NOT added to
+      // course_files so Intel Pack never tries to text-parse a binary zip).
+      for (const z of zipArchives) {
+        try {
+          const zipPath = `${courseId}/supplementary/_containers/${Date.now()}_${z.name}`;
+          await supabase.storage.from('course-files').upload(zipPath, z, {
+            contentType: 'application/zip', upsert: false
+          });
+        } catch (e) {
+          console.warn(`Failed to archive ZIP ${z.name}:`, e);
+        }
       }
 
       if (uploadedFiles.length === 0) {
@@ -121,7 +248,7 @@ export function AddFilesDialog({
       
       const { error: updateError } = await supabase
         .from('courses')
-        .update({ course_files: allFiles as any })
+        .update({ course_files: allFiles })
         .eq('id', courseId);
 
       if (updateError) {
@@ -170,6 +297,7 @@ export function AddFilesDialog({
       // Show success state for 1.5 seconds before closing
       setTimeout(() => {
         setFiles([]);
+        setZipArchives([]);
         setUploadComplete(false);
         onFilesAdded();
         onOpenChange(false);
@@ -233,16 +361,16 @@ export function AddFilesDialog({
               ref={fileInputRef}
               type="file"
               multiple
-              accept=".pdf,.doc,.docx,.txt,.md,.json,.js,.ts,.html,.css,.csv,.xml,.yaml,.yml,.jsx,.tsx,.py,.sh,.env"
+              accept=".pdf,.doc,.docx,.txt,.md,.json,.js,.ts,.html,.css,.csv,.xml,.yaml,.yml,.jsx,.tsx,.py,.sh,.env,.zip"
               onChange={handleFileSelect}
               className="hidden"
             />
             <Upload className="w-8 h-8 text-white/40 mx-auto mb-2" />
             <p className="text-sm text-white/60">
-              Click to select files or drag and drop
+              {isExpanding ? 'Extracting ZIP…' : 'Click to select files or drag and drop'}
             </p>
             <p className="text-xs text-white/40 mt-1">
-              Documents & code files (PDF, JSON, JS, HTML, CSS, etc.)
+              Documents, code & .zip bundles (PDF, DOCX, TXT, MD, CSV, JSON, ZIP, etc.)
             </p>
           </div>
 
@@ -316,7 +444,7 @@ export function AddFilesDialog({
           </Button>
           <Button
             onClick={handleUpload}
-            disabled={files.length === 0 || isUploading}
+            disabled={files.length === 0 || isUploading || isExpanding}
             className="bg-cyan-500 hover:bg-cyan-600 text-black"
           >
             {isUploading ? (
