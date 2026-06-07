@@ -2327,6 +2327,32 @@ serve(async (req) => {
 
         console.log(`[generate-pdf-backend] action=${action} course=${courseId} framesPerPart=${framesPerPart}`);
 
+        // ===== HARD GUARD: Archive PDF is FILM-ONLY =====
+        // Courses (content_type !== 'film') may ONLY run action='generateIntelPack'.
+        // Archive (generateAll / generate / missing / unknown action) is hard-refused for courses
+        // BEFORE any background work, knowledge-layer trigger, part generation, or merge starts.
+        // Archive backend code is left fully intact for film — this only gates entry.
+        // Note: non-'film' (incl. null/legacy) is treated as course and blocked from Archive.
+        {
+            const guardClient = createClient(supabaseUrl, supabaseServiceKey);
+            const { data: guardRow } = await guardClient
+                .from('courses')
+                .select('content_type')
+                .eq('id', courseId)
+                .single();
+            const contentType: string | null = guardRow?.content_type ?? null;
+            const isFilm = contentType === 'film';
+            const isIntelPack = action === 'generateIntelPack';
+            if (!isFilm && !isIntelPack) {
+                console.warn(`[generate-pdf-backend] GUARD BLOCKED: course=${courseId} action=${action ?? '(missing)'} content_type=${contentType ?? '(null)'} → Archive disabled for course projects`);
+                return new Response(
+                    JSON.stringify({ error: "Archive PDF is disabled for course projects. Use Training Intel Pack." }),
+                    { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+                );
+            }
+            console.log(`[generate-pdf-backend] GUARD ALLOWED: course=${courseId} action=${action} content_type=${contentType ?? '(null)'} → permitted`);
+        }
+
         // Immediately respond to the client so they can close the tab
         const responsePromise = new Response(
             JSON.stringify({ success: true, message: "PDF generation started. You'll receive an email when ready." }),
