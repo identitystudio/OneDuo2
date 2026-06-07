@@ -306,9 +306,14 @@ export default function Dashboard() {
         c.modules?.some(m => m.knowledge_layer_status === 'generating')
       );
 
-      // Auto-retry stalled PDF generation (function timed out silently)
+      // Auto-retry stalled PDF generation (function timed out silently).
+      // FILM ONLY: generateAll is the Archive pipeline. pdf_generation_status is shared with the
+      // Intel Pack (generateIntelPack) job, so a stalled COURSE Intel Pack must never auto-fire
+      // generateAll here — that is what turned an Intel Pack into an 11k-page Archive PDF.
+      // TODO(separation): split DB status fields (intel_pack_status/intel_pack_progress vs
+      //   archive_pdf_status/archive_pdf_progress) so this guard can key off the right field. No migration yet.
       for (const c of currentCourses) {
-        if (c.pdf_generation_status === 'generating' && c.pdf_generation_progress?.startedAt) {
+        if (c.content_type === 'film' && c.pdf_generation_status === 'generating' && c.pdf_generation_progress?.startedAt) {
           const stalledMs = Date.now() - new Date(c.pdf_generation_progress.startedAt).getTime();
           if (stalledMs > 3 * 60 * 1000) {
             console.log(`[dashboard] PDF stalled for ${c.title}, auto-retrying...`);
@@ -2559,7 +2564,8 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                                                 <Loader2 className="w-4 h-4 animate-spin" />
                                                 <span className="hidden sm:inline">Generating...</span>
                                               </Button>
-                                              {pdfProgress?.currentPart >= pdfProgress?.totalParts && pdfProgress?.totalParts > 0 && (
+                                              {/* Merge-retry calls generateAll (Archive). Film only — courses must never trigger generateAll. */}
+                                              {isFilm && pdfProgress?.currentPart >= pdfProgress?.totalParts && pdfProgress?.totalParts > 0 && (
                                                 <Button
                                                   size="sm"
                                                   variant="outline"
@@ -2582,14 +2588,19 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                                             </>
                                           ) : (
                                             <>
-                                              {/* EXPORT MODE 1 — Full Archive PDF (LEGACY generateAll). Primary for film. */}
+                                              {/* EXPORT MODE 1 — Full Archive PDF (LEGACY generateAll). FILM ONLY. */}
+                                              {/* Courses must never render this: generateAll on a course = 11k-page Archive PDF collision. */}
+                                              {/* TODO(separation): proper long-term fix is separate DB status fields — */}
+                                              {/*   intel_pack_status / intel_pack_progress  vs  archive_pdf_status / archive_pdf_progress. */}
+                                              {/*   Until then, content_type is the only guard keeping the two pipelines apart. No DB migration yet. */}
+                                              {isFilm && (
                                               <Button
                                                 size="sm"
                                                 variant="outline"
                                                 disabled={isQueuing || isQueuingIntel}
-                                                className={`relative gap-1.5 font-bold border-2 border-pink-500 ${isFilm ? 'order-1 bg-pink-500 text-white hover:bg-pink-600' : 'order-2 bg-transparent text-pink-500 hover:bg-pink-500/10'}`}
+                                                className="relative gap-1.5 font-bold border-2 border-pink-500 order-1 bg-pink-500 text-white hover:bg-pink-600"
                                                 onClick={() => handleGenerateVisualTranscriptionPDF(course0?.id, block.name || course0?.title || 'Course')}
-                                                title={isFilm ? 'Film / Story output — visual story spine PDF, emailed when ready' : 'Full Archive PDF — one page per frame, very large file, emailed when ready'}
+                                                title="Film / Story output — visual story spine PDF, emailed when ready"
                                               >
                                                 {isQueuing ? (
                                                   <><Loader2 className="w-4 h-4 animate-spin" /><span className="hidden sm:inline">Queuing...</span></>
@@ -2605,6 +2616,7 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                                                   </>
                                                 )}
                                               </Button>
+                                              )}
                                               {/* EXPORT MODE 2 — Training Intelligence Pack (generateIntelPack ZIP) */}
                                               <Button
                                                 size="sm"
@@ -2617,7 +2629,7 @@ View full interactive version: ${window.location.origin}/view/${course.id}`;
                                                 {isQueuingIntel ? (
                                                   <><Loader2 className="w-4 h-4 animate-spin" /><span className="hidden sm:inline">Queuing...</span></>
                                                 ) : (
-                                                  <><Package className="w-4 h-4" /><span className="hidden sm:inline">Training Intel Pack</span></>
+                                                  <><Package className="w-4 h-4" /><span className="hidden sm:inline">{isFailed ? 'Retry Training Intel Pack' : 'Training Intel Pack'}</span></>
                                                 )}
                                               </Button>
                                             </>
